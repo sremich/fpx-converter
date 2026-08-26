@@ -9,6 +9,30 @@ commit, then tag.
 ## [Unreleased]
 
 ### Added
+- **Source ingestion.** `fpx_converter` package with a CLI:
+  `python -m fpx_converter scan | ingest | verify`.
+  - `scan` walks the source archive read-only, hashes every `.fpx`
+    (case-insensitively), inventories each file's OLE2 streams, and writes
+    `source-files/manifest.json` keyed on whole-file SHA-256. It records
+    every source path, album, and tree a given file appeared under, so
+    collapsing duplicates loses nothing.
+  - `ingest` copies one file per distinct hash into `source-files/fpx/`,
+    re-hashing each copy against the manifest and skipping work already
+    done, so an interrupted run resumes for free.
+  - `verify` re-hashes the whole store against the manifest.
+- The read-only promise is **proven** rather than asserted: `scan` snapshots
+  size and mtime before opening anything, re-compares afterwards, and
+  re-hashes a random sample — the check that would catch a write which
+  restored both.
+- Filename selection preserves the only human-authored content in the
+  archive. When several paths share a hash, the human-authored name wins
+  over a camera-generated one; ties break deterministically so traversal
+  order never decides which caption survives.
+- Four Kodak stock fixtures under `tests/fixtures/` (no person appears in
+  any of them) plus tier-2 tests covering real FlashPix structure, resume,
+  corrupted-copy replacement, and duplicate collapse.
+- 65 tests: 55 tier-1 (no photos, no filesystem beyond `tmp_path`) and 10
+  tier-2 over the committed fixtures.
 - Project scaffolding from `project-scaffold`.
 - `DECISIONS.md`: milestone-0 inventory findings from a read-only spike over
   the full source corpus — FlashPix tile layout, external JPEG table

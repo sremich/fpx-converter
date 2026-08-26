@@ -314,3 +314,65 @@ stood in for it is the thing that was insufficient. Do not treat a local
 run as equivalent to CI again except under the same explicit direction;
 the point of CI here is that it is a *different machine* from the one the
 code was written on.
+
+## 2026-08-26 — Ingestion run: the inventory's numbers reproduce exactly
+
+**Decision/Lesson:** The first real run of the ingestion tool over the whole
+corpus reproduces the read-only spike's figures to the file: **1,265 files,
+494.9 MB, 687 distinct SHA-256, 263.3 MB distinct, zero non-OLE2 files.**
+Duplicate structure is 114 singletons, 568 pairs, and 5 triples, which sums
+to 1,265 exactly. 573 of the 687 entries appear in both source trees.
+**Why:** The spike and the tool are independent implementations — different
+code, written days apart, one by scout agents and one as the shipped
+package. Agreement on every count is the strongest evidence available that
+neither is quietly wrong.
+**Implication:** The corpus is now a known quantity and the manifest is the
+reference. A future run that disagrees with these numbers means the source
+tree changed, not that the tool improved.
+
+## 2026-08-26 — The read-only promise is proven, not asserted
+
+**Decision/Lesson:** `scan` snapshots size and mtime for every source file
+before opening any of them, re-compares afterwards, and re-hashes a random
+sample on top. Re-running the scan *after* the 687-file copy produced a
+**byte-identical manifest** — every hash, every path, every count.
+**Why:** Size and mtime alone would miss a write that restored both, and
+that is exactly the write that would silently corrupt an irreplaceable
+archive. The sample re-hash is the check that would actually catch it.
+**Implication:** Every future stage must keep this property and must keep
+proving it. "The code only opens files for reading" is an assertion; a
+byte-identical re-scan is evidence. Never downgrade the check to a comment.
+
+## 2026-08-26 — Camera-name detection covers P####### too, not just DCP#####
+
+**Decision/Lesson:** The inventory reported 219 of 1,265 files (17%) as
+human-named. The shipped classifier reports **211**. The difference is
+exactly 8 files, and it is not a defect in either: the inventory's rule
+matched only `DCP#####.fpx`, while the classifier also treats `P#######`
+as camera-generated. Those 8 are the four burst-sample frames and their
+duplicates in the other tree.
+**Why:** Checked rather than assumed — every name the classifier calls
+camera-generated was verified to be literally `DCP` or `P` followed by
+digits, with **zero** false positives. No human-authored name is being
+discarded, which is the only direction of error that would lose a caption
+permanently.
+**Implication:** 211 is the number to carry forward. When a figure here
+disagrees with the inventory briefs, reconcile it explicitly rather than
+picking one — the briefs were a spike and used looser rules in places.
+
+## 2026-08-26 — SHA-256 keying produces ~77 filename collisions, and that is fine
+
+**Decision/Lesson:** Keying on whole-file SHA-256 means the same photo can
+appear as two entries whose source filenames are identical but whose bytes
+differ by a timestamp buried in a property stream. About 77 store names
+therefore carry an 8-character hash suffix. Only one collision in the whole
+corpus is a genuinely *different* photograph; the rest are byte-variants of
+the same image.
+**Why:** A direct consequence of the approved dedup key (687 SHA-256 versus
+541 pixel payloads). The store must never let one variant overwrite another,
+so the second claimant of a name gets a suffix and the first keeps the bare
+name, ordered by hash so the result does not depend on traversal order.
+**Implication:** A suffixed store name is normal and must not be treated as
+an anomaly by the audit. When the pixel decoder lands, these pairs are also
+the natural regression check: two entries whose decoded pixels are identical
+should stay identical.
