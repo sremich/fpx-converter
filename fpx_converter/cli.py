@@ -1,11 +1,12 @@
 """Command line entry point: `python -m fpx_converter <command>`.
 
-Commands available at 0.2.0:
+Commands available at 0.3.0:
 - `scan`: walk the source archive read-only and write `manifest.json`.
 - `ingest`: copy one file per distinct hash into the local store.
 - `verify`: re-hash the local store against the manifest.
 - `metadata`: extract full metadata and emit raw `.fpx.json` sidecars.
 - `check-dates`: execute the automated album folder ground-truth date gate.
+- `thumbnail`: extract embedded DIB thumbnails as PNG images.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from . import __version__, config, scan
 from . import ingest as ingest_mod
 from . import manifest as manifest_mod
 from . import metadata as metadata_mod
+from . import thumbnail as thumbnail_mod
 from . import timestamps as timestamps_mod
 
 
@@ -231,6 +233,58 @@ def cmd_check_dates(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_thumbnail(args: argparse.Namespace) -> int:
+    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    if not manifest_path.is_file():
+        print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
+        return 1
+
+    manifest = manifest_mod.load(manifest_path)
+    source_root = Path(manifest["source_root"])
+    store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
+
+    output_base = (
+        Path(args.dest) if args.dest else (config.REPO_ROOT / "output" / "thumbnails")
+    )
+    dest = config.ensure_outside_source(output_base, source_root, "thumbnail destination")
+
+    if not args.dry_run:
+        dest.mkdir(parents=True, exist_ok=True)
+
+    entries = manifest.get("entries", [])
+    verb = "Would extract" if args.dry_run else "Extracting"
+    print(f"{verb} {len(entries)} thumbnails -> {dest}")
+
+    extracted = 0
+    failures: list[tuple[str, str]] = []
+    for entry in entries:
+        store_name = entry["store_name"]
+        fpx_path = store_dir / store_name
+        if not fpx_path.is_file():
+            alt = source_root / entry["preferred_relpath"]
+            if alt.is_file():
+                fpx_path = alt
+            else:
+                failures.append((store_name, "file not found"))
+                continue
+
+        try:
+            thumb = thumbnail_mod.extract_thumbnail(fpx_path)
+            if not args.dry_run:
+                out_path = dest / f"{Path(store_name).stem}_thumb.png"
+                thumb.save(out_path, format="PNG")
+            extracted += 1
+        except Exception as exc:  # noqa: BLE001
+            failures.append((store_name, str(exc)))
+
+    print(f"  extracted {extracted} thumbnails")
+    if failures:
+        for name, why in failures:
+            print(f"  FAILED {name}: {why}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fpx-converter",
@@ -290,6 +344,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_dates.add_argument("--manifest")
     p_dates.add_argument("--store", help="path to ingested .fpx store directory")
     p_dates.set_defaults(func=cmd_check_dates)
+
+    # 6. thumbnail
+    p_thumb = sub.add_parser(
+        "thumbnail", help="extract embedded DIB thumbnails as PNG images"
+    )
+    p_thumb.add_argument("--manifest")
+    p_thumb.add_argument("--store", help="path to ingested .fpx store directory")
+    p_thumb.add_argument("--dest", help="output directory for thumbnails")
+    p_thumb.add_argument("--dry-run", action="store_true")
+    p_thumb.set_defaults(func=cmd_thumbnail)
 
     return parser
 

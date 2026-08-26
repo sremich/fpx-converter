@@ -224,6 +224,60 @@ class TestCheckDatesCLI:
         assert "Total albums:" in out
 
 
+class TestThumbnailCLI:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["thumbnail", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_extracts_thumbnails_to_destination(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "thumbs"
+        argv = [
+            "thumbnail",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+        ]
+        assert main(argv) == 0
+        pngs = list(dest.glob("*.png"))
+        assert len(pngs) == 4
+
+    def test_dry_run_writes_no_thumbnails(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "thumbs"
+        argv = [
+            "thumbnail",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+            "--dry-run",
+        ]
+        assert main(argv) == 0
+        assert not dest.exists()
+
+    def test_refuses_thumbnail_dest_inside_source(self, tmp_path: Path, capsys) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = [
+            "thumbnail",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(FIXTURES / "thumbs"),
+        ]
+        assert main(argv) == 1
+        assert "read-only source archive" in capsys.readouterr().err
+
+
 def test_version_reports_the_version_file() -> None:
     from fpx_converter import __version__
 
