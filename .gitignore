@@ -1,0 +1,67 @@
+# --- Local-only context (OneDrive-synced, never on GitHub) ---
+# CLAUDE.md and DECISIONS.md are COMMITTED (public-safe) so clones,
+# worktrees, and CI/cloud agent sessions aren't blind. Only the roaming
+# machine-state file and raw inputs stay local.
+/source-files/*
+!/source-files/.gitkeep
+/HANDOVER.md
+
+# --- Personal photo archive: sources, derivatives, sidecars ---
+# CRITICAL (initial-prompt note 15): no personal image, audio, or sidecar
+# may ever be committed. These rules are belt-and-braces on top of the
+# folder rules above.
+/output/
+/archive/
+/sharing/
+/report/
+/data/
+*.fpx
+*.fpx.json
+*.tif
+*.tiff
+*.jpg
+*.jpeg
+*.png
+*.wav
+*.pez
+manifest.json
+audit_report.json
+conversion.log
+
+# --- Test fixtures are the ONE exception ---
+# Non-personal, committed FPX fixtures for tier-1/2 tests live here.
+!/tests/fixtures/**
+
+# --- Secrets and runtime data ---
+.env
+*.env.local
+*.log
+*.db
+
+# --- Language/tool clutter ---
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+node_modules/
+dist/
+build/
+*.spec
+*.tsbuildinfo
+
+# --- Scratch ---
+scratch/
+logs/
+
+# --- OS/editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
