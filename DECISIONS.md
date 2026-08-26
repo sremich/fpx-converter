@@ -287,3 +287,30 @@ of personal derivatives. The path is configured in `.env` and is never
 hardcoded, so relocating it later costs one line. The gitignore rule is
 load-bearing — any change to it must be re-verified with the planted-file
 test, not by inspection.
+
+## 2026-08-26 — Milestone 0 shipped without a CI green tick (Actions outage)
+
+**Decision/Lesson:** The `/milestone-0` skill requires CI to be green on the
+configuration commit before the scaffold files are deleted. GitHub Actions
+was in a **major outage** that day and created **zero** workflow runs for
+either configuration push — not queued, not failed, none at all. At the
+owner's direction the milestone was completed anyway, substituting a local
+reproduction of the CI job: a throwaway venv built only from
+`requirements-dev.txt`, in which every dependency resolved to a cp314 wheel
+with no source builds, followed by `ruff check .` and the tier-1 suite,
+both green. The release gate's own two checks (`scripts/check-version.sh`
+and the scaffold-marker grep) were exercised by hand as well.
+**Why:** The outage was verified as external, not a defect in the workflow:
+the commits were on remote `main`, Actions was `enabled` on the repo, both
+workflows listed as `active`, and the committed `ci.yml` parsed as valid
+YAML with LF endings and no BOM. Runs on the three preceding commits had all
+succeeded. Waiting would have parked the milestone indefinitely on a
+third-party incident.
+**Implication:** Commits `0270a0e` and `5373bd1` are the only ones in this
+repo's history that were **never verified by CI**. The first CI run after
+the outage recovers is therefore load-bearing — if it fails, the fault is
+most likely in one of those two commits, and the local reproduction that
+stood in for it is the thing that was insufficient. Do not treat a local
+run as equivalent to CI again except under the same explicit direction;
+the point of CI here is that it is a *different machine* from the one the
+code was written on.

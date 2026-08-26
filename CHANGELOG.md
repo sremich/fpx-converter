@@ -46,3 +46,10 @@ commit, then tag.
   jobs from `release.yml`. This project ships no container — the scaffold's
   container path is deleted rather than left as a dead stub, so
   `release.yml` now goes verify → GitHub release.
+- The consumed scaffold pieces: `templates/` (the skeletons now live as the
+  filled root `CLAUDE.md`, `DECISIONS.md`, and `HANDOVER.md`),
+  `initial-prompt-template.md` (its content lives on as the gitignored
+  `source-files/initial-prompt.md` and the public-safe
+  `docs/REQUIREMENTS.md`), and the single-use `/milestone-0` skill. All
+  three still carried the scaffold marker that `release.yml` refuses to
+  release past.
