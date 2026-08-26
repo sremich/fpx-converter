@@ -10,8 +10,14 @@ dynamic = ["version"]
 [tool.setuptools.dynamic]
 version = { file = ["VERSION"] }
 
+[tool.setuptools]
+packages = ["fpx_converter"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The package is imported from the repo root rather than installed, so tests
+# run against the working tree with no editable-install step in CI.
+pythonpath = ["."]
 addopts = "-q --strict-markers"
 markers = [
   "fixtures: tier-2 tests that need the committed non-personal FPX fixtures",

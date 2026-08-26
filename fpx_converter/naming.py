@@ -1,0 +1,120 @@
+"""Album derivation and filename selection.
+
+Pure functions over path strings — no filesystem access, no I/O. That is
+deliberate: this is the logic most likely to be wrong, and it is the logic
+tier-1 tests can pin down completely.
+
+The rule that matters here: **filenames are the only human-authored content
+in this archive.** No captions, titles, or notes exist in any property set,
+and no album database survives. Roughly 17% of files carry a name a person
+typed. When several source paths share one SHA-256, the name we keep is the
+one a person wrote — losing it loses a caption permanently.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+#: Names a camera or import tool generated: DCP00123, P0000016, IMG_0042,
+#: DSC00001, PICT0003. Matched against the stem, case-insensitively.
+_CAMERA_NAME = re.compile(r"^(?:dcp|dc|dsc|dscn|img|pict|pic|p|mvc|kdc)[\s_-]?\d+$", re.IGNORECASE)
+
+
+def strip_fpx_suffix(filename: str) -> str:
+    """Drop exactly one trailing `.fpx`, preserving anything else.
+
+    Doubled extensions are NOT normalised away: `DCP00247.fpx` and
+    `DCP00247.fpx.fpx` are genuinely different pixels in this corpus, so the
+    stem of the latter is `DCP00247.fpx` and the two never collide.
+    """
+    if filename.lower().endswith(".fpx"):
+        return filename[: -len(".fpx")]
+    return filename
+
+
+def is_camera_generated(filename: str) -> bool:
+    """True when the filename carries no human intent."""
+    return bool(_CAMERA_NAME.match(strip_fpx_suffix(filename)))
+
+
+def is_human_authored(filename: str) -> bool:
+    return not is_camera_generated(filename)
+
+
+@dataclass(frozen=True)
+class SourceLocation:
+    """Where one copy of a file was found, relative to the source root."""
+
+    relpath: str  # POSIX-style, relative to the source root
+    name: str  # the filename as it appears on disk, case preserved
+
+    @property
+    def parent_posix(self) -> str:
+        parent, sep, _ = self.relpath.rpartition("/")
+        return parent if sep else ""
+
+    @property
+    def tree(self) -> str:
+        """The top-level backup folder this copy sits under."""
+        head, sep, _ = self.relpath.partition("/")
+        return head if sep else ""
+
+    @property
+    def album(self) -> str:
+        """The immediate parent directory name.
+
+        Album membership is a folder name and nothing else in this corpus, so
+        this is the only ground truth available for dating. `album_path`
+        (the full relative directory) is recorded alongside it and is
+        lossless — this field is just the human-facing label.
+        """
+        parent = self.parent_posix
+        if not parent:
+            return ""
+        return parent.rpartition("/")[2]
+
+
+def preferred_location(locations: list[SourceLocation]) -> SourceLocation:
+    """Pick the copy whose filename we keep for a group of identical files.
+
+    Ordering, most significant first:
+      1. a human-authored name beats a camera-generated one;
+      2. then the longer name, which carries more of what was typed;
+      3. then the lexicographically smallest relpath, purely so the result is
+         deterministic across runs and machines.
+    """
+    if not locations:
+        raise ValueError("cannot choose a preferred location from an empty list")
+    return min(
+        locations,
+        key=lambda loc: (
+            is_camera_generated(loc.name),
+            -len(strip_fpx_suffix(loc.name)),
+            loc.relpath,
+        ),
+    )
+
+
+def assign_store_names(groups: list[tuple[str, str]]) -> dict[str, str]:
+    """Map sha256 -> unique filename for the ingested copy.
+
+    `groups` is a list of `(sha256, preferred_name)` pairs. Two different
+    files really can share a filename in this corpus — Kodak cameras reset
+    their numbering, and at least one collision across albums is a genuinely
+    different photo — so a name already claimed by a different hash gets a
+    short hash suffix rather than silently overwriting.
+
+    The first claimant keeps the bare name, and ordering is by hash so the
+    outcome does not depend on directory traversal order.
+    """
+    assigned: dict[str, str] = {}
+    taken: set[str] = set()
+    for sha, preferred in sorted(groups):
+        stem = strip_fpx_suffix(preferred)
+        candidate = f"{stem}.fpx"
+        if candidate.lower() in taken:
+            candidate = f"{stem}_{sha[:8]}.fpx"
+        taken.add(candidate.lower())
+        assigned[sha] = candidate
+    return assigned
