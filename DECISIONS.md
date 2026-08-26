@@ -376,3 +376,46 @@ name, ordered by hash so the result does not depend on traversal order.
 an anomaly by the audit. When the pixel decoder lands, these pairs are also
 the natural regression check: two entries whose decoded pixels are identical
 should stay identical.
+
+## 2026-08-26 — The pre-release audit caught what the tests were built to miss
+
+**Decision/Lesson:** `code-auditor` returned DO NOT MERGE on 0.1.0 and was
+right on every count. Four defects sat in exactly the code this project
+cares most about, and all four passed a green test suite:
+1. The read-only proof drew its "random" sample from a **fixed seed over a
+   sorted list**, so every run re-hashed the same 25 files forever. 98% of
+   the archive was permanently outside the check while the code read like
+   sampling.
+2. It compared only files present when the snapshot was taken, so a file
+   **added** to the archive was invisible — and creating a file is a write.
+3. **No write target was constrained.** `ingest --dest` and `scan
+   --manifest` took free-form paths, so a mistyped flag would create a
+   directory inside the archive and truncate any source file whose name
+   matched a store name.
+4. The only test guarding all of this **passed against a stub**: it asserted
+   the happy path, which a function that inspected nothing would satisfy.
+**Why:** Every one was reproduced against real data before being fixed, not
+taken on the auditor's word. The pattern behind all four is the same — the
+tests asserted that the code *worked*, never that it *noticed*. A check
+exists for its failure mode; a suite that only exercises the success path
+tests the half that does not matter.
+**Implication:** For any invariant this project calls binding: enforce it in
+code rather than convention (the containment guard), and test it by breaking
+it (modify, delete, add, and change-while-preserving-size-and-mtime). Ask of
+every new guard: *would this test still pass if the function did nothing?*
+Run `code-auditor` before every release, not as a formality — it found in
+one pass what a full corpus run had not surfaced.
+
+## 2026-08-26 — Disambiguate collisions with a counter, not a longer hash prefix
+
+**Decision/Lesson:** The first fix for the store-name collision widened the
+hash prefix on each retry (8 chars, then 12, then 16). That is wrong twice:
+it does not terminate for hashes sharing a long prefix, and the loop could
+raise even when the candidate it had just built was free. Replaced with a
+fixed 8-character prefix plus an incrementing ordinal.
+**Why:** Caught by an adversarial stress test written *after* the fix, using
+hashes that differ only in their last characters. The realistic case would
+never have exposed it, which is the point of writing the hostile case.
+**Implication:** A disambiguator must terminate for *any* input, not for the
+inputs a real corpus happens to produce. When a retry loop derives its next
+candidate from the data, check that the derivation can actually run out.
