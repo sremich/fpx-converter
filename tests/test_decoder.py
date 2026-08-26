@@ -161,3 +161,64 @@ class TestTileDecoding:
         assert abs(r - g) <= 2
         assert abs(g - b) <= 2
         assert r > 100
+
+
+class TestOrientationMatrixClassification:
+    """The three matrix shapes this corpus actually contains.
+
+    Measured over its 687 distinct files: 612 identity, 22 rotation, 53
+    scale-and-translate crops. The crops are not applied, and the point of
+    classifying rather than ignoring them is that an unapplied transform
+    must be reportable.
+    """
+
+    IDENTITY = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+
+    def test_identity_matrix(self) -> None:
+        status, note = decoder.classify_orientation_matrix(self.IDENTITY)
+        assert status == decoder.TRANSFORM_IDENTITY
+        assert note == ""
+
+    @pytest.mark.parametrize("k", [1.03, 1.07, 1.11, 1.17, 1.33])
+    def test_ninety_degree_ccw_at_each_aspect_ratio(self, k: float) -> None:
+        # The off-diagonal magnitude is the image aspect ratio, not 1, so a
+        # test pinned to exactly 1.0 would miss every real rotated file.
+        matrix = [0.0, -k, 0, k, k, 0.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        status, _ = decoder.classify_orientation_matrix(matrix)
+        assert status == decoder.TRANSFORM_ROTATE_90_CCW
+
+    @pytest.mark.parametrize(
+        ("scale", "offset"),
+        [(0.921, 0.0), (0.745, 0.252), (0.41, 0.40), (0.99, 0.19)],
+    )
+    def test_crop_matrices_are_reported_not_treated_as_identity(
+        self, scale: float, offset: float
+    ) -> None:
+        matrix = [scale, 0, 0, offset, 0, scale, 0, offset, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        status, note = decoder.classify_orientation_matrix(matrix)
+        assert status == decoder.TRANSFORM_UNSUPPORTED
+        assert "crop" in note
+        # The note has to carry the numbers, or the audit cannot tell one
+        # discarded crop from another. Only the components that actually
+        # deviate are named -- at scale 0.99 the offset is the anomaly.
+        assert ("scale" in note) or ("offset" in note)
+        assert f"{scale:.3f}" in note or f"{offset:.3f}" in note
+
+    def test_a_wrong_length_matrix_is_unsupported_not_a_crash(self) -> None:
+        status, note = decoder.classify_orientation_matrix([1.0, 0.0, 0.0])
+        assert status == decoder.TRANSFORM_UNSUPPORTED
+        assert "4x4" in note
+
+    def test_classification_is_exhaustive_over_known_shapes(self) -> None:
+        # No shape may fall through to a silent default.
+        shapes = [
+            self.IDENTITY,
+            [0.0, -1.33, 0, 1.33, 1.33, 0.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0],
+            [0.8, 0, 0, 0.1, 0, 0.8, 0, 0.1, 0, 0, 1.0, 0, 0, 0, 0, 1.0],
+        ]
+        statuses = {decoder.classify_orientation_matrix(m)[0] for m in shapes}
+        assert statuses == {
+            decoder.TRANSFORM_IDENTITY,
+            decoder.TRANSFORM_ROTATE_90_CCW,
+            decoder.TRANSFORM_UNSUPPORTED,
+        }

@@ -42,6 +42,12 @@ class OutputItemResult:
     is_undated: bool
     validation_ok: bool
     errors: list[str] = field(default_factory=list)
+    #: Non-fatal, but the file is not a faithful derivative: an orientation
+    #: matrix that was read and not applied, or a transform stream that would
+    #: not parse. These do not fail the conversion -- the pixels are still
+    #: the source pixels -- but they must not disappear either.
+    warnings: list[str] = field(default_factory=list)
+    transform_status: str = ""
 
 
 def resolve_exiftool_path(explicit_path: str | Path | None = None) -> str | None:
@@ -288,6 +294,10 @@ def write_single_entry_dual_output(
     _date_pfx, is_undated = format_date_prefix(derived.get("timestamps", {}))
     date_source = derived.get("timestamps", {}).get("date_source", "none")
     errors: list[str] = []
+    warnings: list[str] = []
+
+    if decoded.transform_status in (decoder.TRANSFORM_UNSUPPORTED, decoder.TRANSFORM_PARSE_ERROR):
+        warnings.append(f"{decoded.transform_status}: {decoded.transform_note}")
 
     # 2b. Refuse to write over a path this run already produced. The stems
     # assigned from the manifest should make this unreachable; it is here
@@ -355,4 +365,6 @@ def write_single_entry_dual_output(
         is_undated=is_undated,
         validation_ok=len(errors) == 0,
         errors=errors,
+        warnings=warnings,
+        transform_status=decoded.transform_status,
     )

@@ -313,6 +313,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     dated_count = 0
     undated_count = 0
     failures: list[tuple[str, str]] = []
+    warnings: list[tuple[str, str]] = []
 
     # Names are resolved for the whole batch up front, from the manifest
     # alone, so two same-named photos in one album cannot resolve to the
@@ -346,6 +347,8 @@ def cmd_convert(args: argparse.Namespace) -> int:
                 stem=stems.get(entry["sha256"]),
                 claimed=claimed,
             )
+            if res.warnings:
+                warnings.extend((store_name, w) for w in res.warnings)
             if res.validation_ok:
                 converted += 1
                 if res.is_undated:
@@ -360,6 +363,12 @@ def cmd_convert(args: argparse.Namespace) -> int:
     print(
         f"  converted {converted} files ({dated_count} dated, {undated_count} undated)"
     )
+    if warnings:
+        # Not failures -- the pixels are the source pixels -- but a discarded
+        # crop is a difference from the original that has to be visible.
+        print(f"  {len(warnings)} files with an unapplied viewing transform:")
+        for name, why in warnings:
+            print(f"    {name}: {why}")
     if failures:
         for name, why in failures:
             print(f"  FAILED {name}: {why}", file=sys.stderr)

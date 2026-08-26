@@ -17,7 +17,7 @@ from typing import Any
 
 import olefile
 
-from . import config, naming, propset, timestamps
+from . import config, decoder, naming, propset, timestamps
 
 # Standard property set streams present in FlashPix files
 STANDARD_PROPERTY_SETS = [
@@ -271,21 +271,44 @@ def _derive_metadata(
     filtering = _get_prop_decoded(psets, transform_stream, "FilteringValue")
     contrast = _get_prop_decoded(psets, transform_stream, "ContrastAdjustment")
 
-    is_rotation_90_ccw = False
+    transform_status = decoder.TRANSFORM_ABSENT
+    transform_note = ""
     if isinstance(matrix_16, list) and len(matrix_16) == 16:
-        # Check for 90 deg CCW rotation pattern: m[0] ~ 0, m[1] ~ -1 (or negative), m[4] ~ 1
-        m0, m1, m4 = matrix_16[0], matrix_16[1], matrix_16[4]
-        if abs(m0) < 0.05 and m1 < -0.5 and m4 > 0.5:
-            is_rotation_90_ccw = True
+        transform_status, transform_note = decoder.classify_orientation_matrix(
+            [float(x) for x in matrix_16]
+        )
+    is_rotation_90_ccw = transform_status == decoder.TRANSFORM_ROTATE_90_CCW
 
-    has_transform = bool(
-        is_rotation_90_ccw
-        or (aspect_ratio and aspect_ratio != 0.0)
-        or (roi and roi != [0.0, 0.0, 1.0, 1.0])
-    )
+    # `has_transform` used to compare the ROI against [0, 0, 1, 1] and so was
+    # True for every file in the corpus: the full-frame ROI of a 4:3 image is
+    # [0, 0, 1.333, 1], because FlashPix normalises height to 1 and expresses
+    # width as the aspect ratio. A flag that is always set answers nothing.
+    # The ROI is a crop only when it does not cover the whole frame.
+    roi_is_full_frame = True
+    if isinstance(roi, list) and len(roi) == 4:
+        declared_aspect = (
+            dims_dict["declared_width"] / dims_dict["declared_height"]
+            if dims_dict.get("declared_height")
+            else 0.0
+        )
+        x, y, roi_w, roi_h = (float(v) for v in roi)
+        roi_is_full_frame = (
+            abs(x) < 1e-3
+            and abs(y) < 1e-3
+            and abs(roi_h - 1.0) < 1e-3
+            and abs(roi_w - declared_aspect) < 1e-2
+        )
+
+    has_transform = transform_status not in (
+        decoder.TRANSFORM_ABSENT,
+        decoder.TRANSFORM_IDENTITY,
+    ) or not roi_is_full_frame
 
     transform_dict = {
         "has_transform": has_transform,
+        "transform_status": transform_status,
+        "transform_note": transform_note,
+        "roi_is_full_frame": roi_is_full_frame,
         "is_rotation_90_ccw": is_rotation_90_ccw,
         "aspect_ratio": aspect_ratio,
         "rectangle_of_interest": roi,

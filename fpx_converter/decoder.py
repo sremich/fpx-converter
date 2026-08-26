@@ -63,6 +63,21 @@ class SubimageHeader:
     records: list[TileRecord]
 
 
+#: What was found in `0x10000003` and what was done about it.
+#:
+#: `unsupported` is the one that matters. Measured over the 687 distinct
+#: files: 612 carry an identity matrix, 22 carry the 90 degrees CCW rotation
+#: this decoder applies, and roughly 53 carry a scale-and-translate matrix --
+#: the *crop* half of the viewing transform, which is not implemented. Those
+#: were previously indistinguishable from identity, so a cropped photo came
+#: out uncropped with nothing recording that a transform had been discarded.
+TRANSFORM_ABSENT = "absent"
+TRANSFORM_IDENTITY = "identity"
+TRANSFORM_ROTATE_90_CCW = "rotate-90-ccw"
+TRANSFORM_UNSUPPORTED = "unsupported"
+TRANSFORM_PARSE_ERROR = "parse-error"
+
+
 @dataclass
 class DecodedImage:
     image: Image.Image
@@ -72,6 +87,70 @@ class DecodedImage:
     resolution_index: int
     rotation_applied: int
     crop_applied: tuple[int, int, int, int] | None
+    #: One of the TRANSFORM_* constants above.
+    transform_status: str = TRANSFORM_ABSENT
+    #: The raw 4x4 matrix, kept so an unsupported one can be reported rather
+    #: than merely counted.
+    transform_matrix: list[float] | None = None
+    #: Populated when `transform_status` is not identity/absent/applied.
+    transform_note: str = ""
+
+
+def classify_orientation_matrix(matrix: list[float]) -> tuple[str, str]:
+    """Classify a FlashPix `0x10000003` matrix. Returns (status, note).
+
+    The matrix is row-major 4x4 mapping result coordinates to source
+    coordinates. Only two forms are acted on:
+
+    * identity -- nothing to do
+    * a 90 degrees counter-clockwise rotation, the only rotation this corpus
+      contains (22 of 687 files)
+
+    Everything else returns `unsupported` with the reason. That covers the
+    ~53 files carrying a scale-and-translate matrix -- a crop the original
+    Kodak software recorded, which this decoder does not apply. Returning a
+    status rather than falling through to identity is the whole point: an
+    unapplied crop should be visible in the audit, not invisible in the
+    output.
+    """
+    if len(matrix) != 16:
+        return TRANSFORM_UNSUPPORTED, f"expected a 4x4 matrix, got {len(matrix)} values"
+
+    m0, m1, _m2, m3 = matrix[0:4]
+    m4, m5, _m6, m7 = matrix[4:8]
+
+    def near(value: float, target: float, tol: float = 0.02) -> bool:
+        return abs(value - target) <= tol
+
+    if (
+        near(m0, 1.0)
+        and near(m1, 0.0)
+        and near(m3, 0.0)
+        and near(m4, 0.0)
+        and near(m5, 1.0)
+        and near(m7, 0.0)
+    ):
+        return TRANSFORM_IDENTITY, ""
+
+    # 90 CCW: the diagonal is zero and the off-diagonal swaps the axes with
+    # opposite signs. The magnitude is the image aspect ratio, not 1.
+    if near(m0, 0.0, 0.05) and near(m5, 0.0, 0.05) and m1 < -0.5 and m4 > 0.5:
+        return TRANSFORM_ROTATE_90_CCW, ""
+
+    scaled = not near(m0, 1.0) or not near(m5, 1.0)
+    translated = not near(m3, 0.0) or not near(m7, 0.0)
+    if scaled or translated:
+        parts = []
+        if scaled:
+            parts.append(f"scale ({m0:.3f}, {m5:.3f})")
+        if translated:
+            parts.append(f"offset ({m3:.3f}, {m7:.3f})")
+        return (
+            TRANSFORM_UNSUPPORTED,
+            "crop/zoom viewing transform not applied: " + ", ".join(parts),
+        )
+
+    return TRANSFORM_UNSUPPORTED, f"unrecognised orientation matrix: {matrix[:8]}"
 
 
 def parse_subimage_header(header_bytes: bytes) -> SubimageHeader:
@@ -324,28 +403,35 @@ def _decode_from_ole(
     # 7. Viewing transform
     rotation_applied = 0
     crop_applied = None
+    transform_status = TRANSFORM_ABSENT
+    transform_matrix: list[float] | None = None
+    transform_note = ""
 
     if apply_transform and ole.exists("\x05Transform 000001"):
         try:
             with ole.openstream("\x05Transform 000001") as handle:
                 tx_bytes = handle.read()
             tx_pset = propset.parse_propset(tx_bytes, stream_name="\x05Transform 000001")
-            matrix: list[float] | None = None
             for sec in tx_pset.sections:
                 if 0x10000003 in sec.properties:
                     val = sec.properties[0x10000003].decoded_value
                     if isinstance(val, list) and len(val) == 16:
-                        matrix = val
+                        transform_matrix = [float(x) for x in val]
 
-            if matrix is not None:
-                # 90 deg CCW rotation test: A11 ~ 0, A22 ~ 0, A12 < -0.5, A21 > 0.5
-                m0, m1, m4, m5 = matrix[0], matrix[1], matrix[4], matrix[5]
-                if abs(m0) < 0.05 and abs(m5) < 0.05 and m1 < -0.5 and m4 > 0.5:
+            if transform_matrix is None:
+                transform_status = TRANSFORM_ABSENT
+            else:
+                transform_status, transform_note = classify_orientation_matrix(transform_matrix)
+                if transform_status == TRANSFORM_ROTATE_90_CCW:
+                    # Pillow's ROTATE_90 turns counter-clockwise.
                     cropped = cropped.transpose(Image.Transpose.ROTATE_90)
-                    rotation_applied = 270  # 90 degrees CCW
-        except Exception:  # noqa: BLE001
-            # If transform parsing fails, keep upright cropped canvas
-            pass
+                    rotation_applied = 90
+        except Exception as exc:  # noqa: BLE001
+            # Keep the upright canvas, but never silently: an unreadable
+            # transform stream and a file with no transform at all used to
+            # produce byte-identical results and the same empty report.
+            transform_status = TRANSFORM_PARSE_ERROR
+            transform_note = f"{type(exc).__name__}: {exc}"
 
     return DecodedImage(
         image=cropped,
@@ -355,4 +441,7 @@ def _decode_from_ole(
         resolution_index=resolution_index,
         rotation_applied=rotation_applied,
         crop_applied=crop_applied,
+        transform_status=transform_status,
+        transform_matrix=transform_matrix,
+        transform_note=transform_note,
     )
