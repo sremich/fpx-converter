@@ -21,8 +21,12 @@ def _human_mb(n: int) -> str:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    settings = config.Settings.load()
-    source_root = Path(args.source).resolve() if args.source else settings.source_root
+    # An explicit --source stands alone: settings are only consulted when the
+    # caller did not say which tree to walk, so a one-off scan does not
+    # require a populated .env.
+    source_root = (
+        Path(args.source).resolve() if args.source else config.Settings.load().source_root
+    )
     manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
 
     print(f"Scanning (read-only): {source_root}")
