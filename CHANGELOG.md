@@ -9,6 +9,29 @@ commit, then tag.
 ## [Unreleased]
 
 ### Added
+- **Dual output generation engine (milestone 0.4.0).**
+  - Dual writer (`fpx_converter.writer`) producing archival Deflate TIFFs
+    (`archive/<album>/<name>.tif`) and shareable quality-95 4:4:4 JPEGs
+    (`sharing/<album>/<name>.jpg`).
+  - Strict preservation layout: copies original `.fpx` files and `.fpx.json`
+    sidecars alongside the `.tif` in `archive/<album>/`.
+  - Comprehensive metadata embedding via ExifTool subprocess: writes EXIF, XMP,
+    and IPTC tags (`Make`, `Model`, `Software`, `CreateDate`/`DateTimeDigitized`,
+    `OffsetTimeDigitized`, `DateTimeOriginal` [defensible dates only],
+    `OffsetTimeOriginal`, `Keywords`/`Subject`, and human-authored `Title`/`Description`).
+  - Independent validation engine (`fpx_converter.validator`): reads back every
+    written TIFF and JPEG with `pyexiv2` to prove tag survival, matching dimensions,
+    TIFF Deflate compression, JPEG 4:4:4 chroma, and strict absence of
+    `DateTimeOriginal` on undated photos.
+  - Correct filesystem `mtime` setting: updates modified timestamps of all 4 files
+    to the local `DateTimeOriginal` (or import timestamp) for automatic file-manager
+    chronological sorting.
+  - Standard naming scheme: `<album>/<YYYY-MM-DD_HHMMSS>_<preferred_name>.<ext>`,
+    with flagged `0000-00-00_000000_` prefix for undated files.
+  - CLI subcommand `convert` supporting `--manifest`, `--store`, `--dest`,
+    `--limit`, and `--dry-run` with write-outside-source containment guard.
+  - 15 new tests (197 total) across tier-1 unit tests, tier-2 e2e fixture
+    generation & pyexiv2 readback, and CLI convert tests.
 - **Pixel decoder engine (milestone 0.3.0).**
   - Pure-Python FlashPix multi-resolution tile decoder (`fpx_converter.decoder`)
     bypassing Pillow's crash-prone `FpxImagePlugin`.

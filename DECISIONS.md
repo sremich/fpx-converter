@@ -477,4 +477,28 @@ without bloating disk sidecars.
 binary payloads on parsed objects and delegate serialization filtering to the
 output serialization layer.
 
+## 2026-08-26 — ExifTool CreateDate maps to EXIF DateTimeDigitized (0x9004)
+
+**Decision/Lesson:** In ExifTool, the command-line flag `-EXIF:CreateDate` writes
+standard EXIF tag `0x9004` (`Exif.Photo.DateTimeDigitized`) and `XMP-xmp:CreateDate`.
+The flag `-EXIF:DateTimeOriginal` writes tag `0x9003` (`Exif.Photo.DateTimeOriginal`).
+Setting `-EXIF:CreateDate` for the import timestamp ensures consistent, conflict-free
+tag representation across both TIFF and JPEG containers when independently read
+back via pyexiv2.
+**Why:** Confirmed during dual output implementation and pyexiv2 round-trip testing.
+**Implication:** Do not use proprietary or conflicting tag aliases. Maintain
+strict separation between `CreateDate` (import batch stamp) and `DateTimeOriginal`
+(defensible capture/folder date).
+
+## 2026-08-26 — Deflate TIFF compression (Tag 8 / 32946) over LZW
+
+**Decision/Lesson:** Saving archival TIFF derivatives with Pillow's
+`compression="tiff_deflate"` writes Adobe Deflate (tag 8) or PKZIP Deflate
+(tag 32946), producing byte-exact lossless images with superior compression ratios
+over LZW while avoiding legacy LZW patent compatibility quirks.
+**Why:** Required by project specification (requirement 18 and section 4).
+**Implication:** Validate compression tags directly on written files via
+`img.tag_v2.get(259)` during test execution.
+
+
 
