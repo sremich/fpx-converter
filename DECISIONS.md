@@ -642,3 +642,85 @@ whole calculation is anchored on. And the validator no longer asserts that
 TIFF and JPEG dimensions match — it asserts each is the size it was supposed
 to be, which is the stronger check, since a crop that silently failed to apply
 would satisfy a bare equality test.
+
+---
+
+## 2026-08-26 — A rotation can carry a crop; 14 of 22 do
+
+**Decision/Lesson:** The crop box is derived by mapping the four corners of
+the result viewport through the transform matrix and taking the bounding box,
+not by reading a scale and a translation off the matrix. Rotation and crop are
+independent properties of the same matrix, and asking "is this a rotation or a
+crop?" answers the wrong question. Refines the entry above.
+
+**Why:** The closed form recorded above — `left = tx·H`, `width =
+scale·ResultAspectRatio·H` — is only valid for an axis-aligned matrix. For a
+rotation the scale sits on the off-diagonal, so the formula reads zeros and the
+code took the "this is a rotation, not a crop" branch and dropped the crop.
+Measured over the corpus: **14 of the 22 rotated files also carry a crop**, and
+every one of them was being written rotated but uncropped, with `crop_box:
+null` in the sidecar and nothing in the audit. The corner-mapping form
+reproduces the closed form exactly on the axis-aligned files and additionally
+handles the rotated ones, so there is one derivation rather than two.
+
+Applying it moved the counts: **608 identity / 22 rotation (14 of them also
+cropped) / 57 axis-aligned crops**, so 71 files now resolve to a crop where 53
+did before. The four extra beyond the rotated ones are near-identity matrices —
+inside the classifier's 2% tolerance, but resolving to a box a little smaller
+than the frame. The box is what governs; the label is a description of it.
+
+**Verified against the same independent oracle.** Cropping improved
+correlation with the embedded DIB thumbnail on **71 of 71 files** — mean
++0.56, minimum +0.003, none worse — and the worst post-crop correlation is
+0.981. The 14 rotated-and-cropped files improved by a mean of +0.46, minimum
++0.29.
+
+**Implication:** The crop box in the sidecar is in the *output* image's
+coordinates — after rotation — because that is the image the JPEG is cut from.
+The mapping under a 90° CCW rotation is `(l, t, r, b) → (t, W−r, b, W−l)`, and
+it is tested by marking a pixel and following it through Pillow rather than by
+re-deriving the arithmetic, because three wrong variants of that formula look
+equally plausible written down.
+
+---
+
+## 2026-08-26 — The thumbnail oracle sees geometry, not colour
+
+**Decision/Lesson:** `compute_image_correlation` converts both images to
+greyscale (`convert("L")`) before correlating. It is therefore evidence about
+framing, orientation and crop — and **no evidence at all about colour**. Do
+not cite a thumbnail correlation in support of any colour claim.
+
+**Why:** It is the strongest oracle this project has, it was used to confirm
+both the 90° rotation and all 71 crops, and its numbers are high enough
+(worst 0.981) to look like a general-purpose "the image is right" check. It
+is not one. A file decoded with the colour channels permuted, or with
+PhotoYCC left unconverted, would correlate just as well.
+
+**Implication:** The 2 PhotoYCC files in the corpus have **never been looked
+at by a human**. Nothing in the automated suite can tell a correct PhotoYCC
+conversion from an incorrect one. Per `CLAUDE.md`'s "it decoded" is not "it
+decoded correctly" rule, colour needs eyes at least once per variant, so both
+PhotoYCC files are on the tier-4 eyeball list at 1.0.0 and are not covered by
+anything before it.
+
+---
+
+## 2026-08-26 — A parser that returns errors is not a parser that raises
+
+**Decision/Lesson:** `propset.parse_propset` reports malformed input by
+returning a property set carrying `errors`, not by raising. Any caller that
+guards only with `try/except` therefore treats corrupt input as valid-but-empty.
+
+**Why:** `apply_viewing_transform` had exactly that shape. A `Transform`
+stream that failed to parse produced no matrix, which read as "this file has
+no transform" — byte-identical output and an identical audit line to a file
+that genuinely has none. The `parse-error` status existed, was tested for by
+nothing, and was unreachable. A tier-1 test feeding the function the bytes
+`b"not a property set"` is what surfaced it.
+
+**Implication:** `parse_transform_stream` checks `pset.ok` and raises
+`DecoderError`. Where a helper's failure mode is a return value rather than an
+exception, the test that proves the error path has to feed it real malformed
+bytes — asserting on a mocked exception would have passed against the broken
+version.
