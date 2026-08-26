@@ -8,6 +8,64 @@ commit, then tag.
 
 ## [Unreleased]
 
+### Fixed
+- **`DateTimeOriginal` is no longer invented from a coarse folder name.** Any
+  folder that parsed produced a capture date, using the first day of the
+  range and the hour, minute and second of the Kodak import batch. Over the
+  687 distinct files that meant 219 folder-derived capture dates, of which
+  **151 had no day-precise evidence** (97 a bare year, 34 a year span, 20 a
+  season) — 22% of the archive carrying a fabricated moment, precise to the
+  second, in the field reserved for defensible dates. Only a day-precise
+  folder name qualifies now, and it lands at midnight; 70 files carry
+  `DateTimeOriginal` (68 folder days plus the 2 embedded scan dates).
+  Coarse dates are kept as an explicit ordering key that drives the mtime
+  and the filename prefix, where unknown components are written as zeros
+  (`2001-00-00_000000_`) rather than as a plausible-looking 1 January.
+- **Two photos in one album can no longer resolve to the same output file.**
+  The output path had no collision handling, and files in an album usually
+  share a date prefix, so the second silently overwrote the first while the
+  run reported both converted. Stems are now assigned across the batch from
+  the manifest, resume-stably, with a writer-level guard behind them.
+- **Viewing transforms are classified instead of pattern-matched.** Only the
+  90° CCW rotation was recognised; everything else fell through to an
+  unrotated image, as did a `Transform` stream that failed to parse. **53
+  files carry a scale-and-translate crop matrix** that was being discarded
+  invisibly. Crops are still not applied — that is an owner decision — but
+  `convert` now names every affected file. `has_transform` was `True` for
+  all 687 files because it compared the ROI against `[0, 0, 1, 1]` instead
+  of the declared aspect.
+- **CI runs the ExifTool tests instead of skipping them green.** They were
+  gated on a tool GitHub's Windows runners do not ship, so the "validate
+  with a different tool than the one that wrote" rule ran nowhere while the
+  suite reported green — and one convert test had no guard at all, so every
+  commit on the 0.4.0 branch had in fact been failing CI. The workflow now
+  installs ExifTool and sets `FPX_REQUIRE_EXIFTOOL`, which makes a missing
+  tool a failure; a tier-1 test asserts the workflow keeps doing both.
+- Checks that could not fail: JPEG 4:4:4 validation was skipped when the
+  sampling table was unreadable, and `check-dates` always exited 0 without
+  consulting its own report (it now has `--strict`).
+- The sidecar dropped every binary payload — including the embedded
+  thumbnail DIB and the external JPEG tables — while describing itself as a
+  complete raw property dump. Payloads up to 64 KiB are now base64 with a
+  SHA-256 beside them.
+- `VT_LPSTR` was decoded as latin-1 regardless of the section's `CODEPAGE`,
+  which the parser read and ignored. No string in the corpus currently
+  contains a byte in the range where this matters, so nothing is repaired
+  today; a future one will not arrive in XMP as control characters.
+- The ExifTool fallback no longer points at a hardcoded home directory, and
+  `FPX_EXIFTOOL` is now read from `.env` as well as the environment.
+- Album-name timezone overrides moved out of `timestamps.py` into
+  `FPX_TZ_OVERRIDES` in `.env`. Album names are personal content and do not
+  belong in a committed source file.
+- `get_timezone_offset` raises on a zone it does not know instead of
+  silently returning US Central, and no longer resolves `Pacific/Honolulu`
+  to US Pacific time.
+- Folder-date parsing: `2001-07-04` was read as the span 2001–2007;
+  `1999-00` became 1900; winter ended on 28 February in leap years.
+- Filesystem mtime no longer falls back to the moment of conversion, which
+  is indistinguishable from a real date once written.
+- Both outputs are tagged sRGB with an ICC profile.
+
 ### Added
 - **Dual output generation engine (milestone 0.4.0).**
   - Dual writer (`fpx_converter.writer`) producing archival Deflate TIFFs
@@ -30,8 +88,16 @@ commit, then tag.
     with flagged `0000-00-00_000000_` prefix for undated files.
   - CLI subcommand `convert` supporting `--manifest`, `--store`, `--dest`,
     `--limit`, and `--dry-run` with write-outside-source containment guard.
-  - 15 new tests (197 total) across tier-1 unit tests, tier-2 e2e fixture
-    generation & pyexiv2 readback, and CLI convert tests.
+  - 15 new tests across tier-1 unit tests, tier-2 e2e fixture generation and
+    pyexiv2 readback, and CLI convert tests. The suite now stands at **237
+    tests**, all of which run in CI (locally, one skips: the guard that
+    fails when `FPX_REQUIRE_EXIFTOOL` is set without ExifTool present).
+  - Tier 3 re-run after the fixes above: a 48-file sample spanning all 16
+    albums, 7 declared sizes, both colour spaces, all three transform
+    classes and the film scans. 48/48 converted, 0 failures, and an
+    independent pyexiv2 pass over both containers found 0 violations —
+    dimensions, Deflate, 4:4:4, ICC, tags, mtime, and no `DateTimeOriginal`
+    on any file the filename marks undated.
 - **Pixel decoder engine (milestone 0.3.0).**
   - Pure-Python FlashPix multi-resolution tile decoder (`fpx_converter.decoder`)
     bypassing Pillow's crash-prone `FpxImagePlugin`.
@@ -43,8 +109,10 @@ commit, then tag.
     `Subimage 0000 Data` streams.
   - Per-file colour space detection and conversion: NIF RGB (standard sRGB) and
     PhotoYCC (using FlashPix/PhotoCD transformation matrix).
-  - Accurate spatial orientation transform (`0x10000003`) applying 90°
-    counter-clockwise rotation to all 45 rotated instances.
+  - Spatial orientation transform (`0x10000003`): the 90° counter-clockwise
+    rotation is applied to all 22 rotated files. The crop/zoom form of the
+    same property is **detected and reported but not applied** — see Fixed
+    above and `DECISIONS.md`.
   - Boundary padding crop to declared subimage width and height.
   - Embedded DIB thumbnail extractor (`fpx_converter.thumbnail`) decoding 24-bit
     CF_DIB data from root `\x05SummaryInformation` PID 17 as an independent

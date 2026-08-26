@@ -500,5 +500,105 @@ over LZW while avoiding legacy LZW patent compatibility quirks.
 **Implication:** Validate compression tags directly on written files via
 `img.tag_v2.get(259)` during test execution.
 
+## 2026-08-26 — DateTimeOriginal only from a day-precise folder name
 
+**Decision/Lesson:** A folder date may become EXIF `DateTimeOriginal` only when
+it names a single day. A bare year, a two-year span, a season and a month may
+not, and the time-of-day is written as midnight rather than borrowed from the
+import stamp.
 
+**Why:** The first implementation accepted any folder name that parsed and used
+the first day of the range, then took the hour, minute and second from the Kodak
+import batch. Measured over the 687 distinct files: 219 were given a
+folder-derived capture date, of which 151 had no day-precise evidence — 97 from
+a bare year, 34 from a year span, 20 from a season. That is 22% of the archive
+carrying a fabricated capture moment, precise to the second, in the one field
+this project says may hold only a defensible date. After the change, 70 files
+carry `DateTimeOriginal`: 68 day-precise folders and the 2 embedded scan dates.
+
+**Implication:** Coarse folder dates are still useful and are still kept — as
+`sort_datetime`, which drives the filesystem mtime and the filename prefix.
+Those are ordering affordances, not claims. The prefix writes unknown
+components as zeros (`2001-00-00_000000_`), which sorts correctly and can never
+be mistaken for a date somebody knew. EXIF has no way to say "sometime in
+2001"; a filename does.
+
+## 2026-08-26 — Viewing-transform crops are detected, reported, and not applied
+
+**Decision/Lesson:** `0x10000003` carries three shapes in this corpus, and the
+decoder now classifies all three rather than testing for one. Measured over 687
+files: 612 identity, 22 a 90° CCW rotation (applied), and **53 a
+scale-and-translate matrix — a crop, which is not applied**. Six files also
+carry a non-standard `RectangleOfInterest`.
+
+**Why:** The decoder tested only for the rotation and let everything else fall
+through to an unrotated image with `rotation_applied = 0`. An identity matrix, a
+crop matrix and a `Transform` stream that failed to parse produced byte-identical
+output and the same empty report, so 53 discarded crops were invisible.
+
+**Implication:** Whether an archival TIFF should honour a crop somebody made in
+Kodak's software in 2002, or preserve the full frame the camera captured, is an
+owner decision and is still open. Until it is made, `convert` names every
+affected file. Note also that `has_transform` previously compared the ROI
+against `[0, 0, 1, 1]` and was therefore `True` for all 687 files: FlashPix
+normalises height to 1 and expresses width as the aspect ratio, so a 4:3
+full-frame ROI is `[0, 0, 1.333, 1]`.
+
+## 2026-08-26 — CI installs ExifTool; a missing one fails rather than skips
+
+**Decision/Lesson:** The CI workflow installs ExifTool and sets
+`FPX_REQUIRE_EXIFTOOL=1`, which converts the tier-2 skip guard into a failure. A
+tier-1 test asserts the workflow keeps doing both.
+
+**Why:** The tier-2 tests that write tags with ExifTool and read them back with
+pyexiv2 were gated on the tool being present. GitHub's Windows runners ship no
+ExifTool, so on CI they skipped — meaning the "validate with a different tool
+than the one that wrote" rule was advertised as covered while running nowhere.
+Separately, one convert test had no skip guard at all, so **every commit on
+`feat/0.4.0-dual-output` failed CI** while the milestone was reported green from
+a local run.
+
+**Implication:** A skip that hides a binding rule is worse than a missing test,
+because the suite still reports green. Where a tier depends on an external tool,
+either install it in CI or make its absence loud. The CI ExifTool is deliberately
+unpinned, unlike `requirements.txt`: the pinned copy is the one on the conversion
+machine, and CI's job is to notice when upstream changes break the round-trip.
+
+## 2026-08-26 — Output names are assigned per album from the manifest
+
+**Decision/Lesson:** Output stems are resolved for the whole batch up front by
+`naming.assign_output_stems`, from the manifest alone, before any metadata is
+extracted.
+
+**Why:** `<album>/<date>_<stem>.<ext>` has no collision handling, and files in one
+album usually share a date prefix, so the stem was the only thing separating two
+photos. This corpus already contains distinct SHA-256s sharing a filename, because
+Kodak cameras reset their numbering — the second file overwrote the first and the
+run reported both converted. This is the same defect the 0.1.0 audit found in
+`assign_store_names`, one layer further down.
+
+**Implication:** Assignment must not depend on filesystem state or on which files
+have already been converted, or a resumed run would name things differently from
+the run it resumed. Ordering is by hash for the same reason it is in
+`assign_store_names`.
+
+## 2026-08-26 — VT_LPSTR honours the section CODEPAGE; sidecars keep binary payloads
+
+**Decision/Lesson:** Two fidelity fixes in the property-set layer. Strings are
+decoded with the codec the section's `CODEPAGE` declares (resolved before any
+string is parsed, not whenever PID 1 is reached), and binary payloads up to
+64 KiB are carried in the sidecar as base64 with a SHA-256 alongside.
+
+**Why:** The parser read `CODEPAGE`, stored it, and then decoded every `VT_LPSTR`
+as latin-1 regardless. 1,374 sections in this corpus declare 1252, which differs
+from latin-1 in exactly the `0x80`–`0x9F` range holding curly quotes, dashes and
+ellipsis — latin-1 maps those to C1 control characters. No `VT_LPSTR` in the
+corpus currently contains such a byte, so this repairs nothing today; it stops a
+name that does from reaching XMP as junk. Separately, the sidecar dropped every
+binary buffer and kept a 32-byte `hex_preview`, while describing itself as the
+complete raw property dump — losing the embedded thumbnail DIB (~20 KB) and the
+external JPEG tables, the two properties anyone would come back for.
+
+**Implication:** A parser that reads an encoding declaration and ignores it is
+worse than one that never read it, because the sidecar then records a code page
+that does not describe its own strings.

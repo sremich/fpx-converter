@@ -9,10 +9,15 @@ Core principles (paid for by milestone-0 measurements):
 3. **Stored FILETIMEs are LOCAL wall-clock time, not UTC.** No timezone
    conversion is applied to the time digits. The timezone map selects which
    `OffsetTimeOriginal` / `OffsetTimeDigitized` tag is written.
-4. **`DateTimeOriginal` is written only where defensible**: from folder name
-   ground truth, embedded film scan date (4 files), or owner review.
-5. **The folder-name ground-truth check is an automated gate** that reports
-   discrepancies per album and never silently alters date sources.
+4. **`DateTimeOriginal` is written only where defensible**: a folder name that
+   pins a single day, an embedded film scan date, or owner review. A folder
+   naming a year, a span, a season or a month does **not** qualify -- see
+   `DEFENSIBLE_DATE_KINDS`. Coarser dates survive as `sort_datetime`, which
+   orders the output without making a claim.
+5. **The folder-name ground-truth check reports per album** and never alters a
+   date source. It fails a run only under `check-dates --strict`, because on
+   this corpus failing is the expected result: the import stamp misses 7 of 9
+   dated albums, which is precisely why it is not trusted as a capture date.
 """
 
 from __future__ import annotations
@@ -33,8 +38,8 @@ DEFAULT_TZ = "America/Chicago"
 #:
 #: The override keys are album folder names, and album names are personal
 #: content this repository does not carry (see CLAUDE.md). They live in
-#: `.env` as `FPX_ALBUM_TZ`, parsed by `config.parse_album_tz_overrides`, and
-#: reach this module as the `overrides` argument. An empty map means every
+#: `.env` as `FPX_TZ_OVERRIDES`, parsed by `config.parse_album_tz_overrides`,
+#: and reach this module as the `overrides` argument. An empty map means every
 #: album takes the default zone, which is the correct behaviour for a
 #: checkout that has no `.env`.
 DEFAULT_ALBUM_TZ_OVERRIDES: dict[str, str] = {}
@@ -231,7 +236,7 @@ MONTH_NAMES = {
 
 
 #: How precisely each folder-name date kind pins a photo down.
-#: This is the whole point of the type: `Easter 2002` names a day, `Aug. 2000`
+#: This is the whole point of the type: `Easter 1999` names a day, `Aug. 1999`
 #: names a month, `2001` names a year. They are not interchangeable, and the
 #: difference decides what may be written to `DateTimeOriginal`.
 DATE_KIND_PRECISION: dict[str, str] = {
@@ -361,7 +366,7 @@ def parse_folder_date(folder_name: str) -> FolderDateResult:
             description="Christmas",
         )
 
-    # 3. Easter (e.g. "Easter 2002", "Easter2000")
+    # 3. Easter (e.g. "Easter 1999", "Easter1999")
     m_easter = re.search(r"\beaster\s*(19\d\d|20\d\d)", lower)
     if m_easter:
         yr = int(m_easter.group(1))
