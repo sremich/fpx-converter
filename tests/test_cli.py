@@ -151,6 +151,79 @@ class TestVerify:
         assert main(["verify", "--manifest", str(manifest_path), "--dest", str(dest)]) == 2
 
 
+class TestMetadataCLI:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["metadata", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_dumps_sidecars_from_manifest(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "sidecars"
+        argv = [
+            "metadata",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+        ]
+        assert main(argv) == 0
+        assert len(list(dest.glob("*.json"))) == 4
+
+    def test_dry_run_writes_no_sidecars(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "sidecars"
+        argv = [
+            "metadata",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+            "--dry-run",
+        ]
+        assert main(argv) == 0
+        assert not dest.exists()
+
+    def test_refuses_sidecar_dest_inside_source(self, tmp_path: Path, capsys) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = [
+            "metadata",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(FIXTURES / "sidecars"),
+        ]
+        assert main(argv) == 1
+        assert "read-only source archive" in capsys.readouterr().err
+
+
+class TestCheckDatesCLI:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["check-dates", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_runs_check_dates_on_manifest(self, tmp_path: Path, capsys) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = [
+            "check-dates",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+        ]
+        assert main(argv) == 0
+        out = capsys.readouterr().out
+        assert "Album Ground-Truth Date Report" in out
+        assert "Total albums:" in out
+
+
 def test_version_reports_the_version_file() -> None:
     from fpx_converter import __version__
 
@@ -162,3 +235,4 @@ def test_no_subcommand_is_an_error() -> None:
     with pytest.raises(SystemExit) as exc:
         main([])
     assert exc.value.code != 0
+
