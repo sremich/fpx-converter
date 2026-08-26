@@ -9,6 +9,31 @@ commit, then tag.
 ## [Unreleased]
 
 ### Added
+- **Pixel decoder engine (milestone 0.3.0).**
+  - Pure-Python FlashPix multi-resolution tile decoder (`fpx_converter.decoder`)
+    bypassing Pillow's crash-prone `FpxImagePlugin`.
+  - Reconstructs resolution pyramids tile-by-tile, supporting all 3 tile types:
+    abbreviated JPEG with external table splicing (`table[:-2] + tile[2:]`),
+    raw 12,288-byte uncompressed RGB ($64 \times 64 \times 3$), and 0-byte
+    single-colour fill tiles from subtype colour payloads.
+  - Correctly implements the **+28-byte preamble offset rule** for
+    `Subimage 0000 Data` streams.
+  - Per-file colour space detection and conversion: NIF RGB (standard sRGB) and
+    PhotoYCC (using FlashPix/PhotoCD transformation matrix).
+  - Accurate spatial orientation transform (`0x10000003`) applying 90°
+    counter-clockwise rotation to all 45 rotated instances.
+  - Boundary padding crop to declared subimage width and height.
+  - Embedded DIB thumbnail extractor (`fpx_converter.thumbnail`) decoding 24-bit
+    CF_DIB data from root `\x05SummaryInformation` PID 17 as an independent
+    orientation and correctness oracle.
+  - Image Pearson correlation oracle function (`compute_image_correlation`)
+    operating on normalized greyscale vectors.
+  - CLI subcommand `thumbnail` to extract embedded thumbnails as PNGs with
+    containment enforcement.
+  - 23 new tests (182 total) covering tile header parsing, JPEG splicing,
+    raw/fill tiles, 90° CCW rotation, PhotoYCC conversion, thumbnail extraction,
+    e2e decode across all 4 committed Kodak fixtures, and an out-of-process
+    Pillow oracle comparison.
 - **Metadata extraction engine (milestone 0.2.0).**
   - Custom OLE property-set parser (`fpx_converter.propset`) decoding all 10
     FlashPix property sets, extension storages (`viewprmlog` edit log and Kodak

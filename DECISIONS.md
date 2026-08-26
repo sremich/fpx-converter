@@ -448,3 +448,33 @@ silently and fell back to standard-time offsets.
 historical schedules; a 15-line deterministic date formula is more reliable
 than relying on OS-level IANA timezone databases on Windows.
 
+## 2026-08-26 — FlashPix tile table offset 36 is relative to section start (0x1C)
+
+**Decision/Lesson:** In the FlashPix `Subimage 0000 Header` stream, the header
+field at offset `0x38` states the tile-table offset as 36 (`0x00000024`), while
+the tile records physically begin at byte 64 (`0x00000040`). The offset is
+relative to the start of the section header at byte 28 (`0x1C`):
+`28 + 36 = 64` (0x40).
+**Why:** Resolves the discrepancy flagged during the initial format reverse-engineering.
+The subimage header follows standard OLE section layout conventions where
+internal offsets are measured from the section header boundary.
+**Implication:** Both the relative offset calculation (`28 + table_offset`) and
+the fixed 64-byte preamble formula yield identical, byte-exact pointers across
+100% of corpus files.
+
+## 2026-08-26 — Retain binary payloads in VT_BLOB and VT_CF for downstream consumers
+
+**Decision/Lesson:** OLE property parsers that convert binary types (`VT_BLOB`,
+`VT_CF`) strictly into summary descriptors or truncated hex previews prevent
+downstream modules (such as pixel decoders and thumbnail extractors) from
+accessing essential payload streams (e.g. the 574-byte JPEG table blob or the
+24-bit DIB pixel array). Retaining `raw_bytes` in memory while sanitizing/omitting
+them during JSON sidecar serialization gives in-process decoders zero-copy access
+without bloating disk sidecars.
+**Why:** Discovered during milestone 0.3.0 when `decoder.py` required access to
+`0x03TT0001` JPEG tables parsed by `propset.py`.
+**Implication:** Property parsers in multi-stage pipelines should preserve raw
+binary payloads on parsed objects and delegate serialization filtering to the
+output serialization layer.
+
+
