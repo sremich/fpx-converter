@@ -36,12 +36,31 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
+      - name: Install ExifTool
+        # The tier-2 tests that prove the write/read-back chain need it, and
+        # GitHub's Windows runners do not ship it. Without this step those
+        # tests skip and the suite still reports green -- which is how the
+        # project's "validate with a different tool than the one that wrote"
+        # rule ended up advertised as tested while running nowhere.
+        #
+        # Deliberately unpinned, unlike everything in requirements.txt. The
+        # pinned ExifTool is the one on the conversion machine; this copy
+        # only has to prove the round-trip still works, so tracking upstream
+        # makes it an early warning rather than a correctness risk.
+        run: choco install exiftool -y --no-progress
+
       - name: Lint
         run: python -m ruff check .
 
-      - name: Run tier-1 tests
-        # Tier 1 only: no real photos, no ExifTool, no source archive.
-        # Higher tiers are documented in CLAUDE.md and run locally, because
-        # tiers 3 and 4 need the personal corpus, which never leaves the
-        # machine.
+      - name: Run tests
+        # Tiers 1 and 2. Tier 2 uses the four committed non-personal Kodak
+        # fixtures; tiers 3 and 4 need the personal corpus and never run
+        # here. See CLAUDE.md.
+        #
+        # FPX_REQUIRE_EXIFTOOL turns "ExifTool is missing" from a skip into
+        # a failure. If the install step above ever silently stops working,
+        # this is what refuses to let the suite go green without the
+        # coverage it claims.
+        env:
+          FPX_REQUIRE_EXIFTOOL: "1"
         run: python -m pytest

@@ -19,6 +19,32 @@ pytestmark = pytest.mark.fixtures
 FIXTURES = Path(__file__).parent / "fixtures"
 HAVE_EXIFTOOL = writer.resolve_exiftool_path() is not None
 
+#: Set in CI. Turns a missing ExifTool from a skip into a failure.
+#:
+#: These tests are the only place the project's "validate with a different
+#: tool than the one that wrote" rule is actually exercised. Skipping them
+#: silently is worse than not having them: a green suite then implies a
+#: round-trip nobody ran. Locally, where ExifTool may genuinely be absent,
+#: the skip is still the right behaviour -- so the strictness is opt-in and
+#: CI opts in.
+REQUIRE_EXIFTOOL = os.environ.get("FPX_REQUIRE_EXIFTOOL", "").strip() not in ("", "0")
+
+needs_exiftool = pytest.mark.skipif(
+    not HAVE_EXIFTOOL and not REQUIRE_EXIFTOOL,
+    reason="ExifTool not installed or not found on PATH",
+)
+
+
+def test_exiftool_is_present_when_required() -> None:
+    """Fail loudly in CI if ExifTool went missing, instead of skipping."""
+    if not REQUIRE_EXIFTOOL:
+        pytest.skip("FPX_REQUIRE_EXIFTOOL is not set; ExifTool tests may skip")
+    assert HAVE_EXIFTOOL, (
+        "FPX_REQUIRE_EXIFTOOL is set but no ExifTool was found. The tier-2 "
+        "write/read-back tests would have skipped, leaving the metadata "
+        "chain unverified while the suite reported green."
+    )
+
 EXPECTED_FIXTURE_DERIVED = {
     "Clouds01.fpx": {
         "width": 1152,
@@ -91,7 +117,7 @@ EXPECTED_FIXTURE_DERIVED = {
 }
 
 
-@pytest.mark.skipif(not HAVE_EXIFTOOL, reason="ExifTool not installed or not found on PATH")
+@needs_exiftool
 def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) -> None:
     output_root = tmp_path / "output"
     source_root = FIXTURES
@@ -149,7 +175,7 @@ def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) 
         assert abs(mtime_tif - mtime_jpg) < 2.0
 
 
-@pytest.mark.skipif(not HAVE_EXIFTOOL, reason="ExifTool not installed or not found on PATH")
+@needs_exiftool
 def test_dual_output_with_dated_entry_and_caption(tmp_path: Path) -> None:
     output_root = tmp_path / "output"
     source_root = FIXTURES
@@ -192,7 +218,7 @@ def test_dual_output_with_dated_entry_and_caption(tmp_path: Path) -> None:
         assert title.get('lang="x-default"') == "Summer Sky Over Beach"
 
 
-@pytest.mark.skipif(not HAVE_EXIFTOOL, reason="ExifTool not installed or not found on PATH")
+@needs_exiftool
 def test_year_only_album_gets_no_datetime_original(tmp_path: Path) -> None:
     """A folder naming only a year must not produce a capture date.
 

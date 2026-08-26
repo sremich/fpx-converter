@@ -19,10 +19,11 @@ from typing import Any
 
 from . import config, decoder, metadata, naming, validator
 
-# Default ExifTool fallback locations on Windows
-DEFAULT_WINDOWS_EXIFTOOL = Path(
-    r"C:\Users\Stevie\AppData\Local\Programs\ExifTool\ExifTool.exe"
-)
+#: ExifTool is located from `FPX_EXIFTOOL` or from PATH -- never from a
+#: hardcoded absolute path. The previous fallback pointed at one developer's
+#: home directory, which meant this module could not be told ExifTool was
+#: missing on the machine that had it installed there: every attempt to test
+#: the missing-tool path silently found the real binary instead.
 
 
 class WriterError(RuntimeError):
@@ -44,24 +45,22 @@ class OutputItemResult:
 
 
 def resolve_exiftool_path(explicit_path: str | Path | None = None) -> str | None:
-    """Find the ExifTool executable path on system PATH or configured location."""
-    if explicit_path:
-        p = Path(explicit_path)
-        if p.is_file():
-            return str(p)
+    """Locate the ExifTool executable, or `None` if it cannot be found.
 
-    env_path = os.environ.get("FPX_EXIFTOOL")
+    In order: an explicit argument, `FPX_EXIFTOOL` from the environment or
+    `.env`, then PATH -- which is what a standard
+    `winget install --id OliverBetz.ExifTool` provides.
+    """
+    if explicit_path:
+        candidate = Path(explicit_path)
+        if candidate.is_file():
+            return str(candidate)
+
+    env_path = os.environ.get("FPX_EXIFTOOL") or config.load_env().get("FPX_EXIFTOOL")
     if env_path and Path(env_path).is_file():
         return env_path
 
-    which_path = shutil.which("exiftool")
-    if which_path:
-        return which_path
-
-    if DEFAULT_WINDOWS_EXIFTOOL.is_file():
-        return str(DEFAULT_WINDOWS_EXIFTOOL)
-
-    return None
+    return shutil.which("exiftool")
 
 
 def format_date_prefix(ts_dict: dict[str, Any]) -> tuple[str, bool]:
