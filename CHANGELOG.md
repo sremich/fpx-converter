@@ -10,3 +10,11 @@ commit, then tag.
 
 ### Added
 - Project scaffolding from `project-scaffold`.
+- `DECISIONS.md`: milestone-0 inventory findings from a read-only spike over
+  the full source corpus — FlashPix tile layout, external JPEG table
+  splicing, colour space, viewing-transform orientation, embedded thumbnail
+  format, deduplication analysis, and the environment constraints.
+
+### Changed
+- `.gitignore` extended with the personal-image, sidecar, and output rules
+  this project requires; test fixtures under `tests/fixtures/` exempted.
