@@ -515,28 +515,48 @@ def parse_subimage_header(header_bytes: bytes) -> SubimageHeader:
     )
 
 
-def _photoycc_to_rgb(ycc_img: Image.Image) -> Image.Image:
-    """Convert a PhotoYCC decoded PIL image to standard sRGB.
+#: The stored values that mean "no chroma" in PhotoYCC. They are **not the
+#: same on both axes**: C1 (blue-difference) is neutral at 156, C2
+#: (red-difference) at 137. Centring both on 156 costs the red channel
+#: 1.8215 x 19 = 35 levels and hands roughly half of that to green, which on
+#: this corpus's two PhotoYCC files turned a neutral scene solidly green and
+#: clipped 42% of the pixels to zero.
+PHOTOYCC_C1_NEUTRAL = 156.0
+PHOTOYCC_C2_NEUTRAL = 137.0
 
-    PhotoYCC uses Y, C1, C2 channels (FlashPix / PhotoCD convention).
+
+def _photoycc_to_rgb(ycc_img: Image.Image) -> Image.Image:
+    """Convert raw PhotoYCC channel values to sRGB.
+
+    `ycc_img` must hold the values **as stored** -- Y, C1, C2 in its three
+    bands. It must not have been through a JFIF YCbCr-to-RGB conversion
+    first: that is a different transform with different coefficients and a
+    different neutral point, and running this one on top of it produces a
+    plausible-looking image that is badly wrong. See `_decode_tile`.
+
+    Kodak PhotoCD / FlashPix:
+
+        luma    = 1.3584 * Y
+        chroma1 = 2.2179 * (C1 - 156)
+        chroma2 = 1.8215 * (C2 - 137)
+
+        R = luma + chroma2
+        G = luma - 0.194 * chroma1 - 0.509 * chroma2
+        B = luma + chroma1
     """
     arr = np.asarray(ycc_img, dtype=np.float32)
-    # arr is (H, W, 3) in [0, 255]
-    y = arr[:, :, 0] / 255.0
-    c1 = arr[:, :, 1] / 255.0
-    c2 = arr[:, :, 2] / 255.0
+    luma = 1.3584 * arr[:, :, 0]
+    chroma1 = 2.2179 * (arr[:, :, 1] - PHOTOYCC_C1_NEUTRAL)
+    chroma2 = 1.8215 * (arr[:, :, 2] - PHOTOYCC_C2_NEUTRAL)
 
-    # FlashPix / PhotoCD PhotoYCC formula
-    # Center chroma around 156/255 = 0.61176
-    y_prime = 1.3584 * y
-    c1_prime = c1 - 0.61176
-    c2_prime = c2 - 0.61176
-
-    r = y_prime + 1.8215 * c2_prime
-    g = y_prime - 0.4321 * c1_prime - 0.9286 * c2_prime
-    b = y_prime + 2.2179 * c1_prime
-
-    rgb = np.stack([r, g, b], axis=-1) * 255.0
+    rgb = np.stack(
+        [
+            luma + chroma2,
+            luma - 0.194 * chroma1 - 0.509 * chroma2,
+            luma + chroma1,
+        ],
+        axis=-1,
+    )
     np.clip(rgb, 0.0, 255.0, out=rgb)
     return Image.fromarray(rgb.astype(np.uint8), mode="RGB")
 
@@ -599,15 +619,25 @@ def _decode_tile(
 
         try:
             with Image.open(io.BytesIO(jpeg_full)) as tile_im:
+                if colour_space == "PhotoYCC":
+                    # Take the three components as stored. `convert("RGB")`
+                    # would run the JFIF YCbCr-to-RGB transform first, and
+                    # the PhotoYCC transform would then be applied on top of
+                    # an image that had already been converted once. That is
+                    # what used to happen: both PhotoYCC files in this corpus
+                    # came out solidly green with 42% of their pixels clipped
+                    # to zero, and every automated check passed them, because
+                    # the geometry was perfect and the thumbnail oracle is
+                    # greyscale.
+                    tile_im.draft("YCbCr", tile_im.size)
+                    tile_im.load()
+                    return _photoycc_to_rgb(tile_im.convert("YCbCr"))
                 tile_im.load()
-                tile_rgb = tile_im.convert("RGB")
+                return tile_im.convert("RGB")
+        except DecoderError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise DecoderError(f"JPEG tile decompression failed: {exc}") from exc
-
-        if colour_space == "PhotoYCC":
-            return _photoycc_to_rgb(tile_rgb)
-
-        return tile_rgb
 
     raise DecoderError(f"Unknown tile compression type: {t_type}")
 

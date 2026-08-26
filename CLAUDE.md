@@ -65,12 +65,19 @@ not in `requirements.txt`. Do not try to fetch it from a URL — see
 |------|-----------|-------|
 | 1. Unit | Property-set parser against hand-built byte fixtures; tile-table parsing; JPEG table + tile reassembly; timestamp and offset logic; naming scheme; collision handling. No real photos, no ExifTool, no source archive. | Every push (CI) |
 | 2. e2e | Full pipeline on the committed non-personal FPX fixtures → TIFF + JPEG → independent read-back of every tag | Any change to the decoder, metadata engine, or output writer |
-| 3. Sample batch | ~50 real files spanning every album, both image sizes, and every colour-space / transform variant: pixel stats, visual spot-check via the gallery, album ground-truth date check | Before merging any branch that touches decode or metadata |
+| 3. Sample batch | `scripts/tier3_sample.py` — ~50 real files spanning every album, every declared size, both colour spaces and all four transform outcomes: convert, pyexiv2 read-back, pixel stats, both thumbnail oracles, album ground-truth date check. Exits non-zero on any of them and prints its own sample composition | Before merging any branch that touches decode or metadata |
 | 4. Full dataset | Unattended run over all files; audit report shows zero unexplained failures; ~20 files eyeballed in a real photo app for date, orientation, and colour | **1.0.0.** Until it passes, every release stays a pre-release |
 
 Verify before claiming: tier 1 always; the matching higher tier when its
 trigger applies. **"It decoded" is not "it decoded correctly"** — colour and
 orientation need eyes at least once per variant.
+
+**The two oracles are not interchangeable.** `compute_image_correlation`
+folds both images to greyscale, so it witnesses framing and orientation and
+says *nothing* about colour; a per-channel correlation against the same
+embedded DIB thumbnail is what answers the colour question. Never cite the
+first in support of the second — that is exactly how two solidly green files
+passed every check in the project.
 
 Tiers 3 and 4 read the personal corpus and therefore **never run in CI**.
 They run locally, and their outputs are gitignored. CI's job is tier 1.
@@ -112,7 +119,10 @@ Two wants from the original requirements changed after the milestone-0
 inventory measured the corpus: the **audio-extraction want is CLOSED** (zero
 audio streams exist in any file), and the colour-science milestone shrank
 (99.7% of files are NIF RGB, not PhotoYCC) with that budget moving to the
-viewing-transform work, which turned out to be real.
+viewing-transform work, which turned out to be real. **Small is not the same
+as safe:** the 2 PhotoYCC files were being converted twice and shipped
+solidly green with 42% of their pixels clipped to zero, past every automated
+check the project had.
 
 ## Project-specific binding rules
 

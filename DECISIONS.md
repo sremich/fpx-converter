@@ -736,3 +736,74 @@ nothing, and was unreachable. A tier-1 test feeding the function the bytes
 exception, the test that proves the error path has to feed it real malformed
 bytes — asserting on a mocked exception would have passed against the broken
 version.
+
+---
+
+## 2026-08-27 — PhotoYCC was being converted twice, and only pixel statistics could see it
+
+**Decision/Lesson:** A PhotoYCC JPEG tile must be read as its **stored
+components** — `Image.draft("YCbCr", ...)` before `load()` — and only then put
+through the PhotoYCC transform. Calling `convert("RGB")` first runs the JFIF
+YCbCr→RGB transform, and the PhotoYCC transform then runs on top of an image
+that has already been converted once. Separately, the two chroma axes do **not
+share a neutral point**: C1 (blue-difference) is neutral at 156, C2
+(red-difference) at 137. Centring both on 156 costs red `1.8215 × 19 ≈ 35`
+levels and hands about half of that to green.
+
+**Why it survived:** both PhotoYCC files came out solidly green — channel means
+around `[60, 200, 20]` against a thumbnail averaging `[110, 105, 122]` — with
+**42% and 44% of their pixels clipped to zero**, and *every automated check in
+the project passed them*. The geometry was perfect, so the sizes matched, the
+crop box matched, ExifTool wrote and pyexiv2 read back cleanly, and the
+thumbnail oracle scored 0.83–0.87 because it folds both images to greyscale
+before correlating. A luminance check cannot see a chroma error; that is not a
+weakness in the oracle, it is the definition of it.
+
+What found it was **pixel statistics** — a plain mean/stdev/clipped-fraction
+pass over the sample, which tier 3 had never had. 44% of an image pinned at
+zero is not something a photograph does.
+
+**Implication — the colour oracle exists and is cheap.** The embedded DIB
+thumbnail is stored as *uncompressed RGB*, so correlating it **per channel**
+rather than on luminance answers the colour question directly, using the same
+witness the geometry work already relies on. Both are now in
+`scripts/tier3_sample.py`. After the fix the two PhotoYCC files correlate
+0.86–0.95 per channel with 0% clipping; before it, 0.36–0.89.
+
+Two smaller lessons in the same defect:
+
+- **The unit test agreed with the bug.** It fed `C1 = C2 = 156` and asserted
+  the result was grey. It was — the code centred both axes on 156 as well. A
+  test whose input is derived from the same misunderstanding as the code
+  confirms the misunderstanding. It now feeds the real neutral, and a second
+  test asserts each chroma axis moves the channel it is supposed to move.
+- **Correlate against the image the thumbnail depicts.** The first version of
+  the colour check compared the *full frame* to a thumbnail showing the
+  *cropped* composition, and reported eight perfectly good files as
+  off-colour. Against `cropped_image()` they score 0.98–1.00 per channel —
+  which is also a per-channel confirmation of the crop geometry, independent
+  of the greyscale oracle.
+
+**This does not retire the tier-4 eyeball.** Correlation against a 96-pixel
+thumbnail is evidence, not sight. Both PhotoYCC files stay on the 1.0.0 list.
+
+---
+
+## 2026-08-27 — Tier 3 is a script, not a paragraph
+
+**Decision/Lesson:** Tier 3 runs from `scripts/tier3_sample.py` and writes into
+a gitignored `output/tier3-<version>/`. It was previously run by hand.
+
+**Why:** two independent auditors, reviewing the same release, both rejected
+the claim that tier 3 had been re-run after the decoder change — and they were
+right to. The evidence for it was a sentence in a commit message plus a
+directory whose timestamps predated the code being released. One of them
+checked, found the newest output on disk had 53 files with a cropped JPEG where
+the shipped code must produce 70, and blocked the release on it. A verification
+whose only artifact is prose is indistinguishable from one that did not happen.
+
+**Implication:** the script covers every album, every declared size, both
+colour spaces and all four transform outcomes, then converts through the real
+writer, re-reads with pyexiv2, takes pixel statistics, runs both oracles, and
+exits non-zero on any of them. It prints its own sample composition, so the
+coverage claim is in the output rather than in a commit message.

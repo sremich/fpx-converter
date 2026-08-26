@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import struct
 
+import numpy as np
 import pytest
 from PIL import Image
 from propset_builder import build_propset_bytes
@@ -152,16 +153,83 @@ class TestTileDecoding:
         assert abs(g - 150) < 15
         assert abs(b - 200) < 15
 
-    def test_photoycc_colour_conversion(self) -> None:
-        # Test PhotoYCC conversion on a known neutral grey
-        # In PhotoYCC, Y=128, C1=156, C2=156 -> approximately RGB(174, 174, 174)
-        ycc_img = Image.new("RGB", (64, 64), (128, 156, 156))
-        rgb_img = decoder._photoycc_to_rgb(ycc_img)
-        assert rgb_img.size == (64, 64)
-        r, g, b = rgb_img.getpixel((0, 0))
+    def test_photoycc_neutral_is_grey(self) -> None:
+        """The neutral point is C1=156, C2=137 -- not 156 on both axes.
+
+        The previous version of this test used C1=C2=156 and asserted the
+        result was grey, which it was: the code centred both axes on 156 too,
+        so the test and the bug agreed with each other. Feeding the real
+        neutral is what makes the assertion mean anything.
+        """
+        ycc = Image.new("RGB", (8, 8), (128, 156, 137))
+        r, g, b = decoder._photoycc_to_rgb(ycc).getpixel((0, 0))
         assert abs(r - g) <= 2
         assert abs(g - b) <= 2
         assert r > 100
+
+    def test_photoycc_chroma_axes_move_the_right_channels(self) -> None:
+        # C1 is blue-difference, C2 is red-difference. Swapping them, or
+        # centring them together, tints the whole image -- and nothing in the
+        # geometry checks would notice, because the pixels are all in the
+        # right places.
+        neutral = decoder._photoycc_to_rgb(Image.new("RGB", (4, 4), (128, 156, 137)))
+        more_c1 = decoder._photoycc_to_rgb(Image.new("RGB", (4, 4), (128, 200, 137)))
+        more_c2 = decoder._photoycc_to_rgb(Image.new("RGB", (4, 4), (128, 156, 190)))
+
+        n_r, n_g, n_b = neutral.getpixel((0, 0))
+        assert more_c1.getpixel((0, 0))[2] > n_b, "raising C1 must brighten blue"
+        assert more_c1.getpixel((0, 0))[0] == n_r, "C1 must not touch red"
+        assert more_c2.getpixel((0, 0))[0] > n_r, "raising C2 must brighten red"
+        assert more_c2.getpixel((0, 0))[2] == n_b, "C2 must not touch blue"
+        assert more_c2.getpixel((0, 0))[1] < n_g, "raising C2 must darken green"
+
+    def test_a_photoycc_jpeg_tile_is_not_converted_twice(self) -> None:
+        """The tile path must hand `_photoycc_to_rgb` the stored components.
+
+        `Image.convert("RGB")` on a JPEG runs the JFIF YCbCr-to-RGB
+        transform. Running the PhotoYCC transform on that result is a second,
+        different conversion, and the output looks like a photograph -- just
+        the wrong colours. Both PhotoYCC files in the corpus came out solidly
+        green with 42% of their pixels clipped to zero, and every automated
+        check passed them: the geometry was perfect, and the thumbnail oracle
+        is greyscale.
+
+        Comparing against the transform applied to the components Pillow
+        reports for the same JPEG is what pins the input, rather than
+        asserting on a colour someone expected to see.
+        """
+        source = Image.new("RGB", (64, 64), (40, 90, 160))
+        source.paste((200, 30, 30), (0, 0, 32, 64))
+        buf = io.BytesIO()
+        source.save(buf, format="JPEG", quality=95, subsampling=0)
+        jpeg = buf.getvalue()
+
+        with Image.open(io.BytesIO(jpeg)) as handle:
+            handle.draft("YCbCr", handle.size)
+            handle.load()
+            expected = decoder._photoycc_to_rgb(handle.convert("YCbCr"))
+
+        rec = decoder.TileRecord(
+            offset=0,
+            size=len(jpeg) - 2,
+            compression_type=decoder.COMPRESSION_JPEG,
+            compression_subtype=254 << 24,
+        )
+        # Splice the tile back together the way a real file stores it.
+        tables = {254: jpeg[:100] + b"\xff\xd9"}
+        payload = b"\xff\xd8" + jpeg[100:]
+        got = decoder._decode_tile(rec, payload, tables, "PhotoYCC")
+
+        got_arr = np.asarray(got, dtype=np.int16)
+        want_arr = np.asarray(expected, dtype=np.int16)
+        assert np.abs(got_arr - want_arr).max() <= 1
+
+        # And it must differ from the double-converted result, or the test
+        # would pass against the bug it exists for.
+        with Image.open(io.BytesIO(jpeg)) as handle:
+            handle.load()
+            doubled = np.asarray(decoder._photoycc_to_rgb(handle.convert("RGB")), dtype=np.int16)
+        assert np.abs(want_arr - doubled).max() > 20
 
 
 class TestOrientationMatrixClassification:
