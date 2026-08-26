@@ -314,7 +314,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     undated_count = 0
     failures: list[tuple[str, str]] = []
 
-    for idx, entry in enumerate(entries):
+    for entry in entries:
         store_name = entry["store_name"]
         fpx_path = store_dir / store_name
         if not fpx_path.is_file():

@@ -65,26 +65,42 @@ def resolve_exiftool_path(explicit_path: str | Path | None = None) -> str | None
 
 
 def format_date_prefix(ts_dict: dict[str, Any]) -> tuple[str, bool]:
-    """Format the <YYYY-MM-DD_HHMMSS> prefix from resolved timestamp metadata.
+    """Format the `<YYYY-MM-DD_HHMMSS>` filename prefix. Returns (prefix, is_undated).
 
-    Returns (prefix, is_undated). Undated files use '0000-00-00_000000'.
+    Every component the evidence does not support is written as zeros, so the
+    name says exactly how much is known and still sorts chronologically:
+
+        2002-07-04_000000   a folder that named the day
+        1998-01-07_131721   an embedded scan timestamp, precise to the second
+        2000-08-00_000000   a folder that named only the month
+        2001-00-00_000000   a folder that named only the year or a span
+        0000-00-00_000000   nothing datable at all
+
+    A zeroed day is deliberately not the same string as a real 1st of the
+    month: `2000-08-01` would claim a day this archive cannot support for
+    ~151 of its files. The prefix is a browsing affordance and is allowed to
+    use a coarse folder date; EXIF `DateTimeOriginal` is not.
     """
     dt_orig_exif = ts_dict.get("datetime_original_exif")
     if dt_orig_exif:
-        # Format: '2001:07:04 12:00:00' -> '2001-07-04_120000'
         m = re.match(r"^(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$", dt_orig_exif)
         if m:
             y, mo, d, h, mi, s = m.groups()
             return f"{y}-{mo}-{d}_{h}{mi}{s}", False
 
-    folder_dt_iso = ts_dict.get("folder_date")
-    if folder_dt_iso:
-        # Format: '2000-08-01' -> '2000-08-01_000000'
+    folder_iso = ts_dict.get("folder_date")
+    precision = ts_dict.get("folder_precision", "none")
+    if folder_iso and precision in ("month", "season", "year"):
         try:
-            fdt = datetime.date.fromisoformat(folder_dt_iso)
-            return f"{fdt.year:04d}-{fdt.month:02d}-{fdt.day:02d}_000000", False
+            fdt = datetime.date.fromisoformat(folder_iso)
         except ValueError:
-            pass
+            fdt = None
+        if fdt is not None:
+            # 'season' keeps its opening month: 'Summer 2000' is genuinely
+            # narrower than '2000', and the zeroed day still refuses to name
+            # a date.
+            month = fdt.month if precision in ("month", "season") else 0
+            return f"{fdt.year:04d}-{month:02d}-00_000000", True
 
     return "0000-00-00_000000", True
 
@@ -185,38 +201,44 @@ def build_exiftool_args(
     return args
 
 
-def compute_mtime_epoch(derived: dict[str, Any]) -> float:
-    """Compute epoch timestamp for filesystem modified time from resolved timestamps."""
+def compute_mtime_epoch(derived: dict[str, Any]) -> float | None:
+    """Epoch seconds for the filesystem mtime, or `None` to leave mtime alone.
+
+    Uses `sort_datetime` -- the best available ordering key, which the
+    timestamp resolver has already picked from the capture date, the folder
+    range, or the import stamp in that order.
+
+    Returns `None` rather than falling back to the current time. A file
+    stamped with the moment of conversion looks exactly like a file stamped
+    with a real date, and this archive has no way to tell the two apart
+    afterwards.
+    """
     ts = derived.get("timestamps", {})
-    # 1. Prefer DateTimeOriginal
+
+    sort_iso = ts.get("sort_datetime")
+    if sort_iso:
+        try:
+            return datetime.datetime.fromisoformat(sort_iso).timestamp()
+        except ValueError:
+            pass
+
+    # Older sidecars predate `sort_datetime`; fall back through the same
+    # order it encodes rather than failing on them.
     dt_orig_iso = ts.get("datetime_original_exif")
     if dt_orig_iso:
         try:
-            # Parse '2001:07:04 12:00:00'
-            dt = datetime.datetime.strptime(dt_orig_iso, "%Y:%m:%d %H:%M:%S")
-            return dt.timestamp()
+            return datetime.datetime.strptime(dt_orig_iso, "%Y:%m:%d %H:%M:%S").timestamp()
         except ValueError:
             pass
 
-    # 2. Fall back to folder date
-    folder_iso = ts.get("folder_date")
-    if folder_iso:
-        try:
-            d = datetime.date.fromisoformat(folder_iso)
-            return datetime.datetime(d.year, d.month, d.day, 0, 0, 0).timestamp()
-        except ValueError:
-            pass
-
-    # 3. Fall back to import stamp
     imp_iso = ts.get("import_datetime")
     if imp_iso:
         try:
-            dt = datetime.datetime.fromisoformat(imp_iso)
-            return dt.timestamp()
+            return datetime.datetime.fromisoformat(imp_iso).timestamp()
         except ValueError:
             pass
 
-    return datetime.datetime.now().timestamp()
+    return None
 
 
 def write_single_entry_dual_output(
@@ -284,12 +306,13 @@ def write_single_entry_dual_output(
 
         # 6. Apply filesystem modified time (mtime) to all 4 files
         mtime_epoch = compute_mtime_epoch(derived)
-        for p in (tif_path, jpg_path, fpx_copy_path, sidecar_path):
-            if p.is_file():
-                try:
-                    os.utime(p, (mtime_epoch, mtime_epoch))
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"Failed to set mtime on {p.name}: {exc}")
+        if mtime_epoch is not None:
+            for p in (tif_path, jpg_path, fpx_copy_path, sidecar_path):
+                if p.is_file():
+                    try:
+                        os.utime(p, (mtime_epoch, mtime_epoch))
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(f"Failed to set mtime on {p.name}: {exc}")
 
         # 7. Independent validation with pyexiv2
         val_res = validator.validate_dual_output(tif_path, jpg_path, derived)

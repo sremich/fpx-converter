@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import datetime
 
+import pytest
+
 from fpx_converter import timestamps
 
 
@@ -98,14 +100,39 @@ class TestTimezoneOffsets:
         assert offset_winter == "-06:00"
 
     def test_applies_album_timezone_overrides(self) -> None:
-        tz_eastport = timestamps.get_album_timezone("Theme Park Big East Coast Trip 2002")
-        assert tz_eastport == "America/New_York"
+        # Overrides are supplied by the caller from `.env`; the module ships
+        # none, because the keys are album names (see timestamps.py).
+        overrides = {"east coast trip": "America/New_York"}
 
-        tz_dc = timestamps.get_album_timezone("East coast trips")
-        assert tz_dc == "America/New_York"
+        matched = timestamps.get_album_timezone("Big East Coast Trip 2002", overrides=overrides)
+        assert matched == "America/New_York"
 
-        tz_default = timestamps.get_album_timezone("Camping in Back Garden 2001")
-        assert tz_default == "America/Chicago"
+        unmatched = timestamps.get_album_timezone("Back Garden 2001", overrides=overrides)
+        assert unmatched == "America/Chicago"
+
+    def test_ships_no_album_overrides(self) -> None:
+        # A guard, not a formality: hardcoding these means committing album
+        # names, and an override that silently stops applying writes a wrong
+        # OffsetTime with no other symptom.
+        assert timestamps.DEFAULT_ALBUM_TZ_OVERRIDES == {}
+        assert timestamps.get_album_timezone("Any Album At All") == "America/Chicago"
+
+    def test_unknown_timezone_is_refused_not_guessed(self) -> None:
+        dt = datetime.datetime(2001, 6, 15, 12, 0, 0)
+        with pytest.raises(timestamps.UnknownTimezoneError):
+            timestamps.get_timezone_offset(dt, "Europe/London")
+        with pytest.raises(timestamps.UnknownTimezoneError):
+            timestamps.get_timezone_offset(dt, "America/Chicgao")  # typo
+
+    def test_known_non_default_zones_resolve(self) -> None:
+        summer = datetime.datetime(2001, 7, 4, 12, 0, 0)
+        winter = datetime.datetime(2001, 1, 4, 12, 0, 0)
+        assert timestamps.get_timezone_offset(summer, "America/New_York") == "-04:00"
+        assert timestamps.get_timezone_offset(winter, "America/New_York") == "-05:00"
+        assert timestamps.get_timezone_offset(summer, "America/Los_Angeles") == "-07:00"
+        # Hawaii keeps standard time year round.
+        assert timestamps.get_timezone_offset(summer, "Pacific/Honolulu") == "-10:00"
+        assert timestamps.get_timezone_offset(winter, "Pacific/Honolulu") == "-10:00"
 
 
 class TestTimestampResolution:
@@ -126,20 +153,56 @@ class TestTimestampResolution:
         assert resolved.offset_time_digitized == "-05:00"
         assert resolved.offset_time_original is None
 
-    def test_folder_derived_date_populates_datetime_original(self) -> None:
+    def test_day_precise_folder_date_populates_datetime_original(self) -> None:
         dt_target = datetime.datetime(2002, 7, 18, 14, 1, 34)
         ft_val = int((dt_target - datetime.datetime(1601, 1, 1)).total_seconds() * 10_000_000)
 
         resolved = timestamps.resolve_file_timestamps(
             import_ft=ft_val,
             scan_time_dt=None,
-            primary_album="4th of July 2002",
+            primary_album="Fireworks 4th of July 2002",
         )
         assert resolved.datetime_digitized_exif == "2002:07:18 14:01:34"
-        # Preserves time-of-day with folder calendar day
-        assert resolved.datetime_original_exif == "2002:07:04 14:01:34"
+        # Midnight, NOT the import batch's 14:01:34. The folder names a day;
+        # nothing in the file names an hour, and borrowing one from an
+        # unrelated transfer session would read as a capture moment.
+        assert resolved.datetime_original_exif == "2002:07:04 00:00:00"
         assert resolved.date_source == "folder"
+        assert resolved.date_precision == "day"
         assert resolved.offset_time_original == "-05:00"
+
+    @pytest.mark.parametrize(
+        ("album", "kind"),
+        [
+            ("Camping 2000", "year"),
+            ("Vacation Trip 2001-02", "year_span"),
+            ("Winter 2002 Skiing", "season"),
+            ("Zoo Trip - Aug. 2000", "month"),
+        ],
+    )
+    def test_coarse_folder_dates_never_reach_datetime_original(
+        self, album: str, kind: str
+    ) -> None:
+        # 151 of the corpus's 687 files sit in albums like these. A year, a
+        # span, a season or a month does not name the day the shutter fired,
+        # and EXIF DateTimeOriginal has no way to say "sometime in 2001".
+        dt_target = datetime.datetime(2001, 5, 9, 8, 30, 0)
+        ft_val = int((dt_target - datetime.datetime(1601, 1, 1)).total_seconds() * 10_000_000)
+
+        assert timestamps.parse_folder_date(album).date_kind == kind
+
+        resolved = timestamps.resolve_file_timestamps(
+            import_ft=ft_val, scan_time_dt=None, primary_album=album
+        )
+        assert resolved.datetime_original_exif is None
+        assert resolved.offset_time_original is None
+        assert resolved.date_source == "import-stamp"
+        assert resolved.date_precision == "none"
+        # ...but the folder range is still kept, so the file can be ordered
+        # and the 0.6.0 gallery can offer it for review.
+        assert resolved.folder_date is not None
+        assert resolved.folder_precision in {"year", "season", "month"}
+        assert resolved.sort_datetime is not None
 
     def test_embedded_scan_date_takes_precedence_for_original(self) -> None:
         dt_import = datetime.datetime(2002, 7, 18, 14, 1, 34)

@@ -369,7 +369,12 @@ def _derive_metadata(
         "folder_date": (
             resolved_ts.folder_date.isoformat() if resolved_ts.folder_date else None
         ),
+        "folder_precision": resolved_ts.folder_precision,
         "date_source": resolved_ts.date_source,
+        "date_precision": resolved_ts.date_precision,
+        "sort_datetime": (
+            resolved_ts.sort_datetime.isoformat() if resolved_ts.sort_datetime else None
+        ),
         "datetime_digitized_exif": resolved_ts.datetime_digitized_exif,
         "datetime_original_exif": resolved_ts.datetime_original_exif,
         "timezone_name": resolved_ts.timezone_name,

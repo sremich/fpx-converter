@@ -29,10 +29,58 @@ from typing import Any
 
 DEFAULT_TZ = "America/Chicago"
 
-# Normalized album substring -> IANA timezone name
-DEFAULT_ALBUM_TZ_OVERRIDES: dict[str, str] = {
-    "east coast trip": "America/New_York",
-    "east coast": "America/New_York",
+#: Album-name -> timezone overrides are **not** hardcoded here.
+#:
+#: The override keys are album folder names, and album names are personal
+#: content this repository does not carry (see CLAUDE.md). They live in
+#: `.env` as `FPX_ALBUM_TZ`, parsed by `config.parse_album_tz_overrides`, and
+#: reach this module as the `overrides` argument. An empty map means every
+#: album takes the default zone, which is the correct behaviour for a
+#: checkout that has no `.env`.
+DEFAULT_ALBUM_TZ_OVERRIDES: dict[str, str] = {}
+
+
+class UnknownTimezoneError(ValueError):
+    """Raised for a timezone name this module cannot resolve an offset for."""
+
+
+#: Canonical zone name -> (standard offset hours, daylight offset hours).
+#:
+#: Hand-rolled rather than `zoneinfo`: Windows ships no system tz database,
+#: `tzdata` is not among this project's pinned dependencies, and an archival
+#: run should not acquire one silently. The trade is that this table knows
+#: only the zones listed here -- so anything else is an error, never a
+#: silent fallback to Central. A wrong `OffsetTime*` is indistinguishable
+#: from a right one once written.
+#:
+#: Keyed on the exact zone name, not on substrings: `Pacific/Honolulu`
+#: contains "pacific" but is nowhere near US Pacific time, and a substring
+#: table quietly gets that wrong by three hours.
+_TZ_OFFSETS: dict[str, tuple[int, int]] = {
+    "america/new_york": (-5, -4),
+    "america/chicago": (-6, -5),
+    "america/denver": (-7, -6),
+    "america/phoenix": (-7, -7),  # Arizona does not observe DST
+    "america/los_angeles": (-8, -7),
+    "america/anchorage": (-9, -8),
+    "pacific/honolulu": (-10, -10),  # Hawaii does not observe DST
+}
+
+#: Informal names accepted for the zones above.
+_TZ_ALIASES: dict[str, str] = {
+    "eastern": "america/new_york",
+    "us/eastern": "america/new_york",
+    "central": "america/chicago",
+    "us/central": "america/chicago",
+    "mountain": "america/denver",
+    "us/mountain": "america/denver",
+    "arizona": "america/phoenix",
+    "pacific": "america/los_angeles",
+    "us/pacific": "america/los_angeles",
+    "alaska": "america/anchorage",
+    "us/alaska": "america/anchorage",
+    "hawaii": "pacific/honolulu",
+    "us/hawaii": "pacific/honolulu",
 }
 
 
@@ -78,34 +126,33 @@ def get_album_timezone(
 
 
 def get_timezone_offset(dt: datetime.datetime, tz_name: str) -> str:
-    """Return formatted UTC offset string (`±HH:MM`) for a naive local datetime.
+    """Return the UTC offset (`±HH:MM`) to record for a naive local datetime.
 
-    Calculates the standard or daylight saving offset without modifying the
-    local wall-clock digits. Uses pure Python US DST rules for offline Windows
-    resilience where `tzdata` is not installed.
+    This selects which `OffsetTime*` value is written. It does **not** convert
+    the wall-clock digits -- stored FILETIMEs in this corpus are already local
+    time, and shifting them would be the bug this project exists to avoid.
+
+    Raises `UnknownTimezoneError` for a zone this module has no offsets for,
+    rather than guessing. See `_TZ_OFFSETS`.
     """
-    tz_clean = tz_name.lower().replace(" ", "").replace("_", "")
-    is_dst = _is_us_dst(dt)
-
-    # Base UTC offsets for standard US zones:
-    # Eastern: -5 (standard) / -4 (DST)
-    # Central: -6 (standard) / -5 (DST)
-    # Mountain: -7 (standard) / -6 (DST)
-    # Pacific: -8 (standard) / -7 (DST)
-    if "newyork" in tz_clean or "eastern" in tz_clean:
-        h = -4 if is_dst else -5
-    elif "denver" in tz_clean or "mountain" in tz_clean:
-        h = -6 if is_dst else -7
-    elif "losangeles" in tz_clean or "pacific" in tz_clean:
-        h = -7 if is_dst else -8
-    elif "utc" in tz_clean or "gmt" in tz_clean:
+    tz_clean = tz_name.strip().lower().replace(" ", "_")
+    if tz_clean in ("utc", "gmt", "etc/utc", "etc/gmt"):
         return "+00:00"
-    else:
-        # Default: America/Chicago / Central
-        h = -5 if is_dst else -6
 
-    sign = "+" if h >= 0 else "-"
-    return f"{sign}{abs(h):02d}:00"
+    canonical = _TZ_ALIASES.get(tz_clean, tz_clean)
+    offsets = _TZ_OFFSETS.get(canonical)
+    if offsets is not None:
+        std_h, dst_h = offsets
+        h = dst_h if _is_us_dst(dt) else std_h
+        sign = "+" if h >= 0 else "-"
+        return f"{sign}{abs(h):02d}:00"
+
+    raise UnknownTimezoneError(
+        f"no UTC offset known for timezone {tz_name!r}. This project resolves "
+        f"offsets from a small built-in table (US zones plus UTC) because "
+        f"Windows ships no tz database; add the zone to _TZ_OFFSETS rather "
+        f"than letting a wrong offset be written."
+    )
 
 
 def format_exif_datetime(dt: datetime.datetime | None) -> str | None:
@@ -183,6 +230,32 @@ MONTH_NAMES = {
 }
 
 
+#: How precisely each folder-name date kind pins a photo down.
+#: This is the whole point of the type: `Easter 2002` names a day, `Aug. 2000`
+#: names a month, `2001` names a year. They are not interchangeable, and the
+#: difference decides what may be written to `DateTimeOriginal`.
+DATE_KIND_PRECISION: dict[str, str] = {
+    "exact_day": "day",
+    "month": "month",
+    "season": "season",
+    "year_span": "year",
+    "year": "year",
+    "none": "none",
+}
+
+#: Only a day-precise folder date may become EXIF `DateTimeOriginal`.
+#:
+#: EXIF has no month-only or year-only form for a capture date: writing one
+#: means naming a specific day. A folder called `2001` does not say the photo
+#: was taken on 1 January 2001, and `Summer 2000` does not say 1 June. Picking
+#: the first instant of the range would invent a capture date no evidence
+#: supports, and would do it for 151 of this corpus's 687 files -- 97 from a
+#: bare year, 34 from a year span, 20 from a season. Coarser folder dates are
+#: still kept: they order the output and drive the filename prefix, which is a
+#: browsing affordance rather than a claim about when the shutter fired.
+DEFENSIBLE_DATE_KINDS = frozenset({"exact_day"})
+
+
 @dataclass
 class FolderDateResult:
     parsed: bool
@@ -196,15 +269,30 @@ class FolderDateResult:
     description: str = ""
 
     @property
+    def precision(self) -> str:
+        """'day' | 'month' | 'season' | 'year' | 'none' -- how tightly this pins a date."""
+        return DATE_KIND_PRECISION.get(self.date_kind, "none")
+
+    @property
     def defensible_date(self) -> datetime.date | None:
-        """Return a defensible date if one was extracted (exact day, or start of month)."""
-        if self.start_date:
-            return self.start_date
-        if self.year and self.month and self.day:
-            return datetime.date(self.year, self.month, self.day)
-        if self.year and self.month:
-            return datetime.date(self.year, self.month, 1)
-        return None
+        """The date this folder name justifies writing to `DateTimeOriginal`.
+
+        `None` for anything coarser than a single day -- see
+        `DEFENSIBLE_DATE_KINDS`. Use `range_start` when you want an ordering
+        key rather than a truth claim.
+        """
+        if not self.parsed or self.date_kind not in DEFENSIBLE_DATE_KINDS:
+            return None
+        return self.start_date
+
+    @property
+    def range_start(self) -> datetime.date | None:
+        """First day of the range this folder name covers, at any precision.
+
+        Safe for sorting and for the filename prefix; NOT safe for
+        `DateTimeOriginal`.
+        """
+        return self.start_date if self.parsed else None
 
 
 def parse_folder_date(folder_name: str) -> FolderDateResult:
@@ -215,6 +303,29 @@ def parse_folder_date(folder_name: str) -> FolderDateResult:
     """
     raw = folder_name.strip()
     lower = raw.lower()
+
+    # 0. Explicit numeric date (`2001-07-04`, `2001_07_04`, `2001.07.04`).
+    #    Must run before the year-range rule below, which would otherwise
+    #    read the `2001-07` prefix as the span 2001-2007.
+    m_iso = re.search(r"\b(19\d\d|20\d\d)[-_./](\d{1,2})[-_./](\d{1,2})\b", lower)
+    if m_iso:
+        yr, mon, day = (int(g) for g in m_iso.groups())
+        try:
+            d = datetime.date(yr, mon, day)
+        except ValueError:
+            d = None  # e.g. 2001-13-45; fall through to the looser rules
+        if d is not None:
+            return FolderDateResult(
+                parsed=True,
+                date_kind="exact_day",
+                year=yr,
+                month=mon,
+                day=day,
+                start_date=d,
+                end_date=d,
+                display_label=d.isoformat(),
+                description="Explicit date in folder name",
+            )
 
     # 1. 4th of July / July 4th
     m_july4 = re.search(r"(?:4th\s+of\s+july|july\s+4th?)\s+(19\d\d|20\d\d)", lower)
@@ -319,7 +430,7 @@ def parse_folder_date(folder_name: str) -> FolderDateResult:
         yr = int(m_season.group(2))
         if season == "winter":
             start_d = datetime.date(yr, 1, 1)
-            end_d = datetime.date(yr, 2, 28)
+            end_d = datetime.date(yr, 2, calendar.monthrange(yr, 2)[1])
         elif season == "spring":
             start_d = datetime.date(yr, 3, 1)
             end_d = datetime.date(yr, 5, 31)
@@ -342,9 +453,20 @@ def parse_folder_date(folder_name: str) -> FolderDateResult:
 
     # 7. Year range (e.g. "2001-02" or "2001-2002")
     m_range = re.search(r"\b(19\d\d|20\d\d)-(?:(\d{2})|(19\d\d|20\d\d))\b", lower)
+    y2: int | None = None
     if m_range:
         y1 = int(m_range.group(1))
-        y2 = int(f"{y1 // 100}{m_range.group(2)}" if m_range.group(2) else m_range.group(3))
+        if m_range.group(2):
+            # Two-digit tail. Only a *consecutive* year reads as a span:
+            # `2001-02` means 2001-2002, but `2001-07` is far more likely a
+            # numeric month that rule 0 declined than a six-year range.
+            # Deriving y2 as y1 + 1 rather than pasting the century onto the
+            # tail also sidesteps the rollover that turns `1999-00` into 1900.
+            if int(m_range.group(2)) == (y1 + 1) % 100:
+                y2 = y1 + 1
+        else:
+            y2 = int(m_range.group(3))
+    if m_range and y2 is not None:
         start_d = datetime.date(y1, 1, 1)
         end_d = datetime.date(y2, 12, 31)
         return FolderDateResult(
@@ -391,8 +513,20 @@ class ResolvedTimestamps:
     import_timestamp_raw: int | None
     import_datetime: datetime.datetime | None
     embedded_scan_datetime: datetime.datetime | None
+    #: First day of the range the album folder name covers, at whatever
+    #: precision it happens to carry. An ordering key, not a capture date --
+    #: read `date_precision` before believing the day-of-month.
     folder_date: datetime.date | None
+    #: How precise the folder name was: 'day' | 'month' | 'season' | 'year' |
+    #: 'none'. `datetime_original_exif` is populated only at 'day' or finer.
+    folder_precision: str
     date_source: str  # 'embedded-scan-date' | 'folder' | 'import-stamp' | 'none'
+    #: Precision of `datetime_original_exif`: 'second' | 'day' | 'none'.
+    date_precision: str
+    #: Best available ordering key, in descending order of trust: a defensible
+    #: capture date, else the folder range start, else the import stamp. Drives
+    #: the filename prefix and the filesystem mtime. Never written to EXIF.
+    sort_datetime: datetime.datetime | None
     datetime_digitized_exif: str | None
     datetime_original_exif: str | None
     timezone_name: str
@@ -421,32 +555,27 @@ def resolve_file_timestamps(
     date_src = "none"
 
     folder_res = parse_folder_date(primary_album) if primary_album else None
-    folder_defensible = folder_res.defensible_date if folder_res and folder_res.parsed else None
+    folder_defensible = folder_res.defensible_date if folder_res else None
+    folder_range_start = folder_res.range_start if folder_res else None
+    folder_precision = folder_res.precision if folder_res else "none"
+    precision = "none"
 
     if scan_time_dt is not None:
         original_dt = scan_time_dt
         date_src = "embedded-scan-date"
+        precision = "second"
         offset_original = get_timezone_offset(original_dt, tz_name)
     elif folder_defensible is not None:
-        if import_dt is not None:
-            original_dt = datetime.datetime(
-                folder_defensible.year,
-                folder_defensible.month,
-                folder_defensible.day,
-                import_dt.hour,
-                import_dt.minute,
-                import_dt.second,
-            )
-        else:
-            original_dt = datetime.datetime(
-                folder_defensible.year,
-                folder_defensible.month,
-                folder_defensible.day,
-                0,
-                0,
-                0,
-            )
+        # Midnight, deliberately -- not the import stamp's clock time. The
+        # folder names a day; nothing in the file names an hour. Borrowing
+        # H:M:S from the import batch would dress a known day in a time
+        # belonging to an unrelated transfer session, and the result reads
+        # like a precise capture moment to every photo app that shows it.
+        original_dt = datetime.datetime(
+            folder_defensible.year, folder_defensible.month, folder_defensible.day, 0, 0, 0
+        )
         date_src = "folder"
+        precision = "day"
         offset_original = get_timezone_offset(original_dt, tz_name)
     elif import_dt is not None:
         date_src = "import-stamp"
@@ -457,12 +586,28 @@ def resolve_file_timestamps(
         else None
     )
 
+    # Ordering key, in descending order of trust. Coarse folder dates are
+    # allowed here precisely because this never reaches EXIF -- it decides
+    # where a file sorts, and the filename prefix marks how much of it is
+    # actually known.
+    if original_dt is not None:
+        sort_dt: datetime.datetime | None = original_dt
+    elif folder_range_start is not None:
+        sort_dt = datetime.datetime(
+            folder_range_start.year, folder_range_start.month, folder_range_start.day, 0, 0, 0
+        )
+    else:
+        sort_dt = import_dt
+
     return ResolvedTimestamps(
         import_timestamp_raw=import_ft,
         import_datetime=import_dt,
         embedded_scan_datetime=scan_time_dt,
-        folder_date=folder_defensible,
+        folder_date=folder_range_start,
+        folder_precision=folder_precision,
         date_source=date_src,
+        date_precision=precision,
+        sort_datetime=sort_dt,
         datetime_digitized_exif=digitized_exif,
         datetime_original_exif=original_exif,
         timezone_name=tz_name,

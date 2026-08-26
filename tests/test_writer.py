@@ -20,11 +20,31 @@ class TestNamingAndPrefixes:
         assert pfx == "2001-07-04_123456"
         assert is_undated is False
 
-    def test_folder_date_generates_midnight_prefix(self) -> None:
-        ts_dict = {"folder_date": "2000-08-01"}
+    @pytest.mark.parametrize(
+        ("precision", "expected"),
+        [
+            ("month", "2000-08-00_000000"),
+            ("season", "2000-08-00_000000"),
+            ("year", "2000-00-00_000000"),
+        ],
+    )
+    def test_coarse_folder_date_zeroes_the_components_it_cannot_support(
+        self, precision: str, expected: str
+    ) -> None:
+        # The folder range still orders the file, but the day is written as
+        # 00 rather than 01: a real 1st of the month is indistinguishable
+        # from a guess once it is in the filename.
+        ts_dict = {"folder_date": "2000-08-01", "folder_precision": precision}
         pfx, is_undated = writer.format_date_prefix(ts_dict)
-        assert pfx == "2000-08-01_000000"
-        assert is_undated is False
+        assert pfx == expected
+        assert is_undated is True
+
+    def test_coarse_folder_date_never_yields_a_day_precise_prefix(self) -> None:
+        for precision in ("month", "season", "year"):
+            pfx, _ = writer.format_date_prefix(
+                {"folder_date": "2000-08-01", "folder_precision": precision}
+            )
+            assert pfx.split("_")[0].endswith("-00"), pfx
 
     def test_undated_photo_generates_zero_prefix(self) -> None:
         ts_dict = {"datetime_digitized_exif": "1998:02:28 11:34:38"}

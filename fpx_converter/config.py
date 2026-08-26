@@ -10,6 +10,7 @@ override without editing the file.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,12 +85,49 @@ def load_env(env_path: Path | None = None) -> dict[str, str]:
     return values
 
 
+def parse_album_tz_overrides(raw: str) -> dict[str, str]:
+    """Parse `FPX_TZ_OVERRIDES` into a {album substring: IANA zone} map.
+
+    The format is the JSON object `.env.example` documents, matched
+    case-insensitively against the album folder name:
+
+        FPX_TZ_OVERRIDES={"Some Trip":"America/New_York"}
+
+    Album names are personal content, so this map lives in `.env` and never
+    in the repository -- see the note in `timestamps.py`. Anything that is
+    not a JSON object of strings is refused loudly: a silently ignored
+    override writes a wrong `OffsetTime*` that nothing downstream can detect.
+    """
+    text = raw.strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"FPX_TZ_OVERRIDES is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ConfigError(
+            f"FPX_TZ_OVERRIDES must be a JSON object mapping album name to time "
+            f"zone, got {type(parsed).__name__}"
+        )
+    overrides: dict[str, str] = {}
+    for key, value in parsed.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ConfigError(
+                f"FPX_TZ_OVERRIDES entries must be string pairs, got {key!r}: {value!r}"
+            )
+        if key.strip():
+            overrides[key.strip().lower()] = value.strip()
+    return overrides
+
+
 @dataclass(frozen=True)
 class Settings:
     source_root: Path
     output_root: Path | None
     exiftool: str | None
     default_tz: str
+    album_tz_overrides: dict[str, str]
 
     @classmethod
     def load(cls, env_path: Path | None = None) -> Settings:
@@ -115,4 +153,5 @@ class Settings:
             output_root=output_root,
             exiftool=env.get("FPX_EXIFTOOL") or None,
             default_tz=env.get("FPX_DEFAULT_TZ", "America/Chicago"),
+            album_tz_overrides=parse_album_tz_overrides(env.get("FPX_TZ_OVERRIDES", "")),
         )
