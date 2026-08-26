@@ -8,6 +8,7 @@ and validates outputs independently with pyexiv2.
 from __future__ import annotations
 
 import datetime
+import functools
 import json
 import os
 import re
@@ -16,6 +17,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from PIL import ImageCms
 
 from . import config, decoder, metadata, naming, validator
 
@@ -48,6 +51,12 @@ class OutputItemResult:
     #: the source pixels -- but they must not disappear either.
     warnings: list[str] = field(default_factory=list)
     transform_status: str = ""
+
+
+@functools.lru_cache(maxsize=1)
+def srgb_icc_profile() -> bytes:
+    """The sRGB ICC profile to embed in both outputs. Built once per run."""
+    return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
 
 def resolve_exiftool_path(explicit_path: str | Path | None = None) -> str | None:
@@ -317,9 +326,18 @@ def write_single_entry_dual_output(
         tif_path.parent.mkdir(parents=True, exist_ok=True)
         jpg_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 3. Save Deflate TIFF and q95 4:4:4 JPEG
-        decoded.image.save(tif_path, format="TIFF", compression="tiff_deflate")
-        decoded.image.save(jpg_path, format="JPEG", quality=95, subsampling=0)
+        # 3. Save Deflate TIFF and q95 4:4:4 JPEG, both tagged sRGB.
+        #
+        # The ICC profile is not decoration. Both outputs are sRGB by
+        # construction -- the decoder converts PhotoYCC on the way through --
+        # but an untagged TIFF is interpreted as whatever the viewer assumes,
+        # and "assume sRGB" is a convention rather than a guarantee. An
+        # archival file should say what its numbers mean.
+        icc = srgb_icc_profile()
+        decoded.image.save(tif_path, format="TIFF", compression="tiff_deflate", icc_profile=icc)
+        decoded.image.save(
+            jpg_path, format="JPEG", quality=95, subsampling=0, icc_profile=icc
+        )
 
         # 4. Copy original .fpx and emit .fpx.json sidecar into archive/
         shutil.copy2(fpx_path, fpx_copy_path)

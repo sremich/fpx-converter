@@ -52,10 +52,21 @@ def validate_dual_output(
 
         with Image.open(jpg_path) as jpg_img:
             jpg_size = jpg_img.size
-            # Verify 4:4:4 chroma subsampling (all components sampling (1, 1))
-            if hasattr(jpg_img, "layer") and jpg_img.layer:
+            # Verify 4:4:4 chroma subsampling (all components sampling (1, 1)).
+            #
+            # An unreadable sampling table is an error, not a pass. This
+            # check used to sit behind `if jpg_img.layer:`, so a JPEG whose
+            # factors could not be read validated clean -- and a 4:2:0 file
+            # would have been indistinguishable from a 4:4:4 one.
+            layer = getattr(jpg_img, "layer", None)
+            if not layer:
+                errors.append(
+                    "JPEG chroma subsampling could not be verified: Pillow reported "
+                    "no component sampling table for this file"
+                )
+            else:
                 # layer format is list of (component_id, h_samp, v_samp, quant_table)
-                sampling_factors = [(comp[1], comp[2]) for comp in jpg_img.layer]
+                sampling_factors = [(comp[1], comp[2]) for comp in layer]
                 if any(sf != (1, 1) for sf in sampling_factors):
                     errors.append(
                         f"JPEG chroma subsampling is not 4:4:4: sampling={sampling_factors}"

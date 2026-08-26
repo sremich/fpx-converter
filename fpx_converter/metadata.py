@@ -10,6 +10,8 @@ Emits complete `.fpx.json` sidecar dumps for every manifest entry.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,15 +138,57 @@ def extract_fpx_metadata(
     )
 
 
+#: Binary payloads at or below this size are carried in the sidecar as
+#: base64. Above it, only the digest and length are recorded.
+#:
+#: 64 KiB keeps the JPEG table blobs (~574 bytes) and the embedded DIB
+#: thumbnails inline while stopping a pathological blob from bloating every
+#: sidecar. The originals are copied into `archive/` alongside, so nothing
+#: is lost either way -- but a sidecar that claims to be the complete
+#: property dump should not quietly stop at a 32-byte preview.
+SIDECAR_INLINE_BLOB_LIMIT = 64 * 1024
+
+
 def _sanitize_value(val: Any) -> Any:
-    """Sanitize property values for JSON serialization, omitting binary buffers."""
+    """Make property values JSON-safe, preserving binary payloads.
+
+    Binary buffers used to be dropped outright, leaving a 32-byte
+    `hex_preview` behind. That made the sidecar's "every raw value" claim
+    untrue for exactly the two properties anyone would come back for: the
+    external JPEG tables and the thumbnail DIB. They are now base64-encoded
+    with a SHA-256 alongside, so the sidecar can be checked against the
+    `.fpx` it came from.
+    """
     if isinstance(val, bytes):
-        return val.hex()
+        return _encode_blob(val)
     if isinstance(val, dict):
-        return {k: _sanitize_value(v) for k, v in val.items() if k != "raw_bytes"}
+        out: dict[str, Any] = {}
+        for key, value in val.items():
+            if key == "raw_bytes" and isinstance(value, bytes):
+                out.update(_encode_blob(value))
+            else:
+                out[key] = _sanitize_value(value)
+        return out
     if isinstance(val, list):
         return [_sanitize_value(v) for v in val]
     return val
+
+
+def _encode_blob(raw: bytes) -> dict[str, Any]:
+    """Digest, length, and (below the size limit) the bytes themselves."""
+    encoded: dict[str, Any] = {
+        "raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "raw_length": len(raw),
+    }
+    if len(raw) <= SIDECAR_INLINE_BLOB_LIMIT:
+        encoded["raw_base64"] = base64.b64encode(raw).decode("ascii")
+    else:
+        encoded["raw_base64"] = None
+        encoded["raw_omitted_reason"] = (
+            f"exceeds the {SIDECAR_INLINE_BLOB_LIMIT}-byte sidecar inline limit; "
+            f"the bytes remain in the .fpx copied alongside this sidecar"
+        )
+    return encoded
 
 
 def _serialize_propset(pset: propset.ParsedPropertySet) -> dict[str, Any]:

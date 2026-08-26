@@ -316,3 +316,70 @@ class TestPropsetMalformedAndAdversarialInputs:
         sec = parsed.sections[0]
         assert any("unsupported base type" in err.lower() for err in sec.errors)
         assert 2 not in sec.properties
+
+
+class TestCodepageHandling:
+    """VT_LPSTR must honour the section's CODEPAGE, not assume latin-1.
+
+    This corpus labels 1,374 sections as code page 1252. latin-1 and cp1252
+    agree everywhere except 0x80-0x9F -- which is precisely where the curly
+    quotes, dashes and ellipsis of typed text live. latin-1 turns those into
+    C1 control characters that then travel on into XMP and IPTC.
+    """
+
+    # 0x92 is a right single quotation mark in cp1252 and a control
+    # character in latin-1; 0x97 is an em dash.
+    TEXT_BYTES = b"Nan\x92s Birthday \x97 Cake\x00"
+
+    def _parse_with_codepage(self, codepage: int | None) -> str:
+        props = []
+        if codepage is not None:
+            props.append((1, propset.VT_I2, struct.pack("<h", codepage)))
+        props.append(
+            (
+                2,
+                propset.VT_LPSTR,
+                struct.pack("<I", len(self.TEXT_BYTES)) + self.TEXT_BYTES,
+            )
+        )
+        data = _build_propset_bytes(propset.FMTID_SUMMARY_INFORMATION, props)
+        parsed = propset.parse_propset(data, stream_name="test")
+        assert parsed.ok, parsed.sections[0].errors
+        return parsed.sections[0].properties[2].decoded_value
+
+    def test_cp1252_section_decodes_typographic_punctuation(self) -> None:
+        text = self._parse_with_codepage(1252)
+        assert text == "Nan\u2019s Birthday \u2014 Cake"
+        assert "\u0092" not in text
+
+    def test_latin1_would_have_produced_control_characters(self) -> None:
+        # Pins down why this matters: the old behaviour is a real corruption,
+        # not a theoretical one.
+        naive = self.TEXT_BYTES.split(b"\x00")[0].decode("latin-1")
+        assert "\u0092" in naive
+        assert naive != self._parse_with_codepage(1252)
+
+    def test_unlabelled_section_falls_back_to_cp1252(self) -> None:
+        assert self._parse_with_codepage(None) == "Nan\u2019s Birthday \u2014 Cake"
+
+    def test_codepage_is_read_even_when_it_is_not_the_first_property(self) -> None:
+        # The code page governs every string in the section, so it has to be
+        # resolved before any of them are decoded -- regardless of where it
+        # sits in the property table.
+        props = [
+            (
+                2,
+                propset.VT_LPSTR,
+                struct.pack("<I", len(self.TEXT_BYTES)) + self.TEXT_BYTES,
+            ),
+            (1, propset.VT_I2, struct.pack("<h", 1252)),
+        ]
+        data = _build_propset_bytes(propset.FMTID_SUMMARY_INFORMATION, props)
+        parsed = propset.parse_propset(data, stream_name="test")
+        assert parsed.sections[0].codepage == 1252
+        assert parsed.sections[0].properties[2].decoded_value == "Nan\u2019s Birthday \u2014 Cake"
+
+    def test_high_codepage_stored_as_negative_int16_is_recovered(self) -> None:
+        # PID 1 is VT_I2, so UTF-8 (65001) arrives as -535.
+        assert propset.codec_for_codepage(-535) == "utf-8"
+        assert propset.codec_for_codepage(65001) == "utf-8"

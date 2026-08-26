@@ -232,6 +232,18 @@ def cmd_check_dates(args: argparse.Namespace) -> int:
     )
     print(summary_line)
 
+    # The milestone calls this an automated gate, so it has to be able to
+    # fail. It is opt-in because failing is the *expected* result on this
+    # corpus -- the import stamp misses 7 of 9 dated albums, one by a whole
+    # year, which is exactly why `DateTimeOriginal` is not taken from it.
+    # `--strict` is for asking "has this got worse?", not "is it perfect?".
+    if getattr(args, "strict", False) and not report.ok:
+        print(
+            f"\nFAIL: {report.failed_albums} album(s) disagree with the import "
+            f"timestamps. Re-run without --strict to inspect the table above.",
+            file=sys.stderr,
+        )
+        return 2
     return 0
 
 
@@ -434,6 +446,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_dates.add_argument("--manifest")
     p_dates.add_argument("--store", help="path to ingested .fpx store directory")
+    p_dates.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero when any album's import stamps disagree with its "
+        "folder name (the gate; off by default because failing is expected here)",
+    )
     p_dates.set_defaults(func=cmd_check_dates)
 
     # 6. thumbnail

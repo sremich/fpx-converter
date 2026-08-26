@@ -90,6 +90,50 @@ VT_NAMES: dict[int, str] = {
 
 FT_EPOCH = datetime.datetime(1601, 1, 1)
 
+#: Windows code page -> Python codec, for decoding VT_LPSTR byte strings.
+#:
+#: This corpus uses 1252 in 1,374 sections and 1200 (UTF-16LE) in 4,890.
+#: Decoding 1252 as latin-1 -- which is what this parser used to do,
+#: unconditionally -- is wrong for exactly one byte range, 0x80-0x9F, and
+#: that range holds the curly quotes, en and em dashes, and ellipsis that
+#: typed text is full of. latin-1 maps them to C1 control characters, which
+#: then travel into XMP and IPTC as unprintable junk.
+_CODEPAGE_CODECS: dict[int, str] = {
+    874: "cp874",
+    932: "cp932",
+    936: "gbk",
+    949: "cp949",
+    950: "cp950",
+    1200: "utf-16-le",
+    1250: "cp1250",
+    1251: "cp1251",
+    1252: "cp1252",
+    1253: "cp1253",
+    1254: "cp1254",
+    1255: "cp1255",
+    1256: "cp1256",
+    1257: "cp1257",
+    1258: "cp1258",
+    10000: "mac_roman",
+    65000: "utf-7",
+    65001: "utf-8",
+}
+
+
+def codec_for_codepage(codepage: int | None) -> str:
+    """Python codec name for an OLE property-set code page.
+
+    Falls back to cp1252 rather than latin-1: an unlabelled property set
+    written by Windows software of this era is far more likely to be 1252,
+    and 1252 is a superset of the printable latin-1 range anyway.
+    """
+    if codepage is None:
+        return "cp1252"
+    # PID 1 is stored as VT_I2, so code pages above 32767 arrive negative.
+    if codepage < 0:
+        codepage &= 0xFFFF
+    return _CODEPAGE_CODECS.get(codepage, "cp1252")
+
 
 def typename(type_code: int) -> str:
     """Human-readable variant type name including VECTOR and ARRAY flags."""
@@ -317,7 +361,7 @@ class PropertyParseError(ValueError):
 
 
 def _parse_scalar(
-    data: bytes, off: int, base_type: int
+    data: bytes, off: int, base_type: int, codepage: int | None = None
 ) -> tuple[Any, Any, int]:
     """Parse one scalar value of type base_type at offset off.
 
@@ -418,7 +462,7 @@ def _parse_scalar(
         if off + 4 + cb > length:
             raise PropertyParseError(f"VT_LPSTR cb {cb} exceeds bounds at off {off}")
         raw_bytes = data[off + 4 : off + 4 + cb]
-        text = raw_bytes.split(b"\x00")[0].decode("latin-1", "replace")
+        text = raw_bytes.split(b"\x00")[0].decode(codec_for_codepage(codepage), "replace")
         return raw_bytes.hex(), text, 4 + cb
 
     if base_type == VT_LPWSTR:
@@ -475,7 +519,7 @@ def _parse_scalar(
         if off + 4 + cb > length:
             raise PropertyParseError("storage/stream name exceeds bounds")
         name_bytes = data[off + 4 : off + 4 + cb]
-        text = name_bytes.split(b"\x00")[0].decode("latin-1", "replace")
+        text = name_bytes.split(b"\x00")[0].decode(codec_for_codepage(codepage), "replace")
         return name_bytes.hex(), text, 4 + cb
 
     if base_type == VT_VARIANT:
@@ -483,7 +527,9 @@ def _parse_scalar(
         if off + 4 > length:
             raise PropertyParseError("truncated VT_VARIANT inner type")
         inner_type = struct.unpack_from("<I", data, off)[0]
-        inner_raw, inner_dec, inner_consumed = _parse_typed_value(data, off + 4, inner_type)
+        inner_raw, inner_dec, inner_consumed = _parse_typed_value(
+            data, off + 4, inner_type, codepage
+        )
         raw = {
             "variant_type": inner_type,
             "variant_typename": typename(inner_type),
@@ -552,7 +598,7 @@ def _decode_cf_content(cf_data: bytes) -> Any:
 
 
 def _parse_typed_value(
-    data: bytes, off: int, type_code: int
+    data: bytes, off: int, type_code: int, codepage: int | None = None
 ) -> tuple[Any, Any, int]:
     """Parse a typed value (scalar or vector) at offset off."""
     base_type = type_code & 0x0FFF
@@ -570,12 +616,14 @@ def _parse_typed_value(
                 if p + 4 > len(data):
                     raise PropertyParseError(f"truncated VT_VARIANT vector element at {i}")
                 elem_type = struct.unpack_from("<I", data, p)[0]
-                elem_raw, elem_dec, elem_consumed = _parse_typed_value(data, p + 4, elem_type)
+                elem_raw, elem_dec, elem_consumed = _parse_typed_value(
+                    data, p + 4, elem_type, codepage
+                )
                 raw_list.append({"type": elem_type, "raw": elem_raw})
                 dec_list.append(elem_dec)
                 p += 4 + elem_consumed
             else:
-                elem_raw, elem_dec, elem_consumed = _parse_scalar(data, p, base_type)
+                elem_raw, elem_dec, elem_consumed = _parse_scalar(data, p, base_type, codepage)
                 raw_list.append(elem_raw)
                 dec_list.append(elem_dec)
                 p += elem_consumed
@@ -587,7 +635,7 @@ def _parse_typed_value(
         return raw_list, dec_list, p - off
 
     # Scalar value
-    raw_val, dec_val, consumed = _parse_scalar(data, p, base_type)
+    raw_val, dec_val, consumed = _parse_scalar(data, p, base_type, codepage)
     return raw_val, dec_val, consumed
 
 
@@ -658,6 +706,27 @@ def parse_propset(
         props: dict[int, ParsedProperty] = {}
         codepage: int | None = None
 
+        # Locate CODEPAGE (PID 1) before decoding anything else. It governs
+        # how every VT_LPSTR in the section is interpreted, and it is not
+        # guaranteed to come first in the property table -- decoding strings
+        # as we met them meant the code page was frequently discovered only
+        # after it was needed.
+        for i in range(cprops):
+            hdr_pos = 8 + i * 8
+            if hdr_pos + 8 > len(sec_data):
+                break
+            pid, prop_off = struct.unpack_from("<II", sec_data, hdr_pos)
+            if pid != 1 or prop_off + 4 > len(sec_data):
+                continue
+            try:
+                cp_type = struct.unpack_from("<I", sec_data, prop_off)[0]
+                _cp_raw, cp_dec, _ = _parse_typed_value(sec_data, prop_off + 4, cp_type)
+                if isinstance(cp_dec, int):
+                    codepage = cp_dec
+            except Exception as exc:  # noqa: BLE001
+                sec_errors.append(f"codepage (pid 1): {type(exc).__name__}: {exc}")
+            break
+
         for i in range(cprops):
             hdr_pos = 8 + i * 8
             if hdr_pos + 8 > len(sec_data):
@@ -673,7 +742,9 @@ def parse_propset(
                 type_code = struct.unpack_from("<I", sec_data, prop_off)[0]
                 type_lbl = typename(type_code)
                 prop_name = get_property_name(fmtid_hex, pid)
-                raw_v, dec_v, _ = _parse_typed_value(sec_data, prop_off + 4, type_code)
+                raw_v, dec_v, _ = _parse_typed_value(
+                    sec_data, prop_off + 4, type_code, codepage
+                )
 
                 props[pid] = ParsedProperty(
                     pid=pid,
@@ -685,8 +756,6 @@ def parse_propset(
                     decoded_value=dec_v,
                 )
 
-                if pid == 1:  # CODEPAGE
-                    codepage = dec_v if isinstance(dec_v, int) else None
 
             except Exception as exc:  # noqa: BLE001
                 sec_errors.append(f"pid 0x{pid:08X}: {type(exc).__name__}: {exc}")

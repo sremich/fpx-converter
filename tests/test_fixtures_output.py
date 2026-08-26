@@ -279,3 +279,87 @@ def test_claimed_paths_refuse_a_repeat_write(tmp_path: Path) -> None:
     writer.write_single_entry_dual_output(fpx_path=FIXTURES / "Clouds01.fpx", **common)
     with pytest.raises(writer.WriterError, match="collision"):
         writer.write_single_entry_dual_output(fpx_path=FIXTURES / "Clouds01.fpx", **common)
+
+
+def test_validator_rejects_a_subsampled_jpeg(tmp_path: Path) -> None:
+    """The 4:4:4 check must actually notice 4:2:0.
+
+    It used to sit behind `if jpg_img.layer:`, so a file whose sampling
+    table could not be read validated clean. A check that cannot fail is
+    indistinguishable from no check.
+    """
+    from fpx_converter import decoder
+
+    decoded = decoder.decode_fpx(FIXTURES / "Clouds01.fpx", apply_transform=True)
+    tif_path = tmp_path / "a.tif"
+    good_jpg = tmp_path / "good.jpg"
+    bad_jpg = tmp_path / "bad.jpg"
+
+    decoded.image.save(tif_path, format="TIFF", compression="tiff_deflate")
+    decoded.image.save(good_jpg, format="JPEG", quality=95, subsampling=0)  # 4:4:4
+    decoded.image.save(bad_jpg, format="JPEG", quality=95, subsampling=2)  # 4:2:0
+
+    expected: dict = {"camera": {}, "timestamps": {}, "iptc_keywords": []}
+
+    good = validator.validate_dual_output(tif_path, good_jpg, expected)
+    assert good.ok, good.errors
+
+    bad = validator.validate_dual_output(tif_path, bad_jpg, expected)
+    assert not bad.ok
+    assert any("4:4:4" in e for e in bad.errors), bad.errors
+
+
+def test_outputs_are_tagged_srgb(tmp_path: Path) -> None:
+    """Both outputs carry an ICC profile.
+
+    An untagged TIFF is interpreted as whatever the viewer assumes. For an
+    archival file that is a guess, and colour is one of the two things
+    tier 4 checks by eye.
+    """
+    res = writer.write_single_entry_dual_output(
+        fpx_path=FIXTURES / "Clouds01.fpx",
+        entry={
+            "store_name": "Clouds01.fpx",
+            "preferred_name": "Clouds01.fpx",
+            "albums": ["Sample Images"],
+            "sha256": "0" * 64,
+        },
+        output_root=tmp_path / "out",
+        source_root=FIXTURES,
+    )
+    for path in (res.tif_path, res.jpg_path):
+        with Image.open(path) as img:
+            assert img.info.get("icc_profile"), f"{path.suffix} has no ICC profile"
+
+
+def test_sidecar_preserves_binary_payloads(tmp_path: Path) -> None:
+    """The sidecar carries the actual bytes, not a 32-byte preview.
+
+    The embedded thumbnail DIB and the external JPEG tables are the two
+    properties anyone would come back to this sidecar for; both used to be
+    discarded on the way to JSON while the file still claimed to hold every
+    raw value.
+    """
+    import base64
+    import hashlib
+
+    from fpx_converter import metadata as metadata_mod
+
+    entry = {
+        "sha256": "0" * 64,
+        "store_name": "Clouds01.fpx",
+        "preferred_name": "Clouds01.fpx",
+        "albums": ["Sample Images"],
+    }
+    meta = metadata_mod.extract_fpx_metadata(FIXTURES / "Clouds01.fpx", manifest_entry=entry)
+    sidecar = metadata_mod.build_sidecar_dict(meta, entry)
+
+    thumb = sidecar["property_sets"]["\x05SummaryInformation"]["sections"][0]["properties"][
+        "PIDSI_THUMBNAIL"
+    ]["raw_value"]
+
+    assert thumb["raw_length"] > 1000
+    assert thumb["raw_base64"], "thumbnail bytes were dropped from the sidecar"
+    recovered = base64.b64decode(thumb["raw_base64"])
+    assert len(recovered) == thumb["raw_length"]
+    assert hashlib.sha256(recovered).hexdigest() == thumb["raw_sha256"]
