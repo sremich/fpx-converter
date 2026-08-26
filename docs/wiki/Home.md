@@ -48,8 +48,8 @@ inventory, and each has a full entry in [`DECISIONS.md`](../../DECISIONS.md).
    of 1,265 files and hard-crashes the interpreter on two of them. The
    custom decoder is primary; the plugin is an out-of-process oracle.
 5. **Viewing transforms are real and now applied.** 22 files carry a genuine
-   90° CCW rotation (now correctly applied to the output). 71 files resolve to
-   a crop (57 axis-aligned, 14 rotated-and-cropped); the archival TIFF
+   90° CCW rotation (now correctly applied to the output). 70 files resolve to
+   a crop (56 axis-aligned, 14 rotated-and-cropped); the archival TIFF
    preserves the full frame while the shareable JPEG applies the crop.
 
 ## Format notes worth keeping

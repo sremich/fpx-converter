@@ -9,6 +9,19 @@ commit, then tag.
 ## [Unreleased]
 
 ### Fixed
+- **PhotoYCC files were being colour-converted twice and shipped solidly
+  green.** The tile path called `convert("RGB")`, which runs the JFIF
+  YCbCr-to-RGB transform, and then applied the PhotoYCC transform on top of
+  the already-converted image; separately, both chroma axes were centred on
+  156 when C1 is neutral at 156 and C2 at 137. The 2 PhotoYCC files in the
+  corpus came out with channel means around `[60, 200, 20]` against a
+  thumbnail averaging `[110, 105, 122]`, and **42% and 44% of their pixels
+  clipped to zero** — past every automated check in the project, because the
+  geometry was perfect and the thumbnail oracle folds both images to
+  greyscale before correlating. Found by a new pixel-statistics pass in tier
+  3. The two files now correlate 0.86–0.95 per channel with 0% clipping.
+  A per-channel correlation against the same embedded DIB thumbnail is now
+  part of tier 3, and *is* a colour oracle; the greyscale one never was.
 - **`DateTimeOriginal` is no longer invented from a coarse folder name.** Any
   folder that parsed produced a capture date, using the first day of the
   range and the hour, minute and second of the Kodak import batch. Over the
@@ -28,8 +41,8 @@ commit, then tag.
   the manifest, resume-stably, with a writer-level guard behind them.
 - **Viewing transforms are classified instead of pattern-matched.** Only the
   90° CCW rotation was recognised; everything else fell through to an
-  unrotated image, as did a `Transform` stream that failed to parse. **71 files
-  resolve to a crop** (57 axis-aligned, 14 rotated-and-cropped) that was being
+  unrotated image, as did a `Transform` stream that failed to parse. **70 files
+  resolve to a crop** (56 axis-aligned, 14 rotated-and-cropped) that was being
   discarded or incorrectly applied. `has_transform` was `True` for all 687
   files because it compared the ROI against `[0, 0, 1, 1]` instead of the
   declared aspect. The owner decision on the crops landed later this cycle —
@@ -91,7 +104,7 @@ commit, then tag.
     (`archive/<album>/<name>.tif`) and shareable quality-95 4:4:4 JPEGs
     (`sharing/<album>/<name>.jpg`).
   - **Viewing-transform crops are now applied — to the shareable JPEG only.**
-    Owner decision on the 71 files that resolve to a crop (57 axis-aligned,
+    Owner decision on the 70 files that resolve to a crop (56 axis-aligned,
     14 rotated-and-cropped): the archival TIFF keeps the full frame the camera
     captured, and the shareable JPEG gets the composition somebody framed in
     Kodak's software in 2002. Deriving the crop box needs `ResultAspectRatio`
@@ -121,16 +134,22 @@ commit, then tag.
     pyexiv2 readback, and CLI convert tests for the initial dual-output
     engine (182 → 197), plus further tests added alongside the audit fixes
     above and the crop-application work below. The suite now stands at
-    **270 tests**, all of which run in CI (locally, one skips: the guard
+    **280 tests**, all of which run in CI (locally, one skips: the guard
     that fails when `FPX_REQUIRE_EXIFTOOL` is set without ExifTool present).
-  - Tier 3 re-run after the fixes above: a 48-file sample spanning all 16
-    albums, 7 declared sizes, both colour spaces, all three transform
-    classes (608 identity, 22 rotation, 71 cropped including rotated-and-cropped)
-    and the film scans. 48/48 converted, 0 failures, and an independent pyexiv2
-    pass over both containers found 0 violations — dimensions, Deflate, 4:4:4,
-    ICC, tags, mtime, and no `DateTimeOriginal` on any file the filename marks
-    undated. Crops verified against embedded DIB thumbnail oracle: 71 of 71
-    improved (mean +0.56, worst post-crop correlation 0.981).
+  - Tier 3 is now a committed script (`scripts/tier3_sample.py`) rather than
+    a run performed by hand, and it exits non-zero on any failure. Run
+    against the released commit: a 50-file sample spanning **all 16 albums,
+    all 7 declared sizes, both colour spaces and all four transform
+    outcomes** — the corpus divides 609 untouched / 8 rotation only / 14
+    rotation-plus-crop / 56 crop. 50/50 converted with 0 warnings, and an
+    independent pyexiv2 pass over both containers found 0 violations —
+    dimensions, Deflate, 4:4:4, ICC, tags, mtime, and no `DateTimeOriginal`
+    on any file the filename marks undated. Crop geometry: 9 of 9 cropped
+    files in the sample improved against the greyscale thumbnail oracle, and
+    70 of 70 across the whole corpus (mean +0.56, min +0.18, worst post-crop
+    correlation 0.981). Colour: worst per-channel correlation with the
+    embedded thumbnail 0.860, no image clipped further than its own
+    thumbnail, none near-flat.
 - **Pixel decoder engine (milestone 0.3.0).**
   - Pure-Python FlashPix multi-resolution tile decoder (`fpx_converter.decoder`)
     bypassing Pillow's crash-prone `FpxImagePlugin`.
