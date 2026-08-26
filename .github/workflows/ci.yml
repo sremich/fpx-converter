@@ -5,6 +5,12 @@ name: CI
 on:
   push:
     branches: ["**"]
+  # Manual trigger. Added because a GitHub Actions outage swallowed the
+  # pushes that configured this project: once Actions recovers it does not
+  # retroactively run commits pushed while it was down, and without this
+  # the only way to get a run on an existing commit is to push a throwaway
+  # empty one. `gh workflow run ci.yml --ref main` covers it instead.
+  workflow_dispatch:
 
 jobs:
   test:
