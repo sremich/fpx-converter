@@ -133,3 +133,40 @@ def test_sidecar_dump_end_to_end_over_fixtures(tmp_path: Path) -> None:
         assert "property_sets" in data
         assert "derived_metadata" in data
         assert not data["extraction_errors"]
+
+
+def test_env_timezone_overrides_reach_the_extracted_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `.env` timezone settings must actually change what gets written.
+
+    The album overrides moved out of `timestamps.py` (album names are
+    personal content) into `FPX_TZ_OVERRIDES`. Nothing was passing them --
+    or `FPX_DEFAULT_TZ` -- into extraction, so both settings were inert.
+    Moving the map without this wiring would have been worse than leaving it
+    hardcoded.
+    """
+    entry = {
+        "sha256": "0" * 64,
+        "store_name": "Clouds01.fpx",
+        "preferred_name": "Clouds01.fpx",
+        "albums": ["Sample Images"],
+    }
+    fpx = FIXTURES / "Clouds01.fpx"
+
+    monkeypatch.delenv("FPX_TZ_OVERRIDES", raising=False)
+    monkeypatch.delenv("FPX_DEFAULT_TZ", raising=False)
+    plain = metadata.extract_fpx_metadata(fpx, manifest_entry=entry)
+    assert plain.derived["timestamps"]["timezone_name"] == "America/Chicago"
+    assert plain.derived["timestamps"]["offset_time_digitized"] == "-06:00"
+
+    monkeypatch.setenv("FPX_TZ_OVERRIDES", '{"sample images":"America/New_York"}')
+    overridden = metadata.extract_fpx_metadata(fpx, manifest_entry=entry)
+    assert overridden.derived["timestamps"]["timezone_name"] == "America/New_York"
+    # February, so Eastern standard time -- and the wall-clock digits are
+    # untouched either way, which is the rule the offset exists to serve.
+    assert overridden.derived["timestamps"]["offset_time_digitized"] == "-05:00"
+    assert (
+        overridden.derived["timestamps"]["datetime_digitized_exif"]
+        == plain.derived["timestamps"]["datetime_digitized_exif"]
+    )

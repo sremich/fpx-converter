@@ -121,6 +121,22 @@ def parse_album_tz_overrides(raw: str) -> dict[str, str]:
     return overrides
 
 
+def timezone_settings(env_path: Path | None = None) -> tuple[str, dict[str, str]]:
+    """`(default_tz, album_overrides)` from `.env` and the environment.
+
+    Separate from `Settings.load` because the timezone configuration is
+    needed on paths that have no business requiring `FPX_SOURCE_ROOT` --
+    converting from an already-ingested store, for one. Reading the whole
+    Settings object there would refuse to run without a source archive that
+    the operation never touches.
+    """
+    env = load_env(env_path)
+    return (
+        env.get("FPX_DEFAULT_TZ", "America/Chicago"),
+        parse_album_tz_overrides(env.get("FPX_TZ_OVERRIDES", "")),
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     source_root: Path

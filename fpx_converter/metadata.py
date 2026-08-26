@@ -53,10 +53,22 @@ class ExtractedMetadata:
 def extract_fpx_metadata(
     fpx_path: Path,
     manifest_entry: dict[str, Any] | None = None,
-    default_tz: str = timestamps.DEFAULT_TZ,
+    default_tz: str | None = None,
     tz_overrides: dict[str, str] | None = None,
 ) -> ExtractedMetadata:
-    """Extract all metadata from an `.fpx` file into a structured ExtractedMetadata."""
+    """Extract all metadata from an `.fpx` file into a structured ExtractedMetadata.
+
+    `default_tz` and `tz_overrides` fall back to `.env` when not given.
+    Resolving them here rather than at each call site is deliberate: the
+    album-name overrides moved out of the source tree into `.env`, and a
+    default that quietly ignored the file would have made the setting inert
+    for every caller that forgot to thread it through -- which was all of
+    them.
+    """
+    if default_tz is None or tz_overrides is None:
+        env_tz, env_overrides = config.timezone_settings()
+        default_tz = default_tz if default_tz is not None else env_tz
+        tz_overrides = tz_overrides if tz_overrides is not None else env_overrides
     sha = manifest_entry.get("sha256", "") if manifest_entry else ""
     store_name = (
         manifest_entry.get("store_name", fpx_path.name) if manifest_entry else fpx_path.name
