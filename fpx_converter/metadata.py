@@ -139,6 +139,8 @@ def extract_fpx_metadata(
         tz_overrides=tz_overrides,
     )
 
+    errors.extend(derived.get("derivation_errors", []))
+
     return ExtractedMetadata(
         sha256=sha,
         store_name=store_name,
@@ -272,6 +274,7 @@ def _derive_metadata(
     tz_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Derive standard image dimensions, colour space, transforms, and timestamps."""
+    derivation_errors: list[str] = []
     img_contents_stream = "Data Object Store 000001/\x05Image Contents"
     img_info_stream = "Data Object Store 000001/\x05Image Info"
     transform_stream = "\x05Transform 000001"
@@ -327,13 +330,25 @@ def _derive_metadata(
     filtering = _get_prop_decoded(psets, transform_stream, "FilteringValue")
     contrast = _get_prop_decoded(psets, transform_stream, "ContrastAdjustment")
 
-    transform_status = decoder.TRANSFORM_ABSENT
-    transform_note = ""
-    if isinstance(matrix_16, list) and len(matrix_16) == 16:
-        transform_status, transform_note = decoder.classify_orientation_matrix(
-            [float(x) for x in matrix_16]
-        )
-    is_rotation_90_ccw = transform_status == decoder.TRANSFORM_ROTATE_90_CCW
+    # The whole geometry -- rotation, TIFF size, crop box -- resolved from the
+    # property set alone. The validator holds the finished files to this, so
+    # it must never be derived from the decode: an expectation taken from the
+    # decoded object would match whatever the decoder produced, including a
+    # crop that silently failed to apply.
+    matrix_floats = (
+        [float(x) for x in matrix_16]
+        if isinstance(matrix_16, list) and len(matrix_16) == 16
+        else None
+    )
+    geom = decoder.output_geometry(
+        matrix_floats,
+        float(aspect_ratio) if isinstance(aspect_ratio, (int, float)) else None,
+        int(dims_dict["declared_width"] or 0),
+        int(dims_dict["declared_height"] or 0),
+    )
+    transform_status = geom.status
+    transform_note = geom.note
+    is_rotation_90_ccw = geom.rotation == 90
 
     # `has_transform` used to compare the ROI against [0, 0, 1, 1] and so was
     # True for every file in the corpus: the full-frame ROI of a 4:3 image is
@@ -364,23 +379,17 @@ def _derive_metadata(
     # shareable JPEG kept. Without it the only evidence of a crop is the
     # matrix, and reconstructing the box from that needs ResultAspectRatio
     # and the declared size -- everything an audit would have to re-derive.
-    crop_box = None
-    if transform_status == decoder.TRANSFORM_CROP and isinstance(matrix_16, list):
-        crop_box = decoder.crop_box_for_transform(
-            [float(x) for x in matrix_16],
-            float(aspect_ratio) if isinstance(aspect_ratio, (int, float)) else None,
-            dims_dict["declared_width"],
-            dims_dict["declared_height"],
-        )
-        if crop_box is None:
-            transform_status = decoder.TRANSFORM_UNSUPPORTED
-            transform_note = "crop matrix did not resolve to a box inside the frame"
+    # It is in the *output* image's coordinates, so for a rotated file it is
+    # the box after rotation, which is what the JPEG is actually cut to.
+    crop_box = geom.crop_box
 
     transform_dict = {
         "has_transform": has_transform,
         "transform_status": transform_status,
         "transform_note": transform_note,
         "crop_box": list(crop_box) if crop_box else None,
+        "tiff_size": list(geom.tiff_size),
+        "jpeg_size": list(geom.jpeg_size),
         "roi_is_full_frame": roi_is_full_frame,
         "is_rotation_90_ccw": is_rotation_90_ccw,
         "aspect_ratio": aspect_ratio,
@@ -433,8 +442,15 @@ def _derive_metadata(
     if isinstance(scan_time_iso, str):
         try:
             scan_dt = timestamps.datetime.datetime.fromisoformat(scan_time_iso)
-        except Exception:  # noqa: BLE001
+        except ValueError:
+            # Only two files in the corpus carry an embedded scan date, and
+            # it is the only independently defensible capture date either of
+            # them has. Losing it silently would leave them undated with no
+            # symptom, so the failure is recorded rather than swallowed.
             scan_dt = None
+            derivation_errors.append(
+                f"embedded scan date {scan_time_iso!r} is not a parseable timestamp"
+            )
 
     primary_album = ""
     if entry and entry.get("albums"):
@@ -494,6 +510,7 @@ def _derive_metadata(
         "timestamps": ts_dict,
         "iptc_keywords": iptc_keywords,
         "caption_title": caption_title,
+        "derivation_errors": derivation_errors,
     }
 
 

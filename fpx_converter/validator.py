@@ -24,6 +24,37 @@ class ValidationResult:
     errors: list[str] = field(default_factory=list)
 
 
+
+def _declared_sizes(
+    expected: dict[str, Any],
+) -> tuple[tuple[int, int] | None, tuple[int, int, int, int] | None]:
+    """`(expected_tiff_size, crop_box)` from the metadata, independent of the decode.
+
+    These come from `metadata.py`'s reading of the `.fpx` property sets, so
+    comparing outputs against them is a real check. Comparing against
+    anything the decoder returned would only confirm the decoder agrees with
+    itself.
+
+    The size is the *post-rotation* one. For the 22 rotated files the TIFF is
+    864x1152 while the file declares 1152x864, so checking against the raw
+    declared size would have failed every correctly rotated photo.
+    """
+    transform = expected.get("viewing_transform") or {}
+
+    size = transform.get("tiff_size")
+    if size and len(size) == 2:
+        declared = (int(size[0]), int(size[1]))
+    else:
+        dims = expected.get("image_dimensions") or {}
+        width = dims.get("declared_width")
+        height = dims.get("declared_height")
+        declared = (int(width), int(height)) if width and height else None
+
+    box = transform.get("crop_box")
+    crop = tuple(int(v) for v in box) if box and len(box) == 4 else None
+    return declared, crop  # type: ignore[return-value]
+
+
 def validate_dual_output(
     tif_path: Path,
     jpg_path: Path,
@@ -32,13 +63,17 @@ def validate_dual_output(
 ) -> ValidationResult:
     """Validate the TIFF and JPEG against each other and against the metadata.
 
-    `expected_jpeg_size` is the size the JPEG *should* be. It differs from
-    the TIFF's only for the 53 files carrying a crop: the TIFF preserves the
-    full frame and the JPEG carries the framed composition. Passing it turns
-    the dimension check from "these two match" into "each is what it was
-    supposed to be", which is the stronger assertion -- a crop that silently
-    failed to apply would now be caught, where a bare equality check would
-    have called it a pass.
+    Both sizes are checked against `expected_derived` -- the metadata read
+    from the `.fpx`, which is computed independently of the decode that
+    produced these files. The TIFF must equal the declared image size; the
+    JPEG must equal the crop box when one is declared, and the declared size
+    otherwise.
+
+    Deriving the expectation from the decoded object instead would make the
+    check unfalsifiable: if the crop silently failed to apply, that object
+    would report the full frame, the expectation would match the output, and
+    the validation would pass. `expected_jpeg_size` is therefore accepted
+    only as an override for callers that have no metadata to hand.
     """
     errors: list[str] = []
 
@@ -82,14 +117,28 @@ def validate_dual_output(
                         f"JPEG chroma subsampling is not 4:4:4: sampling={sampling_factors}"
                     )
 
-        if expected_jpeg_size is not None:
-            if jpg_size != tuple(expected_jpeg_size):
+        declared, crop_box = _declared_sizes(expected_derived)
+
+        if declared is not None and tif_size != declared:
+            errors.append(f"TIFF is {tif_size}, but the file declares {declared}")
+
+        want_jpeg = expected_jpeg_size
+        if want_jpeg is None:
+            if crop_box is not None:
+                want_jpeg = (crop_box[2] - crop_box[0], crop_box[3] - crop_box[1])
+            else:
+                want_jpeg = declared
+
+        if want_jpeg is not None:
+            if jpg_size != tuple(want_jpeg):
                 errors.append(
-                    f"JPEG is {jpg_size}, expected {tuple(expected_jpeg_size)} "
-                    f"(TIFF is {tif_size})"
+                    f"JPEG is {jpg_size}, expected {tuple(want_jpeg)} (TIFF is {tif_size})"
                 )
-            if expected_jpeg_size == tif_size and tif_size != jpg_size:
-                errors.append(f"Dimensions mismatch: TIFF {tif_size} vs JPEG {jpg_size}")
+            if crop_box is not None and jpg_size == tif_size:
+                errors.append(
+                    f"a crop {crop_box} is declared but the JPEG is still the full "
+                    f"frame {jpg_size}"
+                )
         elif tif_size != jpg_size:
             errors.append(f"Dimensions mismatch: TIFF {tif_size} vs JPEG {jpg_size}")
 
@@ -137,9 +186,14 @@ def _validate_exif_tags(
         actual_sw = exif.get("Exif.Image.Software")
         errors.append(f"{fmt} EXIF Software mismatch: got '{actual_sw}', exp '{cam['software']}'")
 
-    # Scanner Make/Model
+    # Scanner Make/Model.
+    #
+    # Only when the writer would actually have written it: it falls back to
+    # the scanner manufacturer only where there is no camera make. Checking
+    # unconditionally would fail any file carrying both, and count a correct
+    # conversion as a failure.
     scanner = expected.get("scanner")
-    if scanner and scanner.get("manufacturer"):
+    if scanner and scanner.get("manufacturer") and not cam.get("make"):
         act_scn = exif.get("Exif.Image.Make")
         if act_scn != scanner["manufacturer"]:
             errors.append(

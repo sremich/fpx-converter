@@ -113,18 +113,20 @@ def classify_orientation_matrix(matrix: list[float]) -> tuple[str, str]:
     """Classify a FlashPix `0x10000003` matrix. Returns (status, note).
 
     The matrix is row-major 4x4 mapping result coordinates to source
-    coordinates. Only two forms are acted on:
+    coordinates. Three shapes are recognised, measured over the 687 distinct
+    files in this corpus:
 
-    * identity -- nothing to do
-    * a 90 degrees counter-clockwise rotation, the only rotation this corpus
-      contains (22 of 687 files)
+    * identity (612 files) -- nothing to do
+    * a 90 degrees counter-clockwise rotation (22 files)
+    * a uniform scale plus translation (53 files) -- a crop somebody framed
+      in the Kodak software
 
-    Everything else returns `unsupported` with the reason. That covers the
-    ~53 files carrying a scale-and-translate matrix -- a crop the original
-    Kodak software recorded, which this decoder does not apply. Returning a
-    status rather than falling through to identity is the whole point: an
-    unapplied crop should be visible in the audit, not invisible in the
-    output.
+    Anything else returns `unsupported` with the reason, so it lands in the
+    audit rather than falling through to identity and shipping silently.
+
+    This says only what the matrix *is*. It does not say whether a crop is
+    present: 14 of the 22 rotations carry one too, so the crop is derived
+    separately by `output_geometry` for every shape.
     """
     if len(matrix) != 16:
         return TRANSFORM_UNSUPPORTED, f"expected a 4x4 matrix, got {len(matrix)} values"
@@ -146,13 +148,20 @@ def classify_orientation_matrix(matrix: list[float]) -> tuple[str, str]:
         return TRANSFORM_IDENTITY, ""
 
     # 90 CCW: the diagonal is zero and the off-diagonal swaps the axes with
-    # opposite signs. The magnitude is the image aspect ratio, not 1.
+    # opposite signs and equal magnitude. That magnitude is a scale, not 1 --
+    # FlashPix normalises the result height to 1.0 regardless of how much of
+    # the source the result covers.
     if near(m0, 0.0, 0.05) and near(m5, 0.0, 0.05) and m1 < -0.5 and m4 > 0.5:
+        if not near(-m1, m4, 1e-3):
+            return (
+                TRANSFORM_UNSUPPORTED,
+                f"rotation with unequal axis scales: m1={m1:.4f}, m4={m4:.4f}",
+            )
         return TRANSFORM_ROTATE_90_CCW, ""
 
-    # Uniform scale plus translation: a crop somebody framed in the Kodak
-    # software. Uniform is required -- a non-square scale would be a stretch,
-    # which is a different thing and is not something this corpus contains.
+    # Uniform scale plus translation. Uniform is required -- a non-square
+    # scale would be a stretch, which is a different thing and is not
+    # something this corpus contains.
     scaled = not near(m0, 1.0) or not near(m5, 1.0)
     translated = not near(m3, 0.0) or not near(m7, 0.0)
     if (scaled or translated) and near(m0, m5, 1e-4) and m0 > 0.0:
@@ -166,56 +175,238 @@ def classify_orientation_matrix(matrix: list[float]) -> tuple[str, str]:
     return TRANSFORM_UNSUPPORTED, f"unrecognised orientation matrix: {matrix[:8]}"
 
 
-def crop_box_for_transform(
+def source_crop_box(
     matrix: list[float],
     result_aspect: float | None,
     width: int,
     height: int,
 ) -> tuple[int, int, int, int] | None:
-    """Pixel crop box `(left, top, right, bottom)` for a crop matrix, or None.
+    """Which source pixels the result viewport covers, or None for the full frame.
 
-    FlashPix normalises image coordinates so that height is 1.0 and width is
-    the aspect ratio, which makes one normalised unit exactly `height`
-    pixels on both axes. The matrix maps the *result* viewport -- which spans
-    `[0, ResultAspectRatio] x [0, 1]` -- back into the source:
+    FlashPix normalises image coordinates so height is 1.0 and width is the
+    aspect ratio, which makes one normalised unit exactly `height` pixels on
+    both axes. The matrix maps the *result* viewport -- which spans
+    `[0, ResultAspectRatio] x [0, 1]` -- back into the source, so pushing the
+    viewport's four corners through it and taking the bounding box gives the
+    source region the result is made from.
 
-        left   = tx * height
-        top    = ty * height
-        width  = scale * ResultAspectRatio * height
-        height = scale * height
+    Doing it by corner-mapping rather than by reading a scale and a
+    translation off the matrix is what makes this work for rotations as well
+    as for axis-aligned crops. The earlier closed form only handled the
+    axis-aligned case, so 14 rotated-and-cropped files came out rotated but
+    uncropped, with nothing recording the difference.
 
-    `ResultAspectRatio` (`0x10000000`) is what makes this work and is why the
-    translation alone looks like it overflows the frame: it is per-file and
-    describes the *cropped* result, not the source. Verified across all 53
-    cropped files in this corpus -- every box lands inside the image, and
-    every resulting width/height matches the declared aspect ratio to four
-    decimal places.
+    `ResultAspectRatio` (`0x10000000`) is per-file and describes the
+    *cropped* result, not the source; without it the translation alone looks
+    like it overflows the frame. Verified against the embedded DIB thumbnail
+    across all 71 files in this corpus that resolve to a crop: cropping
+    improved correlation with the thumbnail on every one of them, mean +0.56,
+    min +0.003, and the worst post-crop correlation is 0.981.
     """
     if len(matrix) != 16 or not result_aspect or result_aspect <= 0:
         return None
-    scale = float(matrix[0])
-    if scale <= 0:
+    if width <= 0 or height <= 0:
+        # No declared size: there is nothing to resolve the normalised
+        # coordinates into. Refusing beats inventing a box.
         return None
+
+    m0, m1, _m2, m3 = matrix[0:4]
+    m4, m5, _m6, m7 = matrix[4:8]
+    corners = [(rx, ry) for rx in (0.0, float(result_aspect)) for ry in (0.0, 1.0)]
+    xs = [m0 * rx + m1 * ry + m3 for rx, ry in corners]
+    ys = [m4 * rx + m5 * ry + m7 for rx, ry in corners]
 
     # Round the origin and the size separately, rather than rounding all four
     # edges. Rounding edges independently can move the box's width or height
     # by a pixel, which changes the aspect ratio away from the one the file
-    # declares -- and that ratio is the thing this whole calculation is
-    # anchored on.
-    left = max(0, round(matrix[3] * height))
-    top = max(0, round(matrix[7] * height))
-    box_w = round(scale * result_aspect * height)
-    box_h = round(scale * height)
-    right = left + box_w
-    bottom = top + box_h
+    # declares -- and that ratio is what this calculation is anchored on.
+    left = round(min(xs) * height)
+    top = round(min(ys) * height)
+    box_w = round((max(xs) - min(xs)) * height)
+    box_h = round((max(ys) - min(ys)) * height)
 
+    if box_w < 1 or box_h < 1:
+        return None
     # A box outside the frame means the matrix was misread. Refuse, so it
-    # surfaces as an unsupported transform; clamping would hide the
-    # misreading behind a plausible-looking crop.
-    if box_w < 1 or box_h < 1 or right > width + 1 or bottom > height + 1:
+    # reports as unsupported rather than silently cropping to the wrong
+    # pixels. One pixel of slack absorbs the rounding above.
+    if left < -1 or top < -1 or left + box_w > width + 1 or top + box_h > height + 1:
         return None
 
-    return (left, top, min(width, right), min(height, bottom))
+    left = max(0, left)
+    top = max(0, top)
+    right = min(width, left + box_w)
+    bottom = min(height, top + box_h)
+
+    if (left, top, right, bottom) == (0, 0, width, height):
+        return None
+    return (left, top, right, bottom)
+
+
+def rotate_box_90_ccw(box: tuple[int, int, int, int], width: int) -> tuple[int, int, int, int]:
+    """Map a source-space box into the coordinates of the 90 CCW rotated image.
+
+    Pillow's ROTATE_90 turns counter-clockwise, so a source pixel `(x, y)` in
+    a `width x height` image lands at `(y, width - x)` in the `height x width`
+    result. The box's left and right edges therefore become its top and
+    bottom, and the vertical order flips.
+    """
+    left, top, right, bottom = box
+    return (top, width - right, bottom, width - left)
+
+
+@dataclass
+class OutputGeometry:
+    """The sizes and crop the two output files must have.
+
+    Derived from the transform property set alone, so `metadata.py` can
+    compute it straight from the `.fpx` and the validator can hold the
+    finished outputs to it, instead of asking the decoder what it happened to
+    produce and then checking the decoder against itself.
+    """
+
+    status: str
+    note: str = ""
+    matrix: list[float] | None = None
+    #: Degrees counter-clockwise actually applied: 0 or 90.
+    rotation: int = 0
+    #: Size of the full-frame TIFF, after any rotation.
+    tiff_size: tuple[int, int] = (0, 0)
+    #: Crop box in the rotated image's coordinates, or None for no crop.
+    crop_box: tuple[int, int, int, int] | None = None
+
+    @property
+    def jpeg_size(self) -> tuple[int, int]:
+        if self.crop_box is None:
+            return self.tiff_size
+        left, top, right, bottom = self.crop_box
+        return (right - left, bottom - top)
+
+
+def output_geometry(
+    matrix: list[float] | None,
+    result_aspect: float | None,
+    width: int,
+    height: int,
+) -> OutputGeometry:
+    """Resolve a transform matrix into rotation, TIFF size, and crop box.
+
+    Rotation and crop are independent: 14 of this corpus's 22 rotated files
+    are also cropped. Treating "is it a rotation?" as the whole question is
+    what dropped those crops.
+    """
+    if matrix is None:
+        return OutputGeometry(status=TRANSFORM_ABSENT, tiff_size=(width, height))
+
+    status, note = classify_orientation_matrix(matrix)
+
+    if status == TRANSFORM_UNSUPPORTED:
+        return OutputGeometry(status=status, note=note, matrix=matrix, tiff_size=(width, height))
+
+    box = source_crop_box(matrix, result_aspect, width, height)
+
+    if status == TRANSFORM_CROP and box is None:
+        # The matrix says "crop" but no box could be resolved -- usually a
+        # missing ResultAspectRatio. Report it; do not fall back to the full
+        # frame as though the file had asked for one.
+        return OutputGeometry(
+            status=TRANSFORM_UNSUPPORTED,
+            note=(
+                f"{note}; could not be resolved to a box inside the "
+                f"{width}x{height} frame (ResultAspectRatio={result_aspect})"
+            ),
+            matrix=matrix,
+            tiff_size=(width, height),
+        )
+
+    if status == TRANSFORM_ROTATE_90_CCW:
+        return OutputGeometry(
+            status=status,
+            note=f"rotation plus crop {box}" if box else note,
+            matrix=matrix,
+            rotation=90,
+            tiff_size=(height, width),
+            crop_box=rotate_box_90_ccw(box, width) if box else None,
+        )
+
+    return OutputGeometry(
+        status=TRANSFORM_CROP if box else status,
+        note=note if box else "",
+        matrix=matrix,
+        tiff_size=(width, height),
+        crop_box=box,
+    )
+
+
+def parse_transform_stream(
+    transform_stream_bytes: bytes,
+) -> tuple[list[float] | None, float | None]:
+    """`(SpatialOrientationMatrix, ResultAspectRatio)` from a Transform stream.
+
+    Raises `DecoderError` if the stream will not parse. The parser reports
+    malformed input by returning a property set carrying errors rather than
+    by raising, so a caller that only guards against exceptions reads a
+    corrupt transform stream as a file with no transform at all -- and ships
+    a rotated photo sideways with nothing in the audit.
+    """
+    pset = propset.parse_propset(transform_stream_bytes, stream_name="Transform 000001")
+    if not pset.ok:
+        raise DecoderError(
+            "transform property set did not parse: "
+            + "; ".join(pset.errors + [e for s in pset.sections for e in s.errors])
+        )
+    matrix: list[float] | None = None
+    result_aspect: float | None = None
+    for sec in pset.sections:
+        prop = sec.properties.get(0x10000003)
+        if prop is not None:
+            value = prop.decoded_value
+            if isinstance(value, list) and len(value) == 16:
+                matrix = [float(x) for x in value]
+        prop = sec.properties.get(0x10000000)
+        if prop is not None:
+            value = prop.decoded_value
+            if isinstance(value, (int, float)):
+                result_aspect = float(value)
+    return matrix, result_aspect
+
+
+def apply_viewing_transform(
+    image: Image.Image,
+    transform_stream_bytes: bytes,
+    width: int,
+    height: int,
+) -> tuple[Image.Image, OutputGeometry]:
+    """Apply the `Transform 000001` viewing transform. Returns (image, geometry).
+
+    Rotation is applied here; the crop is not. `archive/` keeps every pixel
+    the camera captured, so the returned image is the full frame, upright,
+    and the crop travels alongside it as a box for `sharing/` to apply.
+
+    Split out of `decode_fpx` so it can be tested against real property-set
+    bytes. Inside the decode it sat behind an OLE container, which meant the
+    only way to reach the rotation and crop branches was to have a real
+    `.fpx` carrying them -- and all four committed fixtures are identity, so
+    neither branch was covered at any tier. Deleting either one left the
+    whole suite green while 22 photos shipped sideways and 71 shipped
+    uncropped.
+    """
+    try:
+        matrix, result_aspect = parse_transform_stream(transform_stream_bytes)
+    except Exception as exc:  # noqa: BLE001
+        # Keep the upright image, but never silently: an unreadable transform
+        # stream and a file with no transform at all used to produce
+        # byte-identical results and the same empty report.
+        return image, OutputGeometry(
+            status=TRANSFORM_PARSE_ERROR,
+            note=f"{type(exc).__name__}: {exc}",
+            tiff_size=(width, height),
+        )
+
+    geom = output_geometry(matrix, result_aspect, width, height)
+    if geom.rotation == 90:
+        image = image.transpose(Image.Transpose.ROTATE_90)
+    return image, geom
 
 
 def parse_subimage_header(header_bytes: bytes) -> SubimageHeader:
@@ -317,9 +508,19 @@ def _decode_tile(
         tile_bytes = data_payload[tile_rec.offset : tile_rec.offset + tile_rec.size]
         if len(tile_bytes) < UNCOMPRESSED_TILE_SIZE:
             tile_bytes = tile_bytes.ljust(UNCOMPRESSED_TILE_SIZE, b"\x00")
-        return Image.frombytes(
+        raw_tile = Image.frombytes(
             "RGB", (TILE_WIDTH, TILE_HEIGHT), tile_bytes[:UNCOMPRESSED_TILE_SIZE]
         )
+        # A raw tile holds channel values in the file's colour space, the
+        # same as a JPEG one. The conversion was wired into the JPEG branch
+        # only, so an uncompressed tile inside a PhotoYCC file came out as
+        # YCC pretending to be RGB -- a colour-wrong patch in an otherwise
+        # correct picture. Latent in this corpus (both PhotoYCC files are
+        # entirely type-2), but "detect per file, never assume corpus-wide"
+        # is a binding rule for exactly this reason.
+        if colour_space == "PhotoYCC":
+            return _photoycc_to_rgb(raw_tile)
+        return raw_tile
 
     if t_type == COMPRESSION_SINGLE_COLOUR:
         # Type 1: 0 bytes data, fill colour is in the 4 subtype bytes
@@ -327,7 +528,10 @@ def _decode_tile(
         r = sub & 0xFF
         g = (sub >> 8) & 0xFF
         b = (sub >> 16) & 0xFF
-        return Image.new("RGB", (TILE_WIDTH, TILE_HEIGHT), (r, g, b))
+        fill_tile = Image.new("RGB", (TILE_WIDTH, TILE_HEIGHT), (r, g, b))
+        if colour_space == "PhotoYCC":
+            return _photoycc_to_rgb(fill_tile)
+        return fill_tile
 
     if t_type == COMPRESSION_JPEG:
         # Type 2: Abbreviated JPEG
@@ -466,53 +670,12 @@ def _decode_from_ole(
     cropped = canvas.crop((0, 0, width, height))
 
     # 7. Viewing transform
-    rotation_applied = 0
-    crop_applied = None
-    transform_status = TRANSFORM_ABSENT
-    transform_matrix: list[float] | None = None
-    transform_note = ""
+    geom = OutputGeometry(status=TRANSFORM_ABSENT, tiff_size=(width, height))
 
     if apply_transform and ole.exists("\x05Transform 000001"):
-        try:
-            with ole.openstream("\x05Transform 000001") as handle:
-                tx_bytes = handle.read()
-            tx_pset = propset.parse_propset(tx_bytes, stream_name="\x05Transform 000001")
-            for sec in tx_pset.sections:
-                if 0x10000003 in sec.properties:
-                    val = sec.properties[0x10000003].decoded_value
-                    if isinstance(val, list) and len(val) == 16:
-                        transform_matrix = [float(x) for x in val]
-
-            if transform_matrix is None:
-                transform_status = TRANSFORM_ABSENT
-            else:
-                transform_status, transform_note = classify_orientation_matrix(transform_matrix)
-                if transform_status == TRANSFORM_ROTATE_90_CCW:
-                    # Pillow's ROTATE_90 turns counter-clockwise.
-                    cropped = cropped.transpose(Image.Transpose.ROTATE_90)
-                    rotation_applied = 90
-                elif transform_status == TRANSFORM_CROP:
-                    result_aspect = None
-                    for sec in tx_pset.sections:
-                        if 0x10000000 in sec.properties:
-                            val = sec.properties[0x10000000].decoded_value
-                            if isinstance(val, (int, float)):
-                                result_aspect = float(val)
-                    crop_applied = crop_box_for_transform(
-                        transform_matrix, result_aspect, width, height
-                    )
-                    if crop_applied is None:
-                        transform_status = TRANSFORM_UNSUPPORTED
-                        transform_note = (
-                            f"crop matrix could not be resolved to a box inside the "
-                            f"{width}x{height} frame (ResultAspectRatio={result_aspect})"
-                        )
-        except Exception as exc:  # noqa: BLE001
-            # Keep the upright canvas, but never silently: an unreadable
-            # transform stream and a file with no transform at all used to
-            # produce byte-identical results and the same empty report.
-            transform_status = TRANSFORM_PARSE_ERROR
-            transform_note = f"{type(exc).__name__}: {exc}"
+        with ole.openstream("\x05Transform 000001") as handle:
+            tx_bytes = handle.read()
+        cropped, geom = apply_viewing_transform(cropped, tx_bytes, width, height)
 
     return DecodedImage(
         image=cropped,
@@ -520,9 +683,9 @@ def _decode_from_ole(
         declared_height=height,
         colour_space=colour_space,
         resolution_index=resolution_index,
-        rotation_applied=rotation_applied,
-        crop_applied=crop_applied,
-        transform_status=transform_status,
-        transform_matrix=transform_matrix,
-        transform_note=transform_note,
+        rotation_applied=geom.rotation,
+        crop_applied=geom.crop_box,
+        transform_status=geom.status,
+        transform_matrix=geom.matrix,
+        transform_note=geom.note,
     )

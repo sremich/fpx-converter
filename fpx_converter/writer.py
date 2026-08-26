@@ -260,6 +260,39 @@ def compute_mtime_epoch(derived: dict[str, Any]) -> float | None:
     return None
 
 
+def save_dual_images(
+    decoded: decoder.DecodedImage,
+    tif_path: Path,
+    jpg_path: Path,
+) -> None:
+    """Write the archival TIFF and the shareable JPEG.
+
+    The TIFF is the preservation copy and always holds the full frame the
+    camera captured. The JPEG is the copy people open, so it gets the
+    composition somebody framed at the time. Where a file carries no crop
+    these are the same pixels; for the 71 that do, both the original framing
+    and the intended one survive -- and the `.fpx` itself is copied next to
+    the TIFF regardless.
+
+    The ICC profile is not decoration. Both outputs are sRGB by construction
+    -- the decoder converts PhotoYCC on the way through -- but an untagged
+    TIFF is interpreted as whatever the viewer assumes, and "assume sRGB" is
+    a convention rather than a guarantee. An archival file should say what
+    its numbers mean.
+
+    A separate function so this can be tested without a cropped `.fpx` to
+    hand. All four committed fixtures are identity, and the corpus that has
+    the cropped files is personal and cannot be committed, so writing the
+    crop inline made "the JPEG is actually cropped" untestable at tier 1 --
+    which is where it was.
+    """
+    icc = srgb_icc_profile()
+    decoded.image.save(tif_path, format="TIFF", compression="tiff_deflate", icc_profile=icc)
+    decoded.cropped_image().save(
+        jpg_path, format="JPEG", quality=95, subsampling=0, icc_profile=icc
+    )
+
+
 def write_single_entry_dual_output(
     fpx_path: Path,
     entry: dict[str, Any],
@@ -327,23 +360,7 @@ def write_single_entry_dual_output(
         jpg_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 3. Save Deflate TIFF and q95 4:4:4 JPEG, both tagged sRGB.
-        #
-        # The ICC profile is not decoration. Both outputs are sRGB by
-        # construction -- the decoder converts PhotoYCC on the way through --
-        # but an untagged TIFF is interpreted as whatever the viewer assumes,
-        # and "assume sRGB" is a convention rather than a guarantee. An
-        # archival file should say what its numbers mean.
-        # The TIFF is the preservation copy and always holds the full frame
-        # the camera captured. The JPEG is the copy people open, so it gets
-        # the composition somebody framed at the time. Where a file carries
-        # no crop these are the same pixels; for the 53 that do, both the
-        # original framing and the intended one survive -- and the `.fpx`
-        # itself is copied next to the TIFF regardless.
-        icc = srgb_icc_profile()
-        decoded.image.save(tif_path, format="TIFF", compression="tiff_deflate", icc_profile=icc)
-        decoded.cropped_image().save(
-            jpg_path, format="JPEG", quality=95, subsampling=0, icc_profile=icc
-        )
+        save_dual_images(decoded, tif_path, jpg_path)
 
         # 4. Copy original .fpx and emit .fpx.json sidecar into archive/
         shutil.copy2(fpx_path, fpx_copy_path)
@@ -374,9 +391,11 @@ def write_single_entry_dual_output(
                         errors.append(f"Failed to set mtime on {p.name}: {exc}")
 
         # 7. Independent validation with pyexiv2
-        val_res = validator.validate_dual_output(
-            tif_path, jpg_path, derived, expected_jpeg_size=decoded.cropped_image().size
-        )
+        # No `expected_jpeg_size` here on purpose. Passing the decoded
+        # object's size would compare the output against the very thing that
+        # produced it; the validator derives its expectation from the
+        # metadata instead, so a crop that failed to apply actually fails.
+        val_res = validator.validate_dual_output(tif_path, jpg_path, derived)
         if not val_res.ok:
             errors.extend(val_res.errors)
 

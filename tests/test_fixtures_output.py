@@ -161,9 +161,12 @@ def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) 
 
         with Image.open(res.jpg_path) as jpg_img:
             assert jpg_img.size == (exp_info["width"], exp_info["height"])
-            if hasattr(jpg_img, "layer") and jpg_img.layer:
-                sampling_factors = [(comp[1], comp[2]) for comp in jpg_img.layer]
-                assert all(sf == (1, 1) for sf in sampling_factors)
+            # Unconditional: guarding this on `jpg_img.layer` being present
+            # is what let the validator pass a file whose sampling it could
+            # not read, and the same shape has no place in the test either.
+            assert jpg_img.layer, "Pillow reported no JPEG component sampling table"
+            sampling_factors = [(comp[1], comp[2]) for comp in jpg_img.layer]
+            assert all(sf == (1, 1) for sf in sampling_factors)
 
         # 4. Independent pyexiv2 validation call
         val = validator.validate_dual_output(res.tif_path, res.jpg_path, exp_info)

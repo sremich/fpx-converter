@@ -30,10 +30,9 @@ commit, then tag.
   90° CCW rotation was recognised; everything else fell through to an
   unrotated image, as did a `Transform` stream that failed to parse. **53
   files carry a scale-and-translate crop matrix** that was being discarded
-  invisibly. Crops are still not applied — that is an owner decision — but
-  `convert` now names every affected file. `has_transform` was `True` for
-  all 687 files because it compared the ROI against `[0, 0, 1, 1]` instead
-  of the declared aspect.
+  invisibly. `has_transform` was `True` for all 687 files because it compared
+  the ROI against `[0, 0, 1, 1]` instead of the declared aspect. The owner
+  decision on the 53 crops landed later this cycle — see Added below.
 - **CI runs the ExifTool tests instead of skipping them green.** They were
   gated on a tool GitHub's Windows runners do not ship, so the "validate
   with a different tool than the one that wrote" rule ran nowhere while the
@@ -71,6 +70,15 @@ commit, then tag.
   - Dual writer (`fpx_converter.writer`) producing archival Deflate TIFFs
     (`archive/<album>/<name>.tif`) and shareable quality-95 4:4:4 JPEGs
     (`sharing/<album>/<name>.jpg`).
+  - **Viewing-transform crops are now applied — to the shareable JPEG only.**
+    Owner decision on the 53 files carrying a scale-and-translate crop
+    matrix: the archival TIFF keeps the full frame the camera captured, and
+    the shareable JPEG gets the composition somebody framed in Kodak's
+    software in 2002. Deriving the crop box needs `ResultAspectRatio`
+    (`0x10000000`) as well as the matrix — without it the box appears to
+    fall outside the image; see `DECISIONS.md` for the geometry. The crop
+    box is also now recorded in the `.fpx.json` sidecar, independent of the
+    writer, so an audit can check what was cut without re-deriving it.
   - Strict preservation layout: copies original `.fpx` files and `.fpx.json`
     sidecars alongside the `.tif` in `archive/<album>/`.
   - Comprehensive metadata embedding via ExifTool subprocess: writes EXIF, XMP,
@@ -89,9 +97,11 @@ commit, then tag.
   - CLI subcommand `convert` supporting `--manifest`, `--store`, `--dest`,
     `--limit`, and `--dry-run` with write-outside-source containment guard.
   - 15 new tests across tier-1 unit tests, tier-2 e2e fixture generation and
-    pyexiv2 readback, and CLI convert tests. The suite now stands at **237
-    tests**, all of which run in CI (locally, one skips: the guard that
-    fails when `FPX_REQUIRE_EXIFTOOL` is set without ExifTool present).
+    pyexiv2 readback, and CLI convert tests for the initial dual-output
+    engine (182 → 197), plus further tests added alongside the audit fixes
+    above and the crop-application work below. The suite now stands at
+    **252 tests**, all of which run in CI (locally, one skips: the guard
+    that fails when `FPX_REQUIRE_EXIFTOOL` is set without ExifTool present).
   - Tier 3 re-run after the fixes above: a 48-file sample spanning all 16
     albums, 7 declared sizes, both colour spaces, all three transform
     classes and the film scans. 48/48 converted, 0 failures, and an
@@ -111,8 +121,9 @@ commit, then tag.
     PhotoYCC (using FlashPix/PhotoCD transformation matrix).
   - Spatial orientation transform (`0x10000003`): the 90° counter-clockwise
     rotation is applied to all 22 rotated files. The crop/zoom form of the
-    same property is **detected and reported but not applied** — see Fixed
-    above and `DECISIONS.md`.
+    same property is classified and reported; whether to apply it was an
+    open owner decision at the time — see Added below for how it was
+    resolved this cycle.
   - Boundary padding crop to declared subimage width and height.
   - Embedded DIB thumbnail extractor (`fpx_converter.thumbnail`) decoding 24-bit
     CF_DIB data from root `\x05SummaryInformation` PID 17 as an independent

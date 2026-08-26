@@ -314,9 +314,8 @@ def cmd_convert(args: argparse.Namespace) -> int:
     )
     dest = config.ensure_outside_source(output_base, source_root, "conversion destination")
 
-    entries = manifest.get("entries", [])
-    if args.limit and args.limit > 0:
-        entries = entries[: args.limit]
+    all_entries = manifest.get("entries", [])
+    entries = all_entries[: args.limit] if args.limit and args.limit > 0 else all_entries
 
     verb = "Would convert" if args.dry_run else "Converting"
     print(f"{verb} {len(entries)} files -> {dest}")
@@ -327,13 +326,15 @@ def cmd_convert(args: argparse.Namespace) -> int:
     failures: list[tuple[str, str]] = []
     warnings: list[tuple[str, str]] = []
 
-    # Names are resolved for the whole batch up front, from the manifest
-    # alone, so two same-named photos in one album cannot resolve to the
-    # same output file -- and so a resumed run assigns identical names.
+    # Names are resolved from the WHOLE manifest, not from the slice being
+    # converted. `--limit` must not change where a file lands: if it did,
+    # a limited run and a full run would disagree about which of two
+    # same-named photos keeps the bare stem, and the same photo would exist
+    # at two paths. Assign over everything, then slice.
     stems = naming.assign_output_stems(
         [
             (e["sha256"], writer_mod.primary_album(e), e.get("preferred_name", e["store_name"]))
-            for e in entries
+            for e in all_entries
         ]
     )
     claimed: set[Path] = set()

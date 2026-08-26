@@ -47,8 +47,10 @@ inventory, and each has a full entry in [`DECISIONS.md`](../../DECISIONS.md).
 4. **Pillow's `FpxImagePlugin` cannot be the pixel path.** It fails on 1,224
    of 1,265 files and hard-crashes the interpreter on two of them. The
    custom decoder is primary; the plugin is an out-of-process oracle.
-5. **Viewing transforms are real.** 45 files carry a genuine 90° CCW
-   rotation that a naive tile decoder would ignore, emitting them sideways.
+5. **Viewing transforms are real and now applied.** 22 files carry a genuine
+   90° CCW rotation (now correctly applied to the output). 53 files carry a
+   scale-and-translate crop matrix; the archival TIFF preserves the full frame
+   while the shareable JPEG applies the crop.
 
 ## Format notes worth keeping
 

@@ -1,7 +1,12 @@
 """Tier-1 unit tests for timestamp resolution, timezone mapping, and ground-truth gate.
 
-Uses invented album names only (e.g. 'Holiday in France 2001', 'Zoo Trip - Aug 2000').
-No personal data, no real corpus folder names.
+Album names here are invented and deliberately sit outside the corpus's
+2000-2002 window where a holiday-plus-year string would otherwise read as a
+real folder name. Six real ones did survive in this file until an audit
+compared it against the manifest rather than against a guessed pattern list;
+`tests/test_environment.py::test_no_real_album_name_is_tracked_in_git` now
+does that comparison automatically, so this docstring is no longer the only
+thing standing between the archive and a leak.
 """
 
 from __future__ import annotations
@@ -28,18 +33,18 @@ class TestFolderDateParsing:
         assert res.start_date == datetime.date(2000, 12, 25)
 
     def test_parses_easter_with_butcher_algorithm(self) -> None:
-        # Easter 2000 is 2000-04-23; Easter 2002 is 2002-03-31; Easter 2001 is 2001-04-15
-        res_2000 = timestamps.parse_folder_date("Easter2000")
-        assert res_2000.parsed
-        assert res_2000.start_date == datetime.date(2000, 4, 23)
+        # Easter 1996 is 1996-04-07; Easter 1997 is 1997-03-30; Easter 1998 is 1998-04-12
+        res_1996 = timestamps.parse_folder_date("Easter1996")
+        assert res_1996.parsed
+        assert res_1996.start_date == datetime.date(1996, 4, 7)
 
-        res_2002 = timestamps.parse_folder_date("Easter 2002")
-        assert res_2002.parsed
-        assert res_2002.start_date == datetime.date(2002, 3, 31)
+        res_1997 = timestamps.parse_folder_date("Easter 1997")
+        assert res_1997.parsed
+        assert res_1997.start_date == datetime.date(1997, 3, 30)
 
-        res_2001 = timestamps.parse_folder_date("Easter 2001 Picnic")
-        assert res_2001.parsed
-        assert res_2001.start_date == datetime.date(2001, 4, 15)
+        res_1998 = timestamps.parse_folder_date("Easter 1998 Picnic")
+        assert res_1998.parsed
+        assert res_1998.start_date == datetime.date(1998, 4, 12)
 
     def test_parses_halloween(self) -> None:
         res = timestamps.parse_folder_date("Halloween 1999 Party")
@@ -59,14 +64,14 @@ class TestFolderDateParsing:
         assert res2.start_date == datetime.date(2001, 11, 1)
 
     def test_parses_season_and_year(self) -> None:
-        res_winter = timestamps.parse_folder_date("Winter 2002 Skiing")
+        res_winter = timestamps.parse_folder_date("Winter 1995 Skiing")
         assert res_winter.parsed
         assert res_winter.date_kind == "season"
-        assert res_winter.start_date == datetime.date(2002, 1, 1)
+        assert res_winter.start_date == datetime.date(1995, 1, 1)
 
-        res_harvest = timestamps.parse_folder_date("Harvest 2001")
+        res_harvest = timestamps.parse_folder_date("Harvest 1994")
         assert res_harvest.parsed
-        assert res_harvest.start_date == datetime.date(2001, 9, 1)
+        assert res_harvest.start_date == datetime.date(1994, 9, 1)
 
     def test_parses_year_ranges_and_standalone_years(self) -> None:
         res_range = timestamps.parse_folder_date("Vacation Trip 2001-02")
@@ -80,7 +85,7 @@ class TestFolderDateParsing:
         assert res_yr.display_label == "2000"
 
     def test_returns_unparsed_for_undated_folder_names(self) -> None:
-        for name in ("Pictures", "FlatTree", "Top Drawer", "Miscellaneous", "Pets"):
+        for name in ("Pictures", "FlatTree", "Odds and Ends", "Miscellaneous", "Pets"):
             res = timestamps.parse_folder_date(name)
             assert not res.parsed
             assert res.date_kind == "none"
@@ -160,13 +165,13 @@ class TestTimestampResolution:
         resolved = timestamps.resolve_file_timestamps(
             import_ft=ft_val,
             scan_time_dt=None,
-            primary_album="Fireworks 4th of July 2002",
+            primary_album="Fireworks 4th of July 1999",
         )
         assert resolved.datetime_digitized_exif == "2002:07:18 14:01:34"
         # Midnight, NOT the import batch's 14:01:34. The folder names a day;
         # nothing in the file names an hour, and borrowing one from an
         # unrelated transfer session would read as a capture moment.
-        assert resolved.datetime_original_exif == "2002:07:04 00:00:00"
+        assert resolved.datetime_original_exif == "1999:07:04 00:00:00"
         assert resolved.date_source == "folder"
         assert resolved.date_precision == "day"
         assert resolved.offset_time_original == "-05:00"
@@ -176,7 +181,7 @@ class TestTimestampResolution:
         [
             ("Camping 2000", "year"),
             ("Vacation Trip 2001-02", "year_span"),
-            ("Winter 2002 Skiing", "season"),
+            ("Winter 1995 Skiing", "season"),
             ("Zoo Trip - Aug. 2000", "month"),
         ],
     )

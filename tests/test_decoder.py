@@ -12,8 +12,9 @@ import struct
 
 import pytest
 from PIL import Image
+from propset_builder import build_propset_bytes
 
-from fpx_converter import decoder
+from fpx_converter import decoder, propset
 
 
 def _make_subimage_header(
@@ -226,29 +227,28 @@ class TestOrientationMatrixClassification:
 class TestCropGeometry:
     """The crop box derived from the viewing transform.
 
-    Verified against the embedded DIB thumbnail across all 53 cropped files
-    in the corpus: cropping improved correlation with the thumbnail on every
-    one (mean +0.61, min +0.18, none worse). The thumbnail was written by the
-    same software that recorded the transform, so it is an independent
-    witness to the intended framing.
+    Verified against the embedded DIB thumbnail across all 71 files in the
+    corpus that resolve to a crop: cropping improved correlation with the
+    thumbnail on every one (mean +0.56, min +0.003, none worse), and the worst
+    post-crop correlation is 0.981. The thumbnail was written by the same
+    software that recorded the transform, so it is an independent witness to
+    the intended framing.
     """
 
     @staticmethod
     def _matrix(scale: float, tx: float, ty: float) -> list[float]:
         return [scale, 0, 0, tx, 0, scale, 0, ty, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
 
-    def test_full_frame_matrix_yields_the_whole_image(self) -> None:
-        box = decoder.crop_box_for_transform(
-            self._matrix(1.0, 0.0, 0.0), 4 / 3, 1152, 864
-        )
-        assert box == (0, 0, 1152, 864)
+    def test_full_frame_matrix_yields_no_crop(self) -> None:
+        # None means "keep every pixel", which is not the same answer as a
+        # box that happens to cover the frame: it is what stops the writer
+        # re-encoding a JPEG identical to the TIFF and calling it a crop.
+        assert decoder.source_crop_box(self._matrix(1.0, 0.0, 0.0), 4 / 3, 1152, 864) is None
 
     def test_uses_result_aspect_ratio_for_the_width(self) -> None:
         # Without ResultAspectRatio the width is wrong and the box can fall
         # outside the frame -- this is the term that makes the algebra work.
-        box = decoder.crop_box_for_transform(
-            self._matrix(0.7449, 0.0, 0.2521), 0.8746, 1152, 864
-        )
+        box = decoder.source_crop_box(self._matrix(0.7449, 0.0, 0.2521), 0.8746, 1152, 864)
         assert box is not None
         left, top, right, bottom = box
         assert (left, top) == (0, 218)
@@ -258,9 +258,7 @@ class TestCropGeometry:
         assert abs(((right - left) / (bottom - top)) - 0.8746) < 0.01
 
     def test_box_stays_inside_the_frame(self) -> None:
-        box = decoder.crop_box_for_transform(
-            self._matrix(0.8335, 0.1004, 0.094), 1.0365, 1152, 864
-        )
+        box = decoder.source_crop_box(self._matrix(0.8335, 0.1004, 0.094), 1.0365, 1152, 864)
         assert box is not None
         left, top, right, bottom = box
         assert 0 <= left < right <= 1152
@@ -268,15 +266,13 @@ class TestCropGeometry:
 
     def test_missing_result_aspect_refuses_rather_than_guessing(self) -> None:
         # Guessing the aspect would silently crop to the wrong shape.
-        assert decoder.crop_box_for_transform(self._matrix(0.8, 0.1, 0.1), None, 1152, 864) is None
-        assert decoder.crop_box_for_transform(self._matrix(0.8, 0.1, 0.1), 0.0, 1152, 864) is None
+        assert decoder.source_crop_box(self._matrix(0.8, 0.1, 0.1), None, 1152, 864) is None
+        assert decoder.source_crop_box(self._matrix(0.8, 0.1, 0.1), 0.0, 1152, 864) is None
 
     def test_a_box_falling_outside_the_frame_is_refused(self) -> None:
         # A box outside the image means the matrix was misread. Refusing
         # surfaces that; clamping would hide it behind a plausible crop.
-        assert decoder.crop_box_for_transform(
-            self._matrix(0.9, 0.9, 0.9), 1.333, 1152, 864
-        ) is None
+        assert decoder.source_crop_box(self._matrix(0.9, 0.9, 0.9), 1.333, 1152, 864) is None
 
     def test_crop_matrix_is_classified_as_a_crop_not_unsupported(self) -> None:
         status, note = decoder.classify_orientation_matrix(self._matrix(0.745, 0.0, 0.252))
@@ -305,3 +301,206 @@ class TestCropGeometry:
         assert dec.cropped_image().size == (50, 40)
         # The full frame is never mutated -- archive/ depends on it.
         assert dec.image.size == (100, 80)
+
+
+class TestOutputGeometry:
+    """Rotation and crop resolved together, from the matrix alone.
+
+    These two are independent, and treating them as one question is what this
+    class exists to prevent: 14 of the corpus's 22 rotated files also carry a
+    crop, and an earlier version applied the rotation, saw "this is a
+    rotation, not a crop", and dropped the crop on all 14 without recording
+    anything.
+    """
+
+    IDENTITY = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+
+    # Real matrices, read out of three files in the archive. Their shape is
+    # the thing under test, so inventing plausible-looking ones would test
+    # the invention.
+    ROTATION_ONLY = [0.0, -1.333333, 0, 1.333333, 1.333333, 0.0, 0, 0.0,
+                     0, 0, 1.0, 0, 0, 0, 0, 1.0]
+    ROTATION_ONLY_ASPECT = 0.75
+    ROTATION_AND_CROP = [0.0, -1.169169, 0, 1.333333, 1.169169, 0.0, 0, 0.2002,
+                         0, 0, 1.0, 0, 0, 0, 0, 1.0]
+    ROTATION_AND_CROP_ASPECT = 0.5821918
+
+    def test_absent_matrix_is_the_full_frame(self) -> None:
+        geom = decoder.output_geometry(None, None, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_ABSENT
+        assert geom.rotation == 0
+        assert geom.tiff_size == (1152, 864)
+        assert geom.crop_box is None
+        assert geom.jpeg_size == (1152, 864)
+
+    def test_identity_leaves_both_outputs_full_frame(self) -> None:
+        geom = decoder.output_geometry(self.IDENTITY, 4 / 3, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_IDENTITY
+        assert geom.rotation == 0
+        assert geom.tiff_size == (1152, 864)
+        assert geom.jpeg_size == (1152, 864)
+
+    def test_rotation_swaps_the_tiff_size(self) -> None:
+        geom = decoder.output_geometry(
+            self.ROTATION_ONLY, self.ROTATION_ONLY_ASPECT, 1152, 864
+        )
+        assert geom.status == decoder.TRANSFORM_ROTATE_90_CCW
+        assert geom.rotation == 90
+        assert geom.tiff_size == (864, 1152)
+        assert geom.crop_box is None
+
+    def test_a_rotated_file_can_also_be_cropped(self) -> None:
+        geom = decoder.output_geometry(
+            self.ROTATION_AND_CROP, self.ROTATION_AND_CROP_ASPECT, 1152, 864
+        )
+        assert geom.rotation == 90
+        assert geom.tiff_size == (864, 1152)
+        assert geom.crop_box is not None, "the crop rode along with the rotation and was dropped"
+        # The crop is expressed in the rotated image's coordinates, because
+        # that is the image the JPEG is cut from.
+        left, top, right, bottom = geom.crop_box
+        assert 0 <= left < right <= 864
+        assert 0 <= top < bottom <= 1152
+        # And it has the aspect ratio the file declares for its result.
+        assert abs(((right - left) / (bottom - top)) - self.ROTATION_AND_CROP_ASPECT) < 0.005
+        assert geom.jpeg_size == (right - left, bottom - top)
+        assert geom.jpeg_size != geom.tiff_size
+
+    def test_the_note_records_a_crop_that_rode_along_with_a_rotation(self) -> None:
+        geom = decoder.output_geometry(
+            self.ROTATION_AND_CROP, self.ROTATION_AND_CROP_ASPECT, 1152, 864
+        )
+        assert "crop" in geom.note
+
+    def test_a_crop_that_cannot_be_resolved_is_unsupported_not_full_frame(self) -> None:
+        # No ResultAspectRatio: the box is not derivable. Reporting the file
+        # as unsupported puts it in the audit; falling back to the full frame
+        # would ship it silently uncropped.
+        matrix = [0.7449, 0, 0, 0.0, 0, 0.7449, 0, 0.2521, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        geom = decoder.output_geometry(matrix, None, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_UNSUPPORTED
+        assert geom.crop_box is None
+        assert "ResultAspectRatio" in geom.note
+
+    def test_an_unsupported_matrix_never_rotates_or_crops(self) -> None:
+        stretched = [0.8, 0, 0, 0.1, 0, 0.5, 0, 0.1, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        geom = decoder.output_geometry(stretched, 1.333, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_UNSUPPORTED
+        assert geom.rotation == 0
+        assert geom.crop_box is None
+        assert geom.tiff_size == (1152, 864)
+
+    def test_rotating_a_box_matches_pillow(self) -> None:
+        """The box mapping must agree with the rotation actually applied.
+
+        Marking the corner pixel and following it through `ROTATE_90` is the
+        only check that catches a transposed or flipped box formula; the
+        arithmetic on its own looks equally right in three wrong variants.
+        """
+        img = Image.new("RGB", (1152, 864), (0, 0, 0))
+        img.putpixel((1100, 40), (255, 0, 0))
+        rotated = img.transpose(Image.Transpose.ROTATE_90)
+
+        box = (1090, 30, 1110, 50)
+        mapped = decoder.rotate_box_90_ccw(box, 1152)
+        assert rotated.crop(mapped).getextrema()[0][1] == 255, (
+            "the marked pixel fell outside the mapped box"
+        )
+        assert mapped[2] - mapped[0] == box[3] - box[1]
+        assert mapped[3] - mapped[1] == box[2] - box[0]
+
+
+class TestApplyViewingTransform:
+    """The transform applied to real property-set bytes.
+
+    `apply_viewing_transform` exists as a separate function precisely so
+    these can run at tier 1. Inside `decode_fpx` the rotation and crop
+    branches sat behind an OLE container, and all four committed fixtures are
+    identity, so both branches were reachable only from the private archive
+    and were covered by nothing.
+    """
+
+    @staticmethod
+    def _transform_bytes(matrix: list[float], aspect: float | None) -> bytes:
+        """A `Transform 000001` stream in the encoding the archive uses.
+
+        Measured from the files: the matrix is `VT_VECTOR | VT_R4` (0x1004)
+        with a 32-bit element count, and `ResultAspectRatio` is a bare
+        `VT_R4`. Building it in a different encoding would test a format that
+        does not occur.
+        """
+        props = [
+            (
+                0x10000003,
+                propset.VT_VECTOR | propset.VT_R4,
+                struct.pack("<I", len(matrix)) + struct.pack(f"<{len(matrix)}f", *matrix),
+            )
+        ]
+        if aspect is not None:
+            props.append((0x10000000, propset.VT_R4, struct.pack("<f", aspect)))
+        return build_propset_bytes(propset.FMTID_TRANSFORM, props)
+
+    def _decoded(self) -> Image.Image:
+        img = Image.new("RGB", (1152, 864), (10, 20, 30))
+        # An asymmetric mark, so a rotation that went the wrong way is
+        # distinguishable from one that went the right way.
+        img.paste((255, 0, 0), (0, 0, 200, 40))
+        return img
+
+    def test_identity_bytes_leave_the_image_alone(self) -> None:
+        raw = self._transform_bytes(TestOutputGeometry.IDENTITY, 4 / 3)
+        out, geom = decoder.apply_viewing_transform(self._decoded(), raw, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_IDENTITY
+        assert out.size == (1152, 864)
+        assert geom.crop_box is None
+
+    def test_rotation_bytes_produce_an_upright_portrait_image(self) -> None:
+        raw = self._transform_bytes(
+            TestOutputGeometry.ROTATION_ONLY, TestOutputGeometry.ROTATION_ONLY_ASPECT
+        )
+        source = self._decoded()
+        out, geom = decoder.apply_viewing_transform(source, raw, 1152, 864)
+        assert geom.rotation == 90
+        assert out.size == (864, 1152) == geom.tiff_size
+        # Counter-clockwise: the red band along the top edge ends up down
+        # the left edge. A clockwise rotation would put it on the right.
+        assert out.getpixel((10, 1100)) == (255, 0, 0)
+        assert out.getpixel((10, 10)) != (255, 0, 0)
+
+    def test_rotation_and_crop_bytes_yield_a_cropped_jpeg_and_a_full_tiff(self) -> None:
+        raw = self._transform_bytes(
+            TestOutputGeometry.ROTATION_AND_CROP, TestOutputGeometry.ROTATION_AND_CROP_ASPECT
+        )
+        out, geom = decoder.apply_viewing_transform(self._decoded(), raw, 1152, 864)
+        assert out.size == (864, 1152), "the archival TIFF must keep every captured pixel"
+        assert geom.crop_box is not None
+        dec = decoder.DecodedImage(
+            image=out,
+            declared_width=1152,
+            declared_height=864,
+            colour_space="NIF_RGB",
+            resolution_index=0,
+            rotation_applied=geom.rotation,
+            crop_applied=geom.crop_box,
+        )
+        assert dec.cropped_image().size == geom.jpeg_size
+        assert dec.cropped_image().size != out.size
+
+    def test_a_corrupt_transform_stream_reports_rather_than_pretending(self) -> None:
+        # An unreadable transform and a file with no transform at all must
+        # not produce the same report -- that is a silently wrong photo.
+        out, geom = decoder.apply_viewing_transform(
+            self._decoded(), b"not a property set", 1152, 864
+        )
+        assert geom.status == decoder.TRANSFORM_PARSE_ERROR
+        assert geom.note
+        assert out.size == (1152, 864)
+        assert geom.status != decoder.TRANSFORM_ABSENT
+
+    def test_a_transform_stream_with_no_matrix_is_absent_not_an_error(self) -> None:
+        raw = build_propset_bytes(
+            propset.FMTID_TRANSFORM, [(0x10000000, propset.VT_R4, struct.pack("<f", 1.3333))]
+        )
+        _out, geom = decoder.apply_viewing_transform(self._decoded(), raw, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_ABSENT
+        assert geom.tiff_size == (1152, 864)

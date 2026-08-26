@@ -9,8 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
-from fpx_converter import config, naming, writer
+from fpx_converter import config, decoder, naming, writer
 
 
 class TestNamingAndPrefixes:
@@ -207,3 +208,66 @@ class TestOutputNameCollisions:
         first = writer.build_output_relpath(entry, derived, "tif", "DCP00247")
         second = writer.build_output_relpath(entry, derived, "tif", "DCP00247_bbbbbbbb")
         assert first != second
+
+
+class TestDualImageSaving:
+    """What actually lands on disk for a cropped photo.
+
+    The decision this pins down: `archive/` keeps every pixel the camera
+    captured, `sharing/` shows the composition somebody framed in 2002. Both
+    halves have to be true at once, and until this test existed neither was
+    checked anywhere -- all four committed fixtures are identity, and the
+    files that carry crops are personal and cannot be committed.
+    """
+
+    @staticmethod
+    def _decoded(crop: tuple[int, int, int, int] | None) -> decoder.DecodedImage:
+        img = Image.new("RGB", (1152, 864), (10, 20, 30))
+        # A mark outside the crop box, so a JPEG that kept the full frame is
+        # distinguishable from one that was cropped to the same size.
+        img.paste((255, 0, 0), (0, 0, 40, 40))
+        return decoder.DecodedImage(
+            image=img,
+            declared_width=1152,
+            declared_height=864,
+            colour_space="NIF_RGB",
+            resolution_index=0,
+            rotation_applied=0,
+            crop_applied=crop,
+        )
+
+    def test_tiff_keeps_the_full_frame_while_the_jpeg_is_cropped(
+        self, tmp_path: Path
+    ) -> None:
+        tif, jpg = tmp_path / "a.tif", tmp_path / "a.jpg"
+        writer.save_dual_images(self._decoded((200, 150, 900, 700)), tif, jpg)
+
+        with Image.open(tif) as im:
+            assert im.size == (1152, 864), "the archival TIFF lost pixels the camera captured"
+        with Image.open(jpg) as im:
+            assert im.size == (700, 550), "the JPEG was not cropped to the declared box"
+            # The red corner sits outside the crop box, so it must be gone.
+            assert im.convert("RGB").getpixel((5, 5))[0] < 100
+
+    def test_an_uncropped_photo_yields_two_identically_sized_files(
+        self, tmp_path: Path
+    ) -> None:
+        tif, jpg = tmp_path / "b.tif", tmp_path / "b.jpg"
+        writer.save_dual_images(self._decoded(None), tif, jpg)
+        with Image.open(tif) as t_im, Image.open(jpg) as j_im:
+            assert t_im.size == j_im.size == (1152, 864)
+
+    def test_both_outputs_are_tagged_srgb(self, tmp_path: Path) -> None:
+        # An untagged archival file leaves its colour meaning to whatever the
+        # viewer assumes.
+        tif, jpg = tmp_path / "c.tif", tmp_path / "c.jpg"
+        writer.save_dual_images(self._decoded((0, 0, 600, 400)), tif, jpg)
+        with Image.open(tif) as t_im, Image.open(jpg) as j_im:
+            assert t_im.info.get("icc_profile")
+            assert j_im.info.get("icc_profile")
+
+    def test_the_tiff_is_deflate_compressed(self, tmp_path: Path) -> None:
+        tif, jpg = tmp_path / "d.tif", tmp_path / "d.jpg"
+        writer.save_dual_images(self._decoded(None), tif, jpg)
+        with Image.open(tif) as t_im:
+            assert t_im.tag_v2.get(259) in (8, 32946)

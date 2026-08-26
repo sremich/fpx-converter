@@ -12,18 +12,24 @@ the family timeline.
 
 ## Status
 
-**Version 0.1.0.** Source ingestion works. Nothing converts anything
-yet — no pixel decoder, no metadata engine, no output writer. Those
-arrive at 0.2.0–0.4.0.
+**Version 0.4.0 (pre-release).** The full conversion pipeline is built and tested
+on the committed stock fixtures. Source ingestion, metadata extraction, pixel
+decoding, and dual-output generation all work. The batch engine and QA gallery
+(milestones 0.5.0 and 0.6.0) are not yet built; neither is the full-dataset
+verification required for 1.0.0.
 
 What exists:
-- **The `fpx_converter` package** with three commands: `scan`
-  (walk the source archive read-only), `ingest` (copy one file per
-  distinct SHA-256), and `verify` (re-hash the store against the
-  manifest).
-- **111 tests:** 101 tier-1 (unit tests, no photos or external tools)
-  and 10 tier-2 over four committed Kodak stock fixtures.
-- **CI passing on Windows** (python 3.14, `windows-latest`).
+- **The `fpx_converter` package** with seven commands:
+  - `scan` (walk the source archive read-only)
+  - `ingest` (copy one file per distinct SHA-256)
+  - `verify` (re-hash the store against the manifest)
+  - `metadata` (extract and dump raw property sidecars as `.fpx.json`)
+  - `check-dates` (ground-truth date comparison; supports `--strict` flag)
+  - `thumbnail` (extract embedded DIB thumbnails as PNG)
+  - `convert` (generate Deflate TIFF + quality-95 4:4:4 JPEG with metadata)
+- **252 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
+  over four committed Kodak stock fixtures and hand-built property-set bytes.
+- **CI passing on Windows** (python 3.14, `windows-latest`; ExifTool installed).
 
 ### First ingestion run (full corpus)
 
@@ -39,9 +45,9 @@ source tree:
 
 ### Usage
 
-The three commands require a `.env` file copied from `.env.example`
-(edit it to set `FPX_SOURCE_ROOT`, `FPX_OUTPUT_ROOT`, and time zone).
-Alternatively, `scan` accepts `--source` to override the tree location:
+Most commands require a `.env` file copied from `.env.example`
+(set `FPX_SOURCE_ROOT`, `FPX_OUTPUT_ROOT`, `FPX_EXIFTOOL`, and time zone).
+Alternatively, `scan` accepts `--source` to override the source location.
 
 ```powershell
 # Create a venv at a short path (Windows long-path is disabled)
@@ -59,6 +65,18 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter ingest
 
 # Re-hash the store against the manifest
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify
+
+# Extract raw property sidecars as .fpx.json
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter metadata
+
+# Check album folder names against parsed dates
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter check-dates
+
+# Extract embedded thumbnails
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter thumbnail
+
+# Generate archival TIFF and shareable JPEG with metadata
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert
 ```
 
 ## Install and test
@@ -96,17 +114,20 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify
 
 ### Run the gates
 
-The tier-1 gates that exist right now:
+The tier-1 gates:
 
 ```powershell
 # Lint
 C:\venvs\fpx\Scripts\python.exe -m ruff check .
 
-# Unit tests (tier 1: no real photos, no ExifTool, no source archive)
+# Unit and e2e tests (tier 1 + tier 2: 252 tests, no real photos, no source archive)
+# Note: some tier-2 tests require ExifTool for metadata round-trip validation
 C:\venvs\fpx\Scripts\python.exe -m pytest
 ```
 
-These gates run on every push to CI.
+These gates run on every push to CI. CI installs ExifTool and sets
+`FPX_REQUIRE_EXIFTOOL` to enforce the "validate with a different tool than the
+one that wrote" rule: ExifTool writes, pyexiv2 reads back.
 
 ## What the milestone-0 inventory found
 
@@ -200,22 +221,22 @@ This is expected and must not be reported as a fault by the audit.
 
 The approved plan for building the converter, ticked as milestones ship.
 This survives context loss; conversation memory doesn't. Current status:
-0.1.0 (ingestion complete).
+0.4.0 (conversion pipeline complete); 0.5.0–1.0.0 not yet built.
 
 - [x] **0.1.0** — Scaffold + ingestion. Read-only source walk, hash
       cascade, `manifest.json`, copy `.fpx` into `source-files/`.
       Non-personal FPX fixtures committed.
-- [ ] **0.2.0** — Metadata engine. Custom property-set parser for all
+- [x] **0.2.0** — Metadata engine. Custom property-set parser for all
       10 property sets plus 2 extension storages. Full raw sidecar dump.
       Timestamp resolution per the approved dating strategy. Folder-name
       ground-truth check as an automated gate.
-- [ ] **0.3.0** — Pixel decoder. Tile table at +28, per-tile JPEG
+- [x] **0.3.0** — Pixel decoder. Tile table at +28, per-tile JPEG
       splice / raw / single-colour fill, stitch, crop to declared size,
       per-file colour space, `0x10000003` transform (90° CCW rotation and
       crops). Thumbnail extractor as correctness and orientation oracle.
-- [ ] **0.4.0** — Dual output. Deflate TIFF + q95 4:4:4 JPEG, ExifTool
+- [x] **0.4.0** — Dual output. Deflate TIFF + q95 4:4:4 JPEG, ExifTool
       writes, pyexiv2 read-back validation, filesystem mtime, naming
-      scheme.
+      scheme. Tier-3 sample batch (48 files) passed all verification gates.
 - [ ] **0.5.0** — Batch engine + audit. CLI with resume-by-hash,
       `conversion.log`, `audit_report.json`; never aborts on one bad
       file.
@@ -225,6 +246,44 @@ This survives context loss; conversation memory doesn't. Current status:
 - [ ] **1.0.0** — Full dataset run plus tier-4 eyeball verification.
 - [ ] *later* — PyInstaller exe; re-verify 3.14 wheel support first,
       then add the build-and-attach job to `release.yml`.
+
+## Key user-facing behaviours
+
+### Dates: defensible only, with coarse-grained prefixes
+
+There is no capture date in this corpus. The only timestamp is a Kodak
+import-batch stamp, which lands in `DateTimeDigitized` / `xmp:CreateDate` on
+all files. `DateTimeOriginal` is written **only** where a date is independently
+defensible:
+
+- **Day-precise folder names** (e.g. `2001-07-04/`): written as local
+  midnight on that day (`OffsetTimeOriginal` carries the album's time zone;
+  stored/written times are never converted to UTC — see `DECISIONS.md`).
+- **Embedded film-scan dates** (2 files in the corpus): written as recorded.
+- **Owner review pass** (not yet implemented; requires 0.6.0 QA gallery): dates
+  entered in the gallery UI.
+
+**Current status:** 70 of 687 files carry a defensible `DateTimeOriginal` (68
+from folder dates, 2 from embedded scan records).
+
+Coarser folder dates (a bare year, a span, a season, a month) don't populate
+`DateTimeOriginal` but are still used as an ordering key. They drive the
+output filename prefix and the filesystem mtime, where unknown components are
+written as zeros: `2001-00-00_000000_` for a year-only folder, or
+`0000-00-00_000000_` for a folder with no dateable content. This allows
+chronological sorting without false precision.
+
+### Crops: full frame in archive/, cropped JPEG in sharing/
+
+53 files carry a viewing transform that describes a scale-and-translate crop
+matrix — a composition somebody framed in the Kodak software in 2002. The
+archival TIFF (`archive/<album>/<name>.tif`) preserves the full frame the
+camera captured. The shareable JPEG (`sharing/<album>/<name>.jpg`) applies the
+crop. Either way, the original `.fpx` file and the `.fpx.json` sidecar are
+copied alongside the TIFF for reference.
+
+The `convert` command names every file affected by a crop in its output, so you
+can review them if needed.
 
 ## Documentation
 

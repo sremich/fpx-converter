@@ -426,7 +426,7 @@ def parse_folder_date(folder_name: str) -> FolderDateResult:
             description=f"{start_d.strftime('%B')} {yr}",
         )
 
-    # 6. Season + year (e.g. "Winter 2002", "Harvest 2001", "Spring 2000")
+    # 6. Season + year (e.g. "Winter 1995", "Harvest 1994", "Spring 1996")
     m_season = re.search(
         r"\b(winter|spring|summer|fall|autumn|harvest)\s+(19\d\d|20\d\d)\b", lower
     )

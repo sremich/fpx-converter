@@ -35,11 +35,20 @@ C:\venvs\fpx\Scripts\python.exe -m ruff check .
 # test (tiers 1 and 2)
 C:\venvs\fpx\Scripts\python.exe -m pytest
 
-# run (0.1.0: read-only ingestion only — nothing converts yet)
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan     # walk source, write manifest
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter ingest   # copy one file per hash
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify   # re-hash the store
+# run (0.4.0)
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan        # walk source, write manifest
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter ingest      # copy one file per hash
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify      # re-hash the store
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter metadata    # dump .fpx.json sidecars
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter check-dates # album ground-truth report
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter thumbnail   # extract embedded DIBs
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert     # TIFF + JPEG + sidecar
 ```
+
+`check-dates` reports by default and only fails under `--strict`; on this
+corpus the import stamp misses 7 of 9 dated albums, which is *why* it is not
+trusted as a capture date, so a failing gate is the expected state rather
+than a regression. `convert` takes `--limit` and `--dry-run`.
 
 `scan` takes `--source` to override `FPX_SOURCE_ROOT` without a `.env`.
 Both `--manifest` and `--dest` refuse any path inside the source root — the
@@ -75,16 +84,21 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
 - [x] **0.1.0 — Scaffold + ingestion.** Milestone 0 (this configuration),
       then the read-only source walk, hash cascade, `manifest.json`, and the
       `.fpx` copy into `source-files/`. Commit the non-personal FPX fixtures.
-- [ ] **0.2.0 — Metadata engine.** Custom property-set parser for all 10
+- [x] **0.2.0 — Metadata engine.** Custom property-set parser for all 10
       property sets plus the 2 extension storages. Full raw sidecar dump.
       Timestamp resolution per the approved dating strategy. Folder-name
-      ground-truth check as an automated gate.
-- [ ] **0.3.0 — Pixel decoder.** Tile table at +28, per-tile JPEG splice /
+      ground-truth check (a report by default; `check-dates --strict` is the
+      gate, opt-in because failing is the expected result here).
+- [x] **0.3.0 — Pixel decoder.** Tile table at +28, per-tile JPEG splice /
       raw / single-colour fill, stitch, crop to the declared size, per-file
       colour space, `0x10000003` transform (90° CCW rotation and crops).
-      Thumbnail extractor as correctness and orientation oracle.
-- [ ] **0.4.0 — Dual output.** Deflate TIFF + q95 4:4:4 JPEG, ExifTool
+      Thumbnail extractor as correctness and orientation oracle — it earned
+      its keep twice, confirming both the rotation and the crop geometry.
+- [x] **0.4.0 — Dual output.** Deflate TIFF + q95 4:4:4 JPEG, ExifTool
       writes, pyexiv2 read-back validation, filesystem mtime, naming scheme.
+      Shipped as one combined 0.4.0 pre-release: all three milestones were
+      built as a branch stack and audited afterwards, so the intermediate
+      states were never CI-green and were never released.
 - [ ] **0.5.0 — Batch engine + audit.** CLI with resume-by-hash,
       `conversion.log`, `audit_report.json`; never aborts on one bad file.
 - [ ] **0.6.0 — QA gallery.** `report/index.html`, thumbnails free from the
@@ -116,6 +130,21 @@ archive, so they are rules, not preferences.
   stamp. Never write it to `DateTimeOriginal` — it goes to
   `DateTimeDigitized` / `xmp:CreateDate`, and `DateTimeOriginal` is written
   only where a date is independently defensible.
+- **"Defensible" means a single day.** A folder naming a year, a span, a
+  season or a month does not date a photograph, and EXIF has no way to say
+  "sometime in 2001" — writing one means naming a day. The first
+  implementation took the start of the range and borrowed the import stamp's
+  clock, giving 151 of 687 files a fabricated capture moment precise to the
+  second. Coarse folder dates are still useful and still kept, as
+  `sort_datetime`: they drive the mtime and the filename prefix, where
+  unknown components are written as zeros (`2001-00-00_000000_`). A prefix
+  is a browsing affordance; `DateTimeOriginal` is a claim.
+- **`archive/` keeps the full frame; `sharing/` gets the crop.** 53 files
+  carry a crop somebody framed in the Kodak software. Both the captured
+  frame and the intended composition are worth having, and the two output
+  trees have exactly those jobs. Deriving the crop box needs
+  `ResultAspectRatio` as well as the matrix — see `DECISIONS.md`; without it
+  the box appears to fall outside the image.
 - **Stored FILETIMEs are LOCAL wall-clock time, not UTC.** Do not
   timezone-convert them. The time-zone map governs which `OffsetTime*` value
   is written, nothing more.
