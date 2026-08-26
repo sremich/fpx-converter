@@ -8,6 +8,10 @@ commit, then tag.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] - 2026-08-26
+
 ### Added
 - **Source ingestion.** `fpx_converter` package with a CLI:
   `python -m fpx_converter scan | ingest | verify`.
@@ -28,8 +32,8 @@ commit, then tag.
   archive. When several paths share a hash, the human-authored name wins
   over a camera-generated one; ties break deterministically so traversal
   order never decides which caption survives.
-- Four Kodak stock fixtures under `tests/fixtures/` (no person appears in
-  any of them) plus tier-2 tests covering real FlashPix structure, resume,
+- Four Kodak stock fixtures under `tests/fixtures/` (no identifiable
+  person appears in any of them) plus tier-2 tests covering real FlashPix structure, resume,
   corrupted-copy replacement, and duplicate collapse.
 - 111 tests: 101 tier-1 (no photos, no filesystem beyond `tmp_path`) and 10
   tier-2 over the committed fixtures.
@@ -42,26 +46,6 @@ commit, then tag.
 - `workflow_dispatch` on the CI workflow, so a run can be triggered against
   an existing commit.
 
-### Fixed
-- The read-only proof no longer samples the same files forever. It used a
-  fixed seed over a sorted list, so every run re-hashed an identical ~2% of
-  the archive while looking like sampling; the sample is now unseeded and
-  the files it checked are recorded in the manifest.
-- The read-only proof now re-walks the whole tree, so a file *added* to the
-  archive is caught. Previously only files present at snapshot time were
-  compared, and creating a file is a write.
-- Two distinct SHA-256 values could be assigned the same store filename when
-  a source file was itself named `<stem>_<8 hex>.fpx`, which would have let
-  `ingest` overwrite one photo with another. Names now disambiguate until
-  genuinely free.
-- Camera-name detection no longer guesses at prefixes this archive does not
-  contain (`IMG`, `DSC`, `PICT`, ...). Only `DCP` and `P` forms occur here,
-  and a false positive discards a human-authored caption permanently.
-- `--source` no longer requires a populated `.env`.
-- `--resample 0` no longer reports the source verified while re-hashing
-  nothing; negative values are rejected rather than raising a traceback.
-- `--version` no longer falls back to a hardcoded `0.0.0` for an installed
-  copy with no `VERSION` file beside it.
 - Project scaffolding from `project-scaffold`.
 - `DECISIONS.md`: milestone-0 inventory findings from a read-only spike over
   the full source corpus — FlashPix tile layout, external JPEG table
@@ -83,6 +67,26 @@ commit, then tag.
   starting hypothesis marked confirmed, partial, or refuted.
 - `docs/wiki/Home.md` and `docs/wiki/Release-History.md`: in-repo wiki
   (the repo is private, so GitHub's wiki section is not used).
+### Fixed
+- The read-only proof no longer samples the same files forever. It used a
+  fixed seed over a sorted list, so every run re-hashed an identical ~2% of
+  the archive while looking like sampling; the sample is now unseeded and
+  the files it checked are recorded in the manifest.
+- The read-only proof now re-walks the whole tree, so a file *added* to the
+  archive is caught. Previously only files present at snapshot time were
+  compared, and creating a file is a write.
+- Two distinct SHA-256 values could be assigned the same store filename when
+  a source file was itself named `<stem>_<8 hex>.fpx`, which would have let
+  `ingest` overwrite one photo with another. Names now disambiguate until
+  genuinely free.
+- Camera-name detection no longer guesses at prefixes this archive does not
+  contain (`IMG`, `DSC`, `PICT`, ...). Only `DCP` and `P` forms occur here,
+  and a false positive discards a human-authored caption permanently.
+- `--source` no longer requires a populated `.env`.
+- `--resample 0` no longer reports the source verified while re-hashing
+  nothing; negative values are rejected rather than raising a traceback.
+- `--version` no longer falls back to a hardcoded `0.0.0` for an installed
+  copy with no `VERSION` file beside it.
 
 ### Changed
 - CI now runs on `windows-latest` with Python 3.14, installs the pinned
