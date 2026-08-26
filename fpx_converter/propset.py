@@ -439,7 +439,7 @@ def _parse_scalar(
         if off + 4 + cb > length:
             raise PropertyParseError(f"VT_BLOB cb {cb} exceeds bounds at off {off}")
         blob_bytes = data[off + 4 : off + 4 + cb]
-        raw = {"size": cb, "hex_preview": blob_bytes[:32].hex()}
+        raw = {"size": cb, "hex_preview": blob_bytes[:32].hex(), "raw_bytes": blob_bytes}
         decoded = _decode_blob_content(blob_bytes)
         return raw, decoded, 4 + cb
 
@@ -452,7 +452,12 @@ def _parse_scalar(
             raise PropertyParseError(f"VT_CF cb {cb} exceeds bounds at off {off}")
         cf_bytes = data[off + 4 : off + 4 + cb]
         format_tag = struct.unpack_from("<i", cf_bytes, 0)[0] if cb >= 4 else 0
-        raw = {"size": cb, "format_tag": format_tag, "hex_preview": cf_bytes[:32].hex()}
+        raw = {
+            "size": cb,
+            "format_tag": format_tag,
+            "hex_preview": cf_bytes[:32].hex(),
+            "raw_bytes": cf_bytes,
+        }
         decoded = _decode_cf_content(cf_bytes)
         return raw, decoded, 4 + cb
 

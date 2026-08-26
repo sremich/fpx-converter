@@ -136,6 +136,17 @@ def extract_fpx_metadata(
     )
 
 
+def _sanitize_value(val: Any) -> Any:
+    """Sanitize property values for JSON serialization, omitting binary buffers."""
+    if isinstance(val, bytes):
+        return val.hex()
+    if isinstance(val, dict):
+        return {k: _sanitize_value(v) for k, v in val.items() if k != "raw_bytes"}
+    if isinstance(val, list):
+        return [_sanitize_value(v) for v in val]
+    return val
+
+
 def _serialize_propset(pset: propset.ParsedPropertySet) -> dict[str, Any]:
     """Convert a ParsedPropertySet into a clean JSON-serializable dictionary."""
     sections_list: list[dict[str, Any]] = []
@@ -148,8 +159,8 @@ def _serialize_propset(pset: propset.ParsedPropertySet) -> dict[str, Any]:
                 "name": prop.name,
                 "type_id": prop.type_id,
                 "type_name": prop.type_name,
-                "raw_value": prop.raw_value,
-                "decoded_value": prop.decoded_value,
+                "raw_value": _sanitize_value(prop.raw_value),
+                "decoded_value": _sanitize_value(prop.decoded_value),
             }
         sections_list.append(
             {
