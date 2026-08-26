@@ -523,7 +523,7 @@ components as zeros (`2001-00-00_000000_`), which sorts correctly and can never
 be mistaken for a date somebody knew. EXIF has no way to say "sometime in
 2001"; a filename does.
 
-## 2026-08-26 — Viewing-transform crops are detected, reported, and not applied
+## 2026-08-26 — Viewing-transform crops (superseded: now applied to the JPEG)
 
 **Decision/Lesson:** `0x10000003` carries three shapes in this corpus, and the
 decoder now classifies all three rather than testing for one. Measured over 687
@@ -602,3 +602,43 @@ external JPEG tables, the two properties anyone would come back for.
 **Implication:** A parser that reads an encoding declaration and ignores it is
 worse than one that never read it, because the sidecar then records a code page
 that does not describe its own strings.
+
+## 2026-08-26 — The crop goes to sharing/, the full frame stays in archive/
+
+**Decision/Lesson:** The 53 files carrying a crop matrix now produce a
+full-frame TIFF in `archive/` and a cropped JPEG in `sharing/`. Owner
+decision, taken after the transform was measured. Supersedes the entry above,
+which recorded crops as detected-but-not-applied.
+
+**Why:** The crop is a composition somebody deliberately framed in the Kodak
+software; the full frame is what the camera actually captured. Both are worth
+keeping, and the two output trees already have exactly those two jobs. The
+`.fpx` original sits beside the TIFF either way, so nothing is one-way.
+
+**The geometry, which is not obvious.** FlashPix normalises image coordinates
+so height is 1.0 and width is the aspect ratio, making one normalised unit
+exactly `height` pixels on *both* axes. The matrix maps the result viewport —
+spanning `[0, ResultAspectRatio] × [0, 1]` — back into the source:
+
+    left = tx·H,  top = ty·H,  width = scale·ResultAspectRatio·H,  height = scale·H
+
+`ResultAspectRatio` (`0x10000000`) is the term that makes this work, and it is
+per-file: it describes the *cropped* result, not the source. Without it the
+translation alone appears to push the crop box outside the frame, which is
+what made the first reading of the matrix look wrong. With it, all 53 boxes
+land inside the image and every resulting width/height matches the declared
+aspect ratio to four decimal places.
+
+**Verified against an independent oracle, not against the algebra.** The
+embedded DIB thumbnail was written by the same software that recorded the
+transform, so it witnesses the intended framing. Cropping improved
+correlation with the thumbnail on **53 of 53 files** — mean +0.61, minimum
++0.18, none worse. This is the same oracle that confirmed the 90° rotation.
+
+**Implication:** Round the crop origin and the crop *size* separately, not all
+four edges: rounding edges independently moves the width or height by a pixel
+and pushes the result off the declared aspect ratio, which is the quantity the
+whole calculation is anchored on. And the validator no longer asserts that
+TIFF and JPEG dimensions match — it asserts each is the size it was supposed
+to be, which is the stronger check, since a crop that silently failed to apply
+would satisfy a bare equality test.

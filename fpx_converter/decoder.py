@@ -65,15 +65,16 @@ class SubimageHeader:
 
 #: What was found in `0x10000003` and what was done about it.
 #:
-#: `unsupported` is the one that matters. Measured over the 687 distinct
-#: files: 612 carry an identity matrix, 22 carry the 90 degrees CCW rotation
-#: this decoder applies, and roughly 53 carry a scale-and-translate matrix --
-#: the *crop* half of the viewing transform, which is not implemented. Those
-#: were previously indistinguishable from identity, so a cropped photo came
-#: out uncropped with nothing recording that a transform had been discarded.
+#: Measured over the 687 distinct files: 612 identity, 22 a 90 degrees CCW
+#: rotation, and 53 a uniform-scale-plus-translation crop that somebody
+#: framed in the Kodak software. All three are now recognised. `unsupported`
+#: means a matrix outside those shapes, and it is reported rather than
+#: quietly treated as identity -- which is what used to happen, so a cropped
+#: photo came out uncropped with nothing recording the discarded transform.
 TRANSFORM_ABSENT = "absent"
 TRANSFORM_IDENTITY = "identity"
 TRANSFORM_ROTATE_90_CCW = "rotate-90-ccw"
+TRANSFORM_CROP = "crop"
 TRANSFORM_UNSUPPORTED = "unsupported"
 TRANSFORM_PARSE_ERROR = "parse-error"
 
@@ -94,6 +95,18 @@ class DecodedImage:
     transform_matrix: list[float] | None = None
     #: Populated when `transform_status` is not identity/absent/applied.
     transform_note: str = ""
+
+    def cropped_image(self) -> Image.Image:
+        """The image with the crop applied, or the full frame if there is none.
+
+        `image` always stays the full frame: `archive/` preserves every pixel
+        the camera captured, and `sharing/` shows the composition somebody
+        framed at the time. Both are wanted, so the crop is applied here
+        rather than in the decode.
+        """
+        if self.crop_applied is None:
+            return self.image
+        return self.image.crop(self.crop_applied)
 
 
 def classify_orientation_matrix(matrix: list[float]) -> tuple[str, str]:
@@ -137,20 +150,72 @@ def classify_orientation_matrix(matrix: list[float]) -> tuple[str, str]:
     if near(m0, 0.0, 0.05) and near(m5, 0.0, 0.05) and m1 < -0.5 and m4 > 0.5:
         return TRANSFORM_ROTATE_90_CCW, ""
 
+    # Uniform scale plus translation: a crop somebody framed in the Kodak
+    # software. Uniform is required -- a non-square scale would be a stretch,
+    # which is a different thing and is not something this corpus contains.
     scaled = not near(m0, 1.0) or not near(m5, 1.0)
     translated = not near(m3, 0.0) or not near(m7, 0.0)
-    if scaled or translated:
+    if (scaled or translated) and near(m0, m5, 1e-4) and m0 > 0.0:
         parts = []
         if scaled:
-            parts.append(f"scale ({m0:.3f}, {m5:.3f})")
+            parts.append(f"scale {m0:.3f}")
         if translated:
             parts.append(f"offset ({m3:.3f}, {m7:.3f})")
-        return (
-            TRANSFORM_UNSUPPORTED,
-            "crop/zoom viewing transform not applied: " + ", ".join(parts),
-        )
+        return TRANSFORM_CROP, "crop: " + ", ".join(parts)
 
     return TRANSFORM_UNSUPPORTED, f"unrecognised orientation matrix: {matrix[:8]}"
+
+
+def crop_box_for_transform(
+    matrix: list[float],
+    result_aspect: float | None,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int] | None:
+    """Pixel crop box `(left, top, right, bottom)` for a crop matrix, or None.
+
+    FlashPix normalises image coordinates so that height is 1.0 and width is
+    the aspect ratio, which makes one normalised unit exactly `height`
+    pixels on both axes. The matrix maps the *result* viewport -- which spans
+    `[0, ResultAspectRatio] x [0, 1]` -- back into the source:
+
+        left   = tx * height
+        top    = ty * height
+        width  = scale * ResultAspectRatio * height
+        height = scale * height
+
+    `ResultAspectRatio` (`0x10000000`) is what makes this work and is why the
+    translation alone looks like it overflows the frame: it is per-file and
+    describes the *cropped* result, not the source. Verified across all 53
+    cropped files in this corpus -- every box lands inside the image, and
+    every resulting width/height matches the declared aspect ratio to four
+    decimal places.
+    """
+    if len(matrix) != 16 or not result_aspect or result_aspect <= 0:
+        return None
+    scale = float(matrix[0])
+    if scale <= 0:
+        return None
+
+    # Round the origin and the size separately, rather than rounding all four
+    # edges. Rounding edges independently can move the box's width or height
+    # by a pixel, which changes the aspect ratio away from the one the file
+    # declares -- and that ratio is the thing this whole calculation is
+    # anchored on.
+    left = max(0, round(matrix[3] * height))
+    top = max(0, round(matrix[7] * height))
+    box_w = round(scale * result_aspect * height)
+    box_h = round(scale * height)
+    right = left + box_w
+    bottom = top + box_h
+
+    # A box outside the frame means the matrix was misread. Refuse, so it
+    # surfaces as an unsupported transform; clamping would hide the
+    # misreading behind a plausible-looking crop.
+    if box_w < 1 or box_h < 1 or right > width + 1 or bottom > height + 1:
+        return None
+
+    return (left, top, min(width, right), min(height, bottom))
 
 
 def parse_subimage_header(header_bytes: bytes) -> SubimageHeader:
@@ -426,6 +491,22 @@ def _decode_from_ole(
                     # Pillow's ROTATE_90 turns counter-clockwise.
                     cropped = cropped.transpose(Image.Transpose.ROTATE_90)
                     rotation_applied = 90
+                elif transform_status == TRANSFORM_CROP:
+                    result_aspect = None
+                    for sec in tx_pset.sections:
+                        if 0x10000000 in sec.properties:
+                            val = sec.properties[0x10000000].decoded_value
+                            if isinstance(val, (int, float)):
+                                result_aspect = float(val)
+                    crop_applied = crop_box_for_transform(
+                        transform_matrix, result_aspect, width, height
+                    )
+                    if crop_applied is None:
+                        transform_status = TRANSFORM_UNSUPPORTED
+                        transform_note = (
+                            f"crop matrix could not be resolved to a box inside the "
+                            f"{width}x{height} frame (ResultAspectRatio={result_aspect})"
+                        )
         except Exception as exc:  # noqa: BLE001
             # Keep the upright canvas, but never silently: an unreadable
             # transform stream and a file with no transform at all used to

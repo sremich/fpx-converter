@@ -333,9 +333,15 @@ def write_single_entry_dual_output(
         # but an untagged TIFF is interpreted as whatever the viewer assumes,
         # and "assume sRGB" is a convention rather than a guarantee. An
         # archival file should say what its numbers mean.
+        # The TIFF is the preservation copy and always holds the full frame
+        # the camera captured. The JPEG is the copy people open, so it gets
+        # the composition somebody framed at the time. Where a file carries
+        # no crop these are the same pixels; for the 53 that do, both the
+        # original framing and the intended one survive -- and the `.fpx`
+        # itself is copied next to the TIFF regardless.
         icc = srgb_icc_profile()
         decoded.image.save(tif_path, format="TIFF", compression="tiff_deflate", icc_profile=icc)
-        decoded.image.save(
+        decoded.cropped_image().save(
             jpg_path, format="JPEG", quality=95, subsampling=0, icc_profile=icc
         )
 
@@ -368,7 +374,9 @@ def write_single_entry_dual_output(
                         errors.append(f"Failed to set mtime on {p.name}: {exc}")
 
         # 7. Independent validation with pyexiv2
-        val_res = validator.validate_dual_output(tif_path, jpg_path, derived)
+        val_res = validator.validate_dual_output(
+            tif_path, jpg_path, derived, expected_jpeg_size=decoded.cropped_image().size
+        )
         if not val_res.ok:
             errors.extend(val_res.errors)
 

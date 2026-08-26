@@ -28,8 +28,18 @@ def validate_dual_output(
     tif_path: Path,
     jpg_path: Path,
     expected_derived: dict[str, Any],
+    expected_jpeg_size: tuple[int, int] | None = None,
 ) -> ValidationResult:
-    """Validate that TIFF and JPEG output files match in dimensions, compression, and tags."""
+    """Validate the TIFF and JPEG against each other and against the metadata.
+
+    `expected_jpeg_size` is the size the JPEG *should* be. It differs from
+    the TIFF's only for the 53 files carrying a crop: the TIFF preserves the
+    full frame and the JPEG carries the framed composition. Passing it turns
+    the dimension check from "these two match" into "each is what it was
+    supposed to be", which is the stronger assertion -- a crop that silently
+    failed to apply would now be caught, where a bare equality check would
+    have called it a pass.
+    """
     errors: list[str] = []
 
     if not tif_path.is_file():
@@ -72,7 +82,15 @@ def validate_dual_output(
                         f"JPEG chroma subsampling is not 4:4:4: sampling={sampling_factors}"
                     )
 
-        if tif_size != jpg_size:
+        if expected_jpeg_size is not None:
+            if jpg_size != tuple(expected_jpeg_size):
+                errors.append(
+                    f"JPEG is {jpg_size}, expected {tuple(expected_jpeg_size)} "
+                    f"(TIFF is {tif_size})"
+                )
+            if expected_jpeg_size == tif_size and tif_size != jpg_size:
+                errors.append(f"Dimensions mismatch: TIFF {tif_size} vs JPEG {jpg_size}")
+        elif tif_size != jpg_size:
             errors.append(f"Dimensions mismatch: TIFF {tif_size} vs JPEG {jpg_size}")
 
     except Exception as exc:  # noqa: BLE001

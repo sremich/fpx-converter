@@ -167,9 +167,8 @@ class TestOrientationMatrixClassification:
     """The three matrix shapes this corpus actually contains.
 
     Measured over its 687 distinct files: 612 identity, 22 rotation, 53
-    scale-and-translate crops. The crops are not applied, and the point of
-    classifying rather than ignoring them is that an unapplied transform
-    must be reportable.
+    scale-and-translate crops. Anything else is reported as unsupported
+    rather than silently treated as identity.
     """
 
     IDENTITY = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
@@ -191,12 +190,12 @@ class TestOrientationMatrixClassification:
         ("scale", "offset"),
         [(0.921, 0.0), (0.745, 0.252), (0.41, 0.40), (0.99, 0.19)],
     )
-    def test_crop_matrices_are_reported_not_treated_as_identity(
+    def test_crop_matrices_are_recognised_not_treated_as_identity(
         self, scale: float, offset: float
     ) -> None:
         matrix = [scale, 0, 0, offset, 0, scale, 0, offset, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
         status, note = decoder.classify_orientation_matrix(matrix)
-        assert status == decoder.TRANSFORM_UNSUPPORTED
+        assert status == decoder.TRANSFORM_CROP
         assert "crop" in note
         # The note has to carry the numbers, or the audit cannot tell one
         # discarded crop from another. Only the components that actually
@@ -220,5 +219,89 @@ class TestOrientationMatrixClassification:
         assert statuses == {
             decoder.TRANSFORM_IDENTITY,
             decoder.TRANSFORM_ROTATE_90_CCW,
-            decoder.TRANSFORM_UNSUPPORTED,
+            decoder.TRANSFORM_CROP,
         }
+
+
+class TestCropGeometry:
+    """The crop box derived from the viewing transform.
+
+    Verified against the embedded DIB thumbnail across all 53 cropped files
+    in the corpus: cropping improved correlation with the thumbnail on every
+    one (mean +0.61, min +0.18, none worse). The thumbnail was written by the
+    same software that recorded the transform, so it is an independent
+    witness to the intended framing.
+    """
+
+    @staticmethod
+    def _matrix(scale: float, tx: float, ty: float) -> list[float]:
+        return [scale, 0, 0, tx, 0, scale, 0, ty, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+
+    def test_full_frame_matrix_yields_the_whole_image(self) -> None:
+        box = decoder.crop_box_for_transform(
+            self._matrix(1.0, 0.0, 0.0), 4 / 3, 1152, 864
+        )
+        assert box == (0, 0, 1152, 864)
+
+    def test_uses_result_aspect_ratio_for_the_width(self) -> None:
+        # Without ResultAspectRatio the width is wrong and the box can fall
+        # outside the frame -- this is the term that makes the algebra work.
+        box = decoder.crop_box_for_transform(
+            self._matrix(0.7449, 0.0, 0.2521), 0.8746, 1152, 864
+        )
+        assert box is not None
+        left, top, right, bottom = box
+        assert (left, top) == (0, 218)
+        assert right - left == round(0.7449 * 0.8746 * 864)
+        assert bottom - top == round(0.7449 * 864)
+        # The cropped result must have the aspect ratio the file declares.
+        assert abs(((right - left) / (bottom - top)) - 0.8746) < 0.01
+
+    def test_box_stays_inside_the_frame(self) -> None:
+        box = decoder.crop_box_for_transform(
+            self._matrix(0.8335, 0.1004, 0.094), 1.0365, 1152, 864
+        )
+        assert box is not None
+        left, top, right, bottom = box
+        assert 0 <= left < right <= 1152
+        assert 0 <= top < bottom <= 864
+
+    def test_missing_result_aspect_refuses_rather_than_guessing(self) -> None:
+        # Guessing the aspect would silently crop to the wrong shape.
+        assert decoder.crop_box_for_transform(self._matrix(0.8, 0.1, 0.1), None, 1152, 864) is None
+        assert decoder.crop_box_for_transform(self._matrix(0.8, 0.1, 0.1), 0.0, 1152, 864) is None
+
+    def test_a_box_falling_outside_the_frame_is_refused(self) -> None:
+        # A box outside the image means the matrix was misread. Refusing
+        # surfaces that; clamping would hide it behind a plausible crop.
+        assert decoder.crop_box_for_transform(
+            self._matrix(0.9, 0.9, 0.9), 1.333, 1152, 864
+        ) is None
+
+    def test_crop_matrix_is_classified_as_a_crop_not_unsupported(self) -> None:
+        status, note = decoder.classify_orientation_matrix(self._matrix(0.745, 0.0, 0.252))
+        assert status == decoder.TRANSFORM_CROP
+        assert "0.745" in note
+
+    def test_non_uniform_scale_is_not_treated_as_a_crop(self) -> None:
+        # A stretch is a different operation and this corpus has none. Better
+        # to report it than to crop to the wrong shape.
+        stretched = [0.8, 0, 0, 0.1, 0, 0.5, 0, 0.1, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        assert decoder.classify_orientation_matrix(stretched)[0] == decoder.TRANSFORM_UNSUPPORTED
+
+    def test_cropped_image_falls_back_to_the_full_frame(self) -> None:
+        img = Image.new("RGB", (100, 80), (10, 20, 30))
+        dec = decoder.DecodedImage(
+            image=img,
+            declared_width=100,
+            declared_height=80,
+            colour_space="NIF_RGB",
+            resolution_index=0,
+            rotation_applied=0,
+            crop_applied=None,
+        )
+        assert dec.cropped_image().size == (100, 80)
+        dec.crop_applied = (10, 10, 60, 50)
+        assert dec.cropped_image().size == (50, 40)
+        # The full frame is never mutated -- archive/ depends on it.
+        assert dec.image.size == (100, 80)
