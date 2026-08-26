@@ -11,7 +11,7 @@ See [`CHANGELOG.md`](../../CHANGELOG.md) for the itemised change list.
 
 | Tier | What it proves | Passing as of |
 |---|---|---|
-| 1. Unit | Parsers, reassembly, timestamp and naming logic, metadata extraction, pixel decoding, metadata round-trip validation | 0.4.0 — 280 tests covering all code paths that exist |
+| 1. Unit | Parsers, reassembly, timestamp and naming logic, metadata extraction, pixel decoding, metadata round-trip validation | 0.4.0 — 286 tests covering all code paths that exist |
 | 2. e2e | Full pipeline over the committed non-personal fixtures | 0.4.0 — scan through convert, including pixel decoding, metadata embedding, and pyexiv2 read-back validation on both TIFF and JPEG |
 | 3. Sample batch | 50 real files spanning all 16 albums, all 7 declared sizes, both colour spaces, all four transform outcomes, and both embedded film scans | 0.4.0 — 50/50 converted, 0 failures, independent pyexiv2 pass over both containers found 0 violations |
 | 4. Full dataset | Unattended run over the whole corpus, plus an eyeball pass | *not yet reached — gates 1.0.0* |
@@ -60,7 +60,7 @@ Full-dataset verification (1.0.0) has not been run.
 - Only tier-3 (50-file sample) verification exists; tier-4 (full corpus) has
   not been run.
 
-**Verification:** Tiers 1, 2, and 3 passing (280 tests, 50-file sample batch);
+**Verification:** Tiers 1, 2, and 3 passing (286 tests, 50-file sample batch);
 tier 4 not yet reached. This is a pre-release.
 
 ### 0.1.0 (pre-release)

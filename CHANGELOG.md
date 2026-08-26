@@ -140,7 +140,7 @@ commit, then tag.
     pyexiv2 readback, and CLI convert tests for the initial dual-output
     engine (182 → 197), plus further tests added alongside the audit fixes
     above and the crop-application work below. The suite now stands at
-    **280 tests**, all of which run in CI (locally, one skips: the guard
+    **286 tests**, all of which run in CI (locally, one skips: the guard
     that fails when `FPX_REQUIRE_EXIFTOOL` is set without ExifTool present).
   - Tier 3 is now a committed script (`scripts/tier3_sample.py`) rather than
     a run performed by hand, and it exits non-zero on any failure. Run
