@@ -51,6 +51,12 @@ class OutputItemResult:
     #: the source pixels -- but they must not disappear either.
     warnings: list[str] = field(default_factory=list)
     transform_status: str = ""
+    #: The box the shareable JPEG was cut to, in the output image's
+    #: coordinates, or None where the JPEG is the full frame. Carried out of
+    #: the writer so `convert` can name the files whose two outputs differ --
+    #: the owner has to be able to review a crop somebody framed in 2002
+    #: without opening 687 sidecars.
+    crop_applied: tuple[int, int, int, int] | None = None
 
 
 @functools.lru_cache(maxsize=1)
@@ -412,4 +418,5 @@ def write_single_entry_dual_output(
         errors=errors,
         warnings=warnings,
         transform_status=decoded.transform_status,
+        crop_applied=decoded.crop_applied,
     )

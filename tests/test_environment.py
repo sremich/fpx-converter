@@ -168,6 +168,12 @@ def test_no_real_album_name_is_tracked_in_git() -> None:
     Single dictionary words are ignored. Some album folders are named things
     like "Sample", and banning that string from the codebase would be absurd;
     what must not appear is a distinctive multi-word or year-bearing name.
+
+    The comparison is **case-insensitive**, and every tracked file is read,
+    not a chosen list of extensions. The first version of this test did
+    neither, and reported clean while a real album name sat in the test suite
+    differing from the folder only in the capitalisation of one letter. A
+    guard that can be evaded by pressing shift is not a guard.
     """
     manifest_path = REPO_ROOT / "source-files" / "manifest.json"
     if not manifest_path.is_file():
@@ -180,25 +186,27 @@ def test_no_real_album_name_is_tracked_in_git() -> None:
     # Distinctive = more than one word, or containing a digit.
     distinctive = {a for a in albums if len(a.split()) > 1 or any(c.isdigit() for c in a)}
 
+    # splitlines, not split: a tracked path containing a space would
+    # otherwise be torn into fragments and never opened.
     tracked = subprocess.run(
         ["git", "ls-files"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
-    ).stdout.split()
+    ).stdout.splitlines()
 
+    folded = [(album, album.lower()) for album in distinctive]
     offenders: list[str] = []
     for rel in tracked:
-        if not rel.endswith((".py", ".md", ".yml", ".yaml", ".json", ".txt", ".toml")):
-            continue
         path = REPO_ROOT / rel
         try:
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8").lower()
         except (OSError, UnicodeDecodeError):
+            # Binary or unreadable: nothing to match a folder name against.
             continue
-        for album in distinctive:
-            if album in text:
+        for album, needle in folded:
+            if needle in text:
                 offenders.append(f"{rel}: {album!r}")
 
     assert not offenders, (

@@ -27,7 +27,7 @@ What exists:
   - `check-dates` (ground-truth date comparison; supports `--strict` flag)
   - `thumbnail` (extract embedded DIB thumbnails as PNG)
   - `convert` (generate Deflate TIFF + quality-95 4:4:4 JPEG with metadata)
-- **252 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
+- **270 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
   over four committed Kodak stock fixtures and hand-built property-set bytes.
 - **CI passing on Windows** (python 3.14, `windows-latest`; ExifTool installed).
 
@@ -120,7 +120,7 @@ The tier-1 gates:
 # Lint
 C:\venvs\fpx\Scripts\python.exe -m ruff check .
 
-# Unit and e2e tests (tier 1 + tier 2: 252 tests, no real photos, no source archive)
+# Unit and e2e tests (tier 1 + tier 2: 270 tests, no real photos, no source archive)
 # Note: some tier-2 tests require ExifTool for metadata round-trip validation
 C:\venvs\fpx\Scripts\python.exe -m pytest
 ```
@@ -188,15 +188,17 @@ successes are useful only as an out-of-process correctness oracle —
 and they match the custom reconstruction exactly (0.0 mean absolute
 difference).
 
-### Viewing transforms: 45 files need 90° rotation
+### Viewing transforms: 22 files need 90° rotation; 71 files are cropped
 
 Every file has a Transform stream with a spatial orientation matrix
-(`0x10000003`). Across the corpus it is identity on most files,
-scale+translate (crop) on ~100, and a **pure 90° counter-clockwise
-rotation on 45 instances** covering 24 distinct images.
+(`0x10000003`). Across the corpus it is identity on 608 files, a **pure 90°
+counter-clockwise rotation on 22 files** (14 of which also carry a crop), and
+a scale-and-translate crop matrix on 57 axis-aligned files, for **71 files
+total that resolve to a crop**.
 
-**Implication:** A naive tile decoder will emit those images sideways.
-The matrix is authoritative and present in every file.
+**Implication:** A naive tile decoder will emit the rotated images sideways.
+The crop is a composition somebody framed in the Kodak software; the matrix
+is authoritative and present in every file.
 
 ### File quality: zero corruption
 
@@ -275,12 +277,12 @@ chronological sorting without false precision.
 
 ### Crops: full frame in archive/, cropped JPEG in sharing/
 
-53 files carry a viewing transform that describes a scale-and-translate crop
-matrix — a composition somebody framed in the Kodak software in 2002. The
-archival TIFF (`archive/<album>/<name>.tif`) preserves the full frame the
-camera captured. The shareable JPEG (`sharing/<album>/<name>.jpg`) applies the
-crop. Either way, the original `.fpx` file and the `.fpx.json` sidecar are
-copied alongside the TIFF for reference.
+71 files carry a viewing transform that resolves to a crop — 57 axis-aligned
+crops and 14 files that combine a 90° rotation with a crop. The archival TIFF
+(`archive/<album>/<name>.tif`) preserves the full frame the camera captured.
+The shareable JPEG (`sharing/<album>/<name>.jpg`) applies the crop. Either way,
+the original `.fpx` file and the `.fpx.json` sidecar are copied alongside the
+TIFF for reference.
 
 The `convert` command names every file affected by a crop in its output, so you
 can review them if needed.

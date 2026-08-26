@@ -663,17 +663,26 @@ null` in the sidecar and nothing in the audit. The corner-mapping form
 reproduces the closed form exactly on the axis-aligned files and additionally
 handles the rotated ones, so there is one derivation rather than two.
 
-Applying it moved the counts: **608 identity / 22 rotation (14 of them also
-cropped) / 57 axis-aligned crops**, so 71 files now resolve to a crop where 53
-did before. The four extra beyond the rotated ones are near-identity matrices —
-inside the classifier's 2% tolerance, but resolving to a box a little smaller
-than the frame. The box is what governs; the label is a description of it.
+Applying it moved the counts: **609 untouched / 8 rotation only / 14 rotation
+plus crop / 56 axis-aligned crops**, so 70 files resolve to a crop where 53 did
+before. Three of those are neither rotated nor classified as crops: they are
+matrices inside the classifier's 2% identity tolerance that nonetheless resolve
+to a real box, and not a marginal one — they keep **83.5%, 86.5% and 74.8%** of
+the frame, with the crop coming from `ResultAspectRatio` narrowing the viewport
+rather than from the matrix at all. Within 2% the label is unreliable and **the
+box is the authority**.
+
+The threshold in the other direction matters too. One 320×139 file declares a
+`ResultAspectRatio` 0.0056 under its frame's, which resolves to a box one
+column narrower — a JPEG cut a pixel off the TIFF for no visible reason, an
+oracle improvement of +0.003 that is indistinguishable from noise, and a file
+moved into the crop bucket in the audit. A box within a pixel of the frame on
+both axes is rounding, not a crop, and is discarded.
 
 **Verified against the same independent oracle.** Cropping improved
-correlation with the embedded DIB thumbnail on **71 of 71 files** — mean
-+0.56, minimum +0.003, none worse — and the worst post-crop correlation is
-0.981. The 14 rotated-and-cropped files improved by a mean of +0.46, minimum
-+0.29.
+correlation with the embedded DIB thumbnail on **70 of 70 files** — mean
++0.56, minimum +0.18, none worse — and the worst post-crop correlation is
+0.981.
 
 **Implication:** The crop box in the sidecar is in the *output* image's
 coordinates — after rotation — because that is the image the JPEG is cut from.
@@ -692,10 +701,13 @@ framing, orientation and crop — and **no evidence at all about colour**. Do
 not cite a thumbnail correlation in support of any colour claim.
 
 **Why:** It is the strongest oracle this project has, it was used to confirm
-both the 90° rotation and all 71 crops, and its numbers are high enough
+both the 90° rotation and all 70 crops, and its numbers are high enough
 (worst 0.981) to look like a general-purpose "the image is right" check. It
 is not one. A file decoded with the colour channels permuted, or with
-PhotoYCC left unconverted, would correlate just as well.
+PhotoYCC left unconverted, would correlate just as well. It is **aspect-blind**
+as well: `compute_image_correlation` resizes both images to a square 64×64, so
+it cannot witness a box of the wrong shape either — only that the framing moved
+in the right direction.
 
 **Implication:** The 2 PhotoYCC files in the corpus have **never been looked
 at by a human**. Nothing in the automated suite can tell a correct PhotoYCC

@@ -11,7 +11,7 @@ See [`CHANGELOG.md`](../../CHANGELOG.md) for the itemised change list.
 
 | Tier | What it proves | Passing as of |
 |---|---|---|
-| 1. Unit | Parsers, reassembly, timestamp and naming logic, metadata extraction, pixel decoding, metadata round-trip validation | 0.4.0 — 252 tests covering all code paths that exist |
+| 1. Unit | Parsers, reassembly, timestamp and naming logic, metadata extraction, pixel decoding, metadata round-trip validation | 0.4.0 — 270 tests covering all code paths that exist |
 | 2. e2e | Full pipeline over the committed non-personal fixtures | 0.4.0 — scan through convert, including pixel decoding, metadata embedding, and pyexiv2 read-back validation on both TIFF and JPEG |
 | 3. Sample batch | 48 real files spanning all 16 albums, 7 declared image sizes, both colour spaces, all three transform classes, and embedded film scans | 0.4.0 — 48/48 converted, 0 failures, independent pyexiv2 pass over both containers found 0 violations |
 | 4. Full dataset | Unattended run over the whole corpus, plus an eyeball pass | *not yet reached — gates 1.0.0* |
@@ -34,14 +34,18 @@ folder names.
 - Complete batch conversion of 48-file sample spanning all albums and variants
   (tier-3 verification passed)
 - Accurate metadata extraction and preservation into standard EXIF/XMP/IPTC tags
-- Verified image reconstruction (checked against the embedded-thumbnail
-  correlation oracle and an independent Pillow decode) with correct
-  per-file colour space (NIF RGB and PhotoYCC) and viewing transforms
-  (90° CCW rotation)
+- Verified image geometry (checked against the embedded-thumbnail correlation
+  oracle, which compares greyscale only, and an independent Pillow decode)
+  for the 90° CCW rotation, including the 14 rotated-and-cropped files. Per-file
+  colour-space detection (NIF RGB vs PhotoYCC) is implemented and applied, but
+  the 2 PhotoYCC files have not been human-verified for colour correctness —
+  that eyeball check is part of the tier-4 pass at 1.0.0, not before it
 - Defensible date assignment: capture dates only from day-precise folder names
   or embedded film scans; import stamp on `DateTimeDigitized` universally
-- Correct handling of viewing-transform crops: full frame preserved in archive
-  TIFF, cropped JPEG in sharing directory
+- Correct handling of viewing-transform crops on all 71 affected files
+  (57 axis-aligned, 14 rotated-and-cropped): full frame preserved in archive
+  TIFF, cropped JPEG in sharing directory. Crops verified against embedded DIB
+  thumbnail oracle (71 of 71 improved, worst correlation 0.981)
 
 **What does NOT work:** The batch engine with resume-by-hash and audit
 reporting (0.5.0), and the QA gallery with per-group date entry (0.6.0).
@@ -55,7 +59,7 @@ Full-dataset verification (1.0.0) has not been run.
 - Only tier-3 (48-file sample) verification exists; tier-4 (full corpus) has
   not been run.
 
-**Verification:** Tiers 1, 2, and 3 passing (252 tests, 48-file sample batch);
+**Verification:** Tiers 1, 2, and 3 passing (270 tests, 48-file sample batch);
 tier 4 not yet reached. This is a pre-release.
 
 ### 0.1.0 (pre-release)

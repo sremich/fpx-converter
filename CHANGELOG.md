@@ -28,11 +28,12 @@ commit, then tag.
   the manifest, resume-stably, with a writer-level guard behind them.
 - **Viewing transforms are classified instead of pattern-matched.** Only the
   90° CCW rotation was recognised; everything else fell through to an
-  unrotated image, as did a `Transform` stream that failed to parse. **53
-  files carry a scale-and-translate crop matrix** that was being discarded
-  invisibly. `has_transform` was `True` for all 687 files because it compared
-  the ROI against `[0, 0, 1, 1]` instead of the declared aspect. The owner
-  decision on the 53 crops landed later this cycle — see Added below.
+  unrotated image, as did a `Transform` stream that failed to parse. **71 files
+  resolve to a crop** (57 axis-aligned, 14 rotated-and-cropped) that was being
+  discarded or incorrectly applied. `has_transform` was `True` for all 687
+  files because it compared the ROI against `[0, 0, 1, 1]` instead of the
+  declared aspect. The owner decision on the crops landed later this cycle —
+  see Added below.
 - **CI runs the ExifTool tests instead of skipping them green.** They were
   gated on a tool GitHub's Windows runners do not ship, so the "validate
   with a different tool than the one that wrote" rule ran nowhere while the
@@ -40,6 +41,25 @@ commit, then tag.
   commit on the 0.4.0 branch had in fact been failing CI. The workflow now
   installs ExifTool and sets `FPX_REQUIRE_EXIFTOOL`, which makes a missing
   tool a failure; a tier-1 test asserts the workflow keeps doing both.
+- **14 rotated-and-cropped files were shipping rotated but uncropped.** The
+  crop derivation used a closed form that was only valid for axis-aligned
+  matrices; rotated matrices have the scale on the off-diagonal and the formula
+  read zeros, so the code took the "this is a rotation, not a crop" branch. All
+  14 are now correctly output with the crop applied, and the sidecar correctly
+  records `crop_box` instead of `null`.
+- **A corrupt Transform stream was read as "no transform".** `propset.parse_propset`
+  reports malformed input by returning a property set carrying `errors`, not by
+  raising. A caller that guarded only with `try/except` therefore treated corrupt
+  input as valid-but-empty, producing byte-identical output and audit records to
+  a file that genuinely had no transform. The parse error is now checked and
+  raised as `DecoderError`.
+- **The TIFF dimension validator was checking the wrong size.** It compared each
+  TIFF against the raw declared size, which would have failed all 22 correctly
+  rotated files (their TIFF is 864×1152 while the file declares 1152×864). The
+  validator now checks the post-rotation size, derived from the metadata.
+- **CI now requires ExifTool in the release workflow as well as the push
+  workflow.** The `release.yml` verify job installs it and sets `FPX_REQUIRE_EXIFTOOL`,
+  so a release is never cut on a weaker suite than an ordinary push.
 - Checks that could not fail: JPEG 4:4:4 validation was skipped when the
   sampling table was unreadable, and `check-dates` always exited 0 without
   consulting its own report (it now has `--strict`).
@@ -71,14 +91,15 @@ commit, then tag.
     (`archive/<album>/<name>.tif`) and shareable quality-95 4:4:4 JPEGs
     (`sharing/<album>/<name>.jpg`).
   - **Viewing-transform crops are now applied — to the shareable JPEG only.**
-    Owner decision on the 53 files carrying a scale-and-translate crop
-    matrix: the archival TIFF keeps the full frame the camera captured, and
-    the shareable JPEG gets the composition somebody framed in Kodak's
-    software in 2002. Deriving the crop box needs `ResultAspectRatio`
-    (`0x10000000`) as well as the matrix — without it the box appears to
-    fall outside the image; see `DECISIONS.md` for the geometry. The crop
-    box is also now recorded in the `.fpx.json` sidecar, independent of the
-    writer, so an audit can check what was cut without re-deriving it.
+    Owner decision on the 71 files that resolve to a crop (57 axis-aligned,
+    14 rotated-and-cropped): the archival TIFF keeps the full frame the camera
+    captured, and the shareable JPEG gets the composition somebody framed in
+    Kodak's software in 2002. Deriving the crop box needs `ResultAspectRatio`
+    (`0x10000000`) as well as the matrix — without it the box appears to fall
+    outside the image; see `DECISIONS.md` for the geometry. The crop box is in
+    the *output* image's coordinates (after rotation) and is recorded in the
+    `.fpx.json` sidecar, independent of the writer, so an audit can check what
+    was cut without re-deriving it.
   - Strict preservation layout: copies original `.fpx` files and `.fpx.json`
     sidecars alongside the `.tif` in `archive/<album>/`.
   - Comprehensive metadata embedding via ExifTool subprocess: writes EXIF, XMP,
@@ -100,14 +121,16 @@ commit, then tag.
     pyexiv2 readback, and CLI convert tests for the initial dual-output
     engine (182 → 197), plus further tests added alongside the audit fixes
     above and the crop-application work below. The suite now stands at
-    **252 tests**, all of which run in CI (locally, one skips: the guard
+    **270 tests**, all of which run in CI (locally, one skips: the guard
     that fails when `FPX_REQUIRE_EXIFTOOL` is set without ExifTool present).
   - Tier 3 re-run after the fixes above: a 48-file sample spanning all 16
     albums, 7 declared sizes, both colour spaces, all three transform
-    classes and the film scans. 48/48 converted, 0 failures, and an
-    independent pyexiv2 pass over both containers found 0 violations —
-    dimensions, Deflate, 4:4:4, ICC, tags, mtime, and no `DateTimeOriginal`
-    on any file the filename marks undated.
+    classes (608 identity, 22 rotation, 71 cropped including rotated-and-cropped)
+    and the film scans. 48/48 converted, 0 failures, and an independent pyexiv2
+    pass over both containers found 0 violations — dimensions, Deflate, 4:4:4,
+    ICC, tags, mtime, and no `DateTimeOriginal` on any file the filename marks
+    undated. Crops verified against embedded DIB thumbnail oracle: 71 of 71
+    improved (mean +0.56, worst post-crop correlation 0.981).
 - **Pixel decoder engine (milestone 0.3.0).**
   - Pure-Python FlashPix multi-resolution tile decoder (`fpx_converter.decoder`)
     bypassing Pillow's crash-prone `FpxImagePlugin`.

@@ -168,8 +168,10 @@ class TestOrientationMatrixClassification:
     """The three matrix shapes this corpus actually contains.
 
     Measured over its 687 distinct files: 612 identity, 22 rotation, 53
-    scale-and-translate crops. Anything else is reported as unsupported
-    rather than silently treated as identity.
+    scale-and-translate crops. These are matrix *shapes*; the outcome differs,
+    because a rotation can carry a crop and a near-identity matrix can too.
+    Anything else is reported as unsupported rather than silently treated as
+    identity.
     """
 
     IDENTITY = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
@@ -227,9 +229,9 @@ class TestOrientationMatrixClassification:
 class TestCropGeometry:
     """The crop box derived from the viewing transform.
 
-    Verified against the embedded DIB thumbnail across all 71 files in the
+    Verified against the embedded DIB thumbnail across all 70 files in the
     corpus that resolve to a crop: cropping improved correlation with the
-    thumbnail on every one (mean +0.56, min +0.003, none worse), and the worst
+    thumbnail on every one (mean +0.56, min +0.18, none worse), and the worst
     post-crop correlation is 0.981. The thumbnail was written by the same
     software that recorded the transform, so it is an independent witness to
     the intended framing.
@@ -371,6 +373,67 @@ class TestOutputGeometry:
             self.ROTATION_AND_CROP, self.ROTATION_AND_CROP_ASPECT, 1152, 864
         )
         assert "crop" in geom.note
+
+    @pytest.mark.parametrize("aspect", [None, 0.0, -1.0])
+    def test_a_rotation_with_no_usable_aspect_never_claims_there_is_no_crop(
+        self, aspect: float | None
+    ) -> None:
+        """The branch that shipped 14 photos uncropped, in its general form.
+
+        `source_crop_box` returns None for "no crop" and for "cannot tell"
+        alike, and the rotation branch used to read both as the first. The
+        result was a rotated, uncropped photo with an empty note, and a
+        validator expectation that agreed with it because both were derived
+        here. Nothing in the pipeline could have noticed.
+        """
+        geom = decoder.output_geometry(self.ROTATION_AND_CROP, aspect, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_UNSUPPORTED
+        assert geom.rotation == 0, "an unresolvable transform must not be half-applied"
+        assert geom.crop_box is None
+        assert "ResultAspectRatio" in geom.note
+
+    def test_an_unknown_declared_size_is_unsupported_not_a_plain_rotation(self) -> None:
+        geom = decoder.output_geometry(self.ROTATION_AND_CROP, 0.5821918, 0, 0)
+        assert geom.status == decoder.TRANSFORM_UNSUPPORTED
+        assert geom.crop_box is None
+
+    def test_an_exactly_identity_matrix_needs_nothing_resolved(self) -> None:
+        # Identity is the one shape that can be answered without the aspect:
+        # the result is the source. Anything merely near identity cannot --
+        # four files in this corpus classify as identity and carry a real
+        # crop, one of them cutting a quarter of the frame.
+        geom = decoder.output_geometry(self.IDENTITY, None, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_IDENTITY
+        assert geom.tiff_size == (1152, 864)
+
+        near_identity = [0.99, 0, 0, 0.004, 0, 0.99, 0, 0.004, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        assert decoder.classify_orientation_matrix(near_identity)[0] == (
+            decoder.TRANSFORM_IDENTITY
+        ), "precondition: this matrix is inside the classifier's tolerance"
+        assert (
+            decoder.output_geometry(near_identity, None, 1152, 864).status
+            == decoder.TRANSFORM_UNSUPPORTED
+        )
+
+    def test_the_note_and_the_crop_box_are_in_the_same_coordinates(self) -> None:
+        # The sidecar exists to say which pixels the JPEG kept. It used to
+        # carry the source-space box in the note and the rotated-space box in
+        # `crop_box`, with nothing saying which was which.
+        geom = decoder.output_geometry(
+            self.ROTATION_AND_CROP, self.ROTATION_AND_CROP_ASPECT, 1152, 864
+        )
+        assert geom.crop_box is not None
+        assert str(geom.crop_box) in geom.note
+
+    def test_a_one_pixel_difference_is_rounding_not_a_crop(self) -> None:
+        # One file declares a ResultAspectRatio a whisker under its frame's,
+        # which resolves to a box one column narrower. Calling that a crop
+        # cuts a pixel off the JPEG for no visible reason and moves the file
+        # into the crop bucket in the audit.
+        matrix = [1.0, 0, 0, 0.0, 0, 1.0, 0, 0.0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        assert decoder.source_crop_box(matrix, 320 / 139 - 0.0056, 320, 139) is None
+        # But a real crop at the same scale still resolves.
+        assert decoder.source_crop_box(matrix, 1.0, 320, 139) is not None
 
     def test_a_crop_that_cannot_be_resolved_is_unsupported_not_full_frame(self) -> None:
         # No ResultAspectRatio: the box is not derivable. Reporting the file

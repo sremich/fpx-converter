@@ -388,8 +388,13 @@ def _derive_metadata(
         "transform_status": transform_status,
         "transform_note": transform_note,
         "crop_box": list(crop_box) if crop_box else None,
-        "tiff_size": list(geom.tiff_size),
-        "jpeg_size": list(geom.jpeg_size),
+        # Omitted rather than zeroed when the file declares no size. `[0, 0]`
+        # is truthy, so the validator would have taken it as a real
+        # expectation and reported every such file as the wrong size, while
+        # the documented fallback to `image_dimensions` sat unreachable
+        # behind it.
+        "tiff_size": list(geom.tiff_size) if all(geom.tiff_size) else None,
+        "jpeg_size": list(geom.jpeg_size) if all(geom.jpeg_size) else None,
         "roi_is_full_frame": roi_is_full_frame,
         "is_rotation_90_ccw": is_rotation_90_ccw,
         "aspect_ratio": aspect_ratio,

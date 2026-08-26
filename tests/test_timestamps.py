@@ -234,10 +234,10 @@ class TestGroundTruthGate:
         assert res_pass.verdict == "PASS"
         assert res_pass.delta_days_min == 1
 
-        # 2. Fail: Winterfest 1994 imported in January 2002 (wrong year)
+        # 2. Fail: a December 1994 album imported in January 1995 (wrong year)
         res_fail_year = timestamps.evaluate_album_ground_truth(
-            "Holiday Winterfest 1994",
-            [datetime.datetime(2002, 1, 5, 20, 0, 0)],
+            "Solstice Bonfire Dec 1994",
+            [datetime.datetime(1995, 1, 5, 20, 0, 0)],
         )
         assert res_fail_year.verdict == "FAIL"
         assert "Wrong calendar year" in res_fail_year.notes
@@ -261,13 +261,13 @@ class TestGroundTruthGate:
         manifest = {
             "entries": [
                 {"sha256": "h1", "albums": ["4th of July 2001"]},
-                {"sha256": "h2", "albums": ["Holiday Winterfest 1994"]},
+                {"sha256": "h2", "albums": ["Solstice Bonfire Dec 1994"]},
                 {"sha256": "h3", "albums": ["Random Album"]},
             ]
         }
         timestamps_by_hash = {
             "h1": datetime.datetime(2001, 7, 5, 10, 0),
-            "h2": datetime.datetime(2002, 1, 5, 10, 0),
+            "h2": datetime.datetime(1995, 1, 5, 10, 0),
             "h3": datetime.datetime(2001, 9, 1, 10, 0),
         }
         report = timestamps.check_manifest_ground_truth(manifest, timestamps_by_hash)

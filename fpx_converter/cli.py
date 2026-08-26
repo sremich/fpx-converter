@@ -325,6 +325,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     undated_count = 0
     failures: list[tuple[str, str]] = []
     warnings: list[tuple[str, str]] = []
+    cropped: list[tuple[str, tuple[int, int, int, int]]] = []
 
     # Names are resolved from the WHOLE manifest, not from the slice being
     # converted. `--limit` must not change where a file lands: if it did,
@@ -362,6 +363,8 @@ def cmd_convert(args: argparse.Namespace) -> int:
             )
             if res.warnings:
                 warnings.extend((store_name, w) for w in res.warnings)
+            if res.crop_applied is not None:
+                cropped.append((store_name, res.crop_applied))
             if res.validation_ok:
                 converted += 1
                 if res.is_undated:
@@ -376,6 +379,16 @@ def cmd_convert(args: argparse.Namespace) -> int:
     print(
         f"  converted {converted} files ({dated_count} dated, {undated_count} undated)"
     )
+    if cropped:
+        # The two outputs differ for these, and which pixels the JPEG kept is
+        # an owner decision somebody made in 2002 that nobody has reviewed
+        # since. Naming them is the only way to review them before the QA
+        # gallery exists; the archival TIFF and the `.fpx` keep the full
+        # frame regardless, so nothing here is one-way.
+        print(f"  {len(cropped)} files where the shareable JPEG is cropped:")
+        for name, box in cropped:
+            left, top, right, bottom = box
+            print(f"    {name}: {right - left}x{bottom - top} at ({left}, {top})")
     if warnings:
         # Not failures -- the pixels are the source pixels -- but a discarded
         # crop is a difference from the original that has to be visible.

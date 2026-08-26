@@ -139,12 +139,17 @@ archive, so they are rules, not preferences.
   `sort_datetime`: they drive the mtime and the filename prefix, where
   unknown components are written as zeros (`2001-00-00_000000_`). A prefix
   is a browsing affordance; `DateTimeOriginal` is a claim.
-- **`archive/` keeps the full frame; `sharing/` gets the crop.** 53 files
-  carry a crop somebody framed in the Kodak software. Both the captured
-  frame and the intended composition are worth having, and the two output
-  trees have exactly those jobs. Deriving the crop box needs
-  `ResultAspectRatio` as well as the matrix — see `DECISIONS.md`; without it
-  the box appears to fall outside the image.
+- **`archive/` keeps the full frame; `sharing/` gets the crop.** 70 files
+  carry a crop somebody framed in the Kodak software — 56 axis-aligned, and
+  14 riding along with a 90° rotation. Both the captured frame and the
+  intended composition are worth having, and the two output trees have
+  exactly those jobs. Deriving the crop box needs `ResultAspectRatio` as
+  well as the matrix — see `DECISIONS.md`; without it the box appears to
+  fall outside the image. **A matrix's shape does not tell you whether it
+  crops**: rotation and crop are independent, and within the classifier's
+  tolerance an "identity" matrix can still carry one. The box is the
+  authority, and where it cannot be resolved the file is reported as
+  unsupported rather than assumed uncropped.
 - **Stored FILETIMEs are LOCAL wall-clock time, not UTC.** Do not
   timezone-convert them. The time-zone map governs which `OffsetTime*` value
   is written, nothing more.

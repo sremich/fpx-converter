@@ -51,6 +51,20 @@ class TestDerivedMetadata:
             0.0, 0.0, 0.0, 1.0,
         ]
         psets = {
+            # The declared size has to be here. Without it no crop box can be
+            # resolved, and a transform whose geometry cannot be resolved is
+            # reported as unsupported rather than assumed to be a plain
+            # rotation -- which is the whole point of that branch.
+            "Data Object Store 000001/\x05Image Contents": {
+                "sections": [
+                    {
+                        "properties": {
+                            "HighestResolutionWidth": {"decoded_value": 1152},
+                            "HighestResolutionHeight": {"decoded_value": 864},
+                        }
+                    }
+                ]
+            },
             "\x05Transform 000001": {
                 "sections": [
                     {
@@ -60,13 +74,41 @@ class TestDerivedMetadata:
                         }
                     }
                 ]
-            }
+            },
         }
         derived = metadata._derive_metadata(psets, entry=None)
         tx = derived["viewing_transform"]
         assert tx["has_transform"] is True
         assert tx["is_rotation_90_ccw"] is True
         assert tx["aspect_ratio"] == 1.12
+        # A rotated file's TIFF is the declared size with the axes swapped.
+        assert tx["tiff_size"] == [864, 1152]
+
+    def test_a_transform_whose_geometry_cannot_be_resolved_is_unsupported(self) -> None:
+        """No declared size means no crop box -- and no claim that there is none.
+
+        This used to return a plain `rotate-90-ccw` with `crop_box: null`,
+        which is indistinguishable from a rotated file that genuinely carries
+        no crop. 14 of the 22 rotated files in this corpus do carry one.
+        """
+        rot_matrix = [
+            0.0, -1.113, 0.0, 1.113,
+            1.113, 0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]
+        psets = {
+            "\x05Transform 000001": {
+                "sections": [
+                    {"properties": {"SpatialOrientationMatrix": {"decoded_value": rot_matrix}}}
+                ]
+            }
+        }
+        derived = metadata._derive_metadata(psets, entry=None)
+        tx = derived["viewing_transform"]
+        assert tx["transform_status"] == "unsupported"
+        assert tx["crop_box"] is None
+        assert "ResultAspectRatio" in tx["transform_note"]
 
     def test_derives_camera_make_model_and_software(self) -> None:
         psets = {

@@ -28,12 +28,19 @@ class ValidationResult:
 def _declared_sizes(
     expected: dict[str, Any],
 ) -> tuple[tuple[int, int] | None, tuple[int, int, int, int] | None]:
-    """`(expected_tiff_size, crop_box)` from the metadata, independent of the decode.
+    """`(expected_tiff_size, crop_box)` from the metadata, not from the pixels.
 
     These come from `metadata.py`'s reading of the `.fpx` property sets, so
-    comparing outputs against them is a real check. Comparing against
-    anything the decoder returned would only confirm the decoder agrees with
-    itself.
+    they are independent of the decode that produced the files on disk.
+
+    **They are not independent of the geometry.** `metadata.py` resolves them
+    by calling `decoder.output_geometry`, which is the same function the
+    decode path calls. So this catches a crop that failed to *apply* -- the
+    output would then disagree with an expectation derived from the file --
+    but it cannot catch a crop *derived* wrongly, because expectation and
+    output would be wrong together. The only genuinely independent geometry
+    oracle this project has is the embedded DIB thumbnail, and it is not
+    wired in here; it is run by hand at tier 3.
 
     The size is the *post-rotation* one. For the 22 rotated files the TIFF is
     864x1152 while the file declares 1152x864, so checking against the raw
@@ -74,6 +81,9 @@ def validate_dual_output(
     would report the full frame, the expectation would match the output, and
     the validation would pass. `expected_jpeg_size` is therefore accepted
     only as an override for callers that have no metadata to hand.
+
+    See `_declared_sizes` for the limit of that independence: this proves the
+    crop was applied, not that the box was right.
     """
     errors: list[str] = []
 

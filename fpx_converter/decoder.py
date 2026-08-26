@@ -65,12 +65,14 @@ class SubimageHeader:
 
 #: What was found in `0x10000003` and what was done about it.
 #:
-#: Measured over the 687 distinct files: 612 identity, 22 a 90 degrees CCW
-#: rotation, and 53 a uniform-scale-plus-translation crop that somebody
-#: framed in the Kodak software. All three are now recognised. `unsupported`
-#: means a matrix outside those shapes, and it is reported rather than
-#: quietly treated as identity -- which is what used to happen, so a cropped
-#: photo came out uncropped with nothing recording the discarded transform.
+#: These name the *shape of the matrix*, not the outcome. Measured over the
+#: 687 distinct files: 612 identity, 22 a 90 degrees CCW rotation, 53 a
+#: uniform-scale-plus-translation crop. The outcome differs, because a
+#: rotation can carry a crop and a near-identity matrix can too: 609 files
+#: end up untouched, 56 cropped, 8 rotated, 14 rotated and cropped -- 70
+#: cropped in all. `unsupported` means a matrix outside these shapes, or one
+#: whose geometry cannot be resolved, and it is reported rather than quietly
+#: treated as identity.
 TRANSFORM_ABSENT = "absent"
 TRANSFORM_IDENTITY = "identity"
 TRANSFORM_ROTATE_90_CCW = "rotate-90-ccw"
@@ -199,9 +201,9 @@ def source_crop_box(
     `ResultAspectRatio` (`0x10000000`) is per-file and describes the
     *cropped* result, not the source; without it the translation alone looks
     like it overflows the frame. Verified against the embedded DIB thumbnail
-    across all 71 files in this corpus that resolve to a crop: cropping
+    across all 70 files in this corpus that resolve to a crop: cropping
     improved correlation with the thumbnail on every one of them, mean +0.56,
-    min +0.003, and the worst post-crop correlation is 0.981.
+    min +0.18, and the worst post-crop correlation is 0.981.
     """
     if len(matrix) != 16 or not result_aspect or result_aspect <= 0:
         return None
@@ -238,7 +240,14 @@ def source_crop_box(
     right = min(width, left + box_w)
     bottom = min(height, top + box_h)
 
-    if (left, top, right, bottom) == (0, 0, width, height):
+    # A box that differs from the frame by a pixel is not a crop somebody
+    # framed; it is the rounding above. One file in this corpus declares a
+    # ResultAspectRatio 0.0056 under its frame's, which resolves to a box one
+    # column narrower -- shipping a JPEG cut one pixel off the TIFF for no
+    # visible reason, and moving the file from `identity` to `crop` in the
+    # audit. The threshold is a pixel on each axis, not a fraction: at these
+    # sizes anything larger would start discarding real crops.
+    if left <= 1 and top <= 1 and box_w >= width - 1 and box_h >= height - 1:
         return None
     return (left, top, right, bottom)
 
@@ -283,6 +292,32 @@ class OutputGeometry:
         return (right - left, bottom - top)
 
 
+def _geometry_is_derivable(
+    matrix: list[float],
+    result_aspect: float | None,
+    width: int,
+    height: int,
+) -> bool:
+    """Can a crop box be resolved from this matrix at all?
+
+    An exactly-identical matrix needs nothing resolved -- the result is the
+    source. Anything else needs both `ResultAspectRatio` and a declared size,
+    and without them the honest answer is "unknown", not "no crop".
+
+    The identity test here is exact, deliberately. `classify_orientation_matrix`
+    allows 2% so it can name the shape of a matrix, but within that tolerance
+    the label is unreliable: three files in this corpus classify as identity
+    and carry a real crop, one of them cutting a quarter of the frame. The box is
+    the authority, so a matrix that is only nearly identity still has to be
+    resolved rather than assumed away. Three files in this corpus are exactly
+    that case.
+    """
+    identity = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+    if len(matrix) == 16 and all(abs(a - b) < 1e-6 for a, b in zip(matrix, identity, strict=True)):
+        return True
+    return bool(result_aspect) and result_aspect > 0 and width > 0 and height > 0
+
+
 def output_geometry(
     matrix: list[float] | None,
     result_aspect: float | None,
@@ -303,30 +338,42 @@ def output_geometry(
     if status == TRANSFORM_UNSUPPORTED:
         return OutputGeometry(status=status, note=note, matrix=matrix, tiff_size=(width, height))
 
-    box = source_crop_box(matrix, result_aspect, width, height)
-
-    if status == TRANSFORM_CROP and box is None:
-        # The matrix says "crop" but no box could be resolved -- usually a
-        # missing ResultAspectRatio. Report it; do not fall back to the full
-        # frame as though the file had asked for one.
+    # Whether a crop is derivable at all is a separate question from whether
+    # there is one. `source_crop_box` returns None for both "no crop" and
+    # "cannot tell", and only the crop branch used to distinguish them -- so a
+    # rotated file with no usable `ResultAspectRatio` shipped rotated and
+    # uncropped, with an empty note, and the validator's expectation agreed
+    # with the output because both came from here. Nothing would have caught
+    # it. No file in this corpus is missing the term today; that is a fact
+    # about the corpus, not a property of the format.
+    if not _geometry_is_derivable(matrix, result_aspect, width, height):
         return OutputGeometry(
             status=TRANSFORM_UNSUPPORTED,
             note=(
-                f"{note}; could not be resolved to a box inside the "
-                f"{width}x{height} frame (ResultAspectRatio={result_aspect})"
+                f"{note + '; ' if note else ''}cannot resolve a crop box for a "
+                f"{status} matrix: ResultAspectRatio={result_aspect}, "
+                f"declared size {width}x{height}"
             ),
             matrix=matrix,
             tiff_size=(width, height),
         )
 
+    box = source_crop_box(matrix, result_aspect, width, height)
+
     if status == TRANSFORM_ROTATE_90_CCW:
+        rotated = rotate_box_90_ccw(box, width) if box else None
         return OutputGeometry(
+            # The note quotes the box in the same coordinates as `crop_box`.
+            # It used to quote the source-space one, so the sidecar carried
+            # two different boxes for one file with nothing saying which was
+            # which -- in the record whose whole job is to say which pixels
+            # the JPEG kept.
             status=status,
-            note=f"rotation plus crop {box}" if box else note,
+            note=f"rotation plus crop {rotated}" if rotated else note,
             matrix=matrix,
             rotation=90,
             tiff_size=(height, width),
-            crop_box=rotate_box_90_ccw(box, width) if box else None,
+            crop_box=rotated,
         )
 
     return OutputGeometry(
@@ -388,7 +435,7 @@ def apply_viewing_transform(
     only way to reach the rotation and crop branches was to have a real
     `.fpx` carrying them -- and all four committed fixtures are identity, so
     neither branch was covered at any tier. Deleting either one left the
-    whole suite green while 22 photos shipped sideways and 71 shipped
+    whole suite green while 22 photos shipped sideways and 70 shipped
     uncropped.
     """
     try:
