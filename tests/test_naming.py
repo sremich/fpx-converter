@@ -33,14 +33,10 @@ def test_strip_fpx_suffix(filename: str, expected: str) -> None:
 
 @pytest.mark.parametrize(
     "filename",
-    [
-        "DCP00280.fpx",
-        "dcp00280.fpx",
-        "P0000016.FPX",
-        "IMG_0042.fpx",
-        "DSC00001.fpx",
-        "PICT0003.fpx",
-    ],
+    # Only the forms this corpus actually contains. Every distinct filename
+    # in the archive was checked: the camera-generated names are exclusively
+    # DCP##### and P#######.
+    ["DCP00280.fpx", "dcp00280.fpx", "DC00012.fpx", "P0000016.FPX", "P 42.fpx"],
 )
 def test_camera_generated_names(filename: str) -> None:
     assert is_camera_generated(filename)
@@ -49,7 +45,20 @@ def test_camera_generated_names(filename: str) -> None:
 
 @pytest.mark.parametrize(
     "filename",
-    ["squirrel.fpx", "harbor.fpx", "Clouds01.fpx", "the dog in a hat.fpx", "birthday-cake.fpx"],
+    [
+        "squirrel.fpx",
+        "harbor.fpx",
+        "Clouds01.fpx",
+        "the dog in a hat.fpx",
+        "birthday-cake.fpx",
+        # Prefixes from cameras this archive never saw are deliberately NOT
+        # matched. Guessing wrong in this direction discards a caption
+        # permanently, and guessing wrong the other way only leaves a
+        # camera-ish name in place.
+        "IMG_0042.fpx",
+        "DSC00001.fpx",
+        "PICT0003.fpx",
+    ],
 )
 def test_human_authored_names(filename: str) -> None:
     assert is_human_authored(filename)
@@ -64,12 +73,12 @@ def test_doubled_extension_is_not_treated_as_camera_generated() -> None:
 class TestSourceLocation:
     def test_album_is_the_immediate_parent_directory(self) -> None:
         loc = SourceLocation(
-            relpath="Backup Two/picture easy 1/Albums/Sample/squirrel.fpx",
-            name="squirrel.fpx",
+            relpath="TreeTwo/import-app/Albums/Holiday/party hats.fpx",
+            name="party hats.fpx",
         )
-        assert loc.album == "Sample"
-        assert loc.tree == "Backup Two"
-        assert loc.parent_posix == "Backup Two/picture easy 1/Albums/Sample"
+        assert loc.album == "Holiday"
+        assert loc.tree == "TreeTwo"
+        assert loc.parent_posix == "TreeTwo/import-app/Albums/Holiday"
 
     def test_nested_album_keeps_the_full_path(self) -> None:
         loc = SourceLocation(relpath="T/Albums/Sample/Burst/P0000016.FPX", name="P0000016.FPX")
@@ -153,3 +162,32 @@ class TestAssignStoreNames:
     def test_doubled_extension_keeps_its_inner_suffix(self) -> None:
         names = assign_store_names([("aa" * 32, "DCP00247.fpx.fpx")])
         assert names["aa" * 32] == "DCP00247.fpx.fpx"
+
+    def test_a_suffixed_name_that_is_itself_taken_still_resolves(self) -> None:
+        """A single fallback is not enough.
+
+        If a source file is literally named `<stem>_<8 hex>.fpx`, it claims
+        the suffixed name first, and a one-shot fallback would hand the same
+        name to a second hash -- which ingest would then silently overwrite.
+        The contract is *never*, so the suffix widens until it is free.
+        """
+        taken_name, other, colliding = "aa" + "0" * 62, "aa11" + "0" * 60, "bbbbbbbb" + "0" * 56
+        names = assign_store_names(
+            [
+                (taken_name, "photo_bbbbbbbb.fpx"),
+                (other, "photo.fpx"),
+                (colliding, "photo.fpx"),
+            ]
+        )
+        assert len(set(names.values())) == 3, names
+
+    def test_store_names_are_globally_unique_under_stress(self) -> None:
+        """Whatever the inputs, two distinct hashes never share a name."""
+        pairs = []
+        for i in range(50):
+            pairs.append((f"{i:064x}", "photo.fpx"))
+            pairs.append((f"{i + 500:064x}", f"photo_{i:08x}.fpx"))
+        names = assign_store_names(pairs)
+        assert len(names) == len(pairs)
+        lowered = [n.lower() for n in names.values()]
+        assert len(set(lowered)) == len(lowered)

@@ -1,0 +1,164 @@
+"""Tier-1: CLI exit codes and the guards that sit on the command boundary.
+
+Exit codes are the contract a batch script depends on, and the containment
+guard is only useful if the CLI actually applies it to caller-supplied
+paths — which is exactly where a mistyped flag arrives.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from fpx_converter import manifest as manifest_mod
+from fpx_converter.cli import main
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def scan_argv(source: Path, manifest: Path, *extra: str) -> list[str]:
+    return [
+        "scan",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest),
+        "--progress-every",
+        "0",
+        *extra,
+    ]
+
+
+class TestScan:
+    def test_scans_and_writes_a_verified_manifest(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        assert main(scan_argv(FIXTURES, manifest_path)) == 0
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert data["counts"]["files_seen"] == 4
+        assert data["verification"]["ok"] is True
+        assert data["verification"]["files_rehashed"] > 0
+
+    def test_records_which_files_were_rehashed(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path, "--resample", "2"))
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert len(data["verification"]["sampled"]) == 2
+
+    def test_empty_tree_exits_1(self, tmp_path: Path) -> None:
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        assert main(scan_argv(empty, tmp_path / "m.json")) == 1
+
+    def test_negative_resample_exits_1(self, tmp_path: Path) -> None:
+        assert main(scan_argv(FIXTURES, tmp_path / "m.json", "--resample", "-1")) == 1
+
+    def test_refuses_a_manifest_path_inside_the_source(self, tmp_path: Path, capsys) -> None:
+        """A mistyped --manifest must not write into the archive."""
+        source = tmp_path / "archive"
+        source.mkdir()
+        assert main(scan_argv(source, source / "m.json")) == 1
+        assert "read-only source archive" in capsys.readouterr().err
+
+    def test_warns_when_content_verification_is_disabled(self, tmp_path: Path, capsys) -> None:
+        assert main(scan_argv(FIXTURES, tmp_path / "m.json", "--resample", "0")) == 0
+        assert "no file content was re-verified" in capsys.readouterr().out
+
+
+class TestIngest:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["ingest", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_copies_from_a_verified_manifest(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "store"
+        assert main(["ingest", "--manifest", str(manifest_path), "--dest", str(dest)]) == 0
+        assert len(list(dest.iterdir())) == 4
+
+    def test_refuses_an_unverified_manifest(self, tmp_path: Path, capsys) -> None:
+        """A manifest whose scan could not prove the source was untouched is
+        not a safe thing to copy from."""
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data["verification"]["ok"] = False
+        manifest_mod.write(manifest_path, data)
+
+        dest = tmp_path / "store"
+        assert main(["ingest", "--manifest", str(manifest_path), "--dest", str(dest)]) == 1
+        assert "did not prove the source tree was unchanged" in capsys.readouterr().err
+        assert not dest.exists()
+
+    def test_a_manifest_with_no_verification_block_counts_as_unverified(
+        self, tmp_path: Path
+    ) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        del data["verification"]
+        manifest_mod.write(manifest_path, data)
+        argv = ["ingest", "--manifest", str(manifest_path), "--dest", str(tmp_path / "s")]
+        assert main(argv) == 1
+
+    def test_allow_unverified_overrides_the_refusal(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data["verification"]["ok"] = False
+        manifest_mod.write(manifest_path, data)
+        dest = tmp_path / "store"
+        argv = ["ingest", "--manifest", str(manifest_path), "--dest", str(dest)]
+        assert main([*argv, "--allow-unverified"]) == 0
+
+    def test_refuses_a_destination_inside_the_source(self, tmp_path: Path, capsys) -> None:
+        """The finding that mattered most: --dest pointed at the archive
+        would mkdir there and overwrite source files on a name match."""
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = ["ingest", "--manifest", str(manifest_path), "--dest", str(FIXTURES / "sub")]
+        assert main(argv) == 1
+        assert "read-only source archive" in capsys.readouterr().err
+        assert not (FIXTURES / "sub").exists()
+
+    def test_dry_run_writes_nothing(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "store"
+        argv = ["ingest", "--manifest", str(manifest_path), "--dest", str(dest), "--dry-run"]
+        assert main(argv) == 0
+        assert not dest.exists()
+
+
+class TestVerify:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["verify", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_clean_store_exits_0(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "store"
+        main(["ingest", "--manifest", str(manifest_path), "--dest", str(dest)])
+        assert main(["verify", "--manifest", str(manifest_path), "--dest", str(dest)]) == 0
+
+    def test_corrupted_store_exits_2(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "store"
+        main(["ingest", "--manifest", str(manifest_path), "--dest", str(dest)])
+        next(iter(dest.iterdir())).write_bytes(b"corrupted")
+        assert main(["verify", "--manifest", str(manifest_path), "--dest", str(dest)]) == 2
+
+
+def test_version_reports_the_version_file() -> None:
+    from fpx_converter import __version__
+
+    expected = (Path(__file__).parent.parent / "VERSION").read_text(encoding="utf-8").strip()
+    assert __version__ == expected
+
+
+def test_no_subcommand_is_an_error() -> None:
+    with pytest.raises(SystemExit) as exc:
+        main([])
+    assert exc.value.code != 0

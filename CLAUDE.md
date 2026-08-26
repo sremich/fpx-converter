@@ -32,11 +32,18 @@ C:\venvs\fpx\Scripts\python.exe -m pip install -r requirements-dev.txt
 # lint
 C:\venvs\fpx\Scripts\python.exe -m ruff check .
 
-# test (tier 1)
+# test (tiers 1 and 2)
 C:\venvs\fpx\Scripts\python.exe -m pytest
 
-# run — not yet defined; the CLI arrives with the batch engine (0.5.0)
+# run (0.1.0: read-only ingestion only — nothing converts yet)
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan     # walk source, write manifest
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter ingest   # copy one file per hash
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify   # re-hash the store
 ```
+
+`scan` takes `--source` to override `FPX_SOURCE_ROOT` without a `.env`.
+Both `--manifest` and `--dest` refuse any path inside the source root — the
+read-only rule is enforced in code, not left to the caller.
 
 External tool: **ExifTool** (metadata writer), installed with
 `winget install --id OliverBetz.ExifTool`. It is not a Python package and is
@@ -65,7 +72,7 @@ The approved plan, ticked as milestones ship. This survives context loss;
 conversation memory doesn't. Approved changes to the plan get edited here;
 mid-project ideas that aren't in the plan go to HANDOVER.md open items.
 
-- [ ] **0.1.0 — Scaffold + ingestion.** Milestone 0 (this configuration),
+- [x] **0.1.0 — Scaffold + ingestion.** Milestone 0 (this configuration),
       then the read-only source walk, hash cascade, `manifest.json`, and the
       `.fpx` copy into `source-files/`. Commit the non-personal FPX fixtures.
 - [ ] **0.2.0 — Metadata engine.** Custom property-set parser for all 10

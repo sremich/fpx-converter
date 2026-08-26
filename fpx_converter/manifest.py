@@ -30,7 +30,15 @@ def build(
     source_root: Path,
     tool_version: str,
     generated_at: str | None = None,
+    verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build the manifest.
+
+    `verification` carries the result of the read-only proof for this scan.
+    It is recorded in the manifest rather than only printed, so a later
+    `ingest` can refuse to act on a manifest whose scan could not prove the
+    source tree was untouched.
+    """
     by_hash: dict[str, list[ScannedFile]] = {}
     for item in scanned:
         by_hash.setdefault(item.sha256, []).append(item)
@@ -84,6 +92,7 @@ def build(
         "tool_version": tool_version,
         "generated_at": generated_at or datetime.now(tz=UTC).isoformat(),
         "source_root": str(source_root),
+        "verification": verification,
         "counts": {
             "files_seen": len(scanned),
             "distinct_sha256": len(entries),

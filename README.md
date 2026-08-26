@@ -12,20 +12,54 @@ the family timeline.
 
 ## Status
 
-**Version 0.0.0.** This is the scaffolding and completed milestone-0
-inventory. There is **NO application code yet** — no pixel decoder, no
-metadata engine, no batch engine, no CLI. Nothing converts anything.
-What does exist:
+**Version 0.1.0.** Source ingestion works. Nothing converts anything
+yet — no pixel decoder, no metadata engine, no output writer. Those
+arrive at 0.2.0–0.4.0.
 
-- Configuration scaffolding: `pyproject.toml`, `requirements.txt`,
-  CI on `windows-latest` with Python 3.14.
-- **Tier-1 test gates:** `tests/test_environment.py` verifies
-  the version format, pins, and environment setup on every push.
-  Ruff linting also gates every push.
-- **Completed milestone-0 inventory:** a read-only spike over all
-  1,265 files in the source archive, measuring every starting
-  hypothesis against the actual corpus. Results are in `DECISIONS.md`
-  and the local-only inventory briefs.
+What exists:
+- **The `fpx_converter` package** with three commands: `scan`
+  (walk the source archive read-only), `ingest` (copy one file per
+  distinct SHA-256), and `verify` (re-hash the store against the
+  manifest).
+- **111 tests:** 101 tier-1 (unit tests, no photos or external tools)
+  and 10 tier-2 over four committed Kodak stock fixtures.
+- **CI passing on Windows** (python 3.14, `windows-latest`).
+
+### First ingestion run (full corpus)
+
+The measured results from the initial production run over the entire
+source tree:
+
+- **1,265 files scanned** (read-only), **494.9 MB** total
+- **687 distinct SHA-256**, **263.3 MB** of unique data
+- **Zero non-OLE2 or corrupt files**
+- **Dedup structure:** 114 singletons, 568 pairs, 5 triples
+- **Source tree verified** byte-identical after ingest by full
+  re-scan producing an identical manifest
+
+### Usage
+
+The three commands require a `.env` file copied from `.env.example`
+(edit it to set `FPX_SOURCE_ROOT`, `FPX_OUTPUT_ROOT`, and time zone).
+Alternatively, `scan` accepts `--source` to override the tree location:
+
+```powershell
+# Create a venv at a short path (Windows long-path is disabled)
+py -3.14 -m venv C:\venvs\fpx
+C:\venvs\fpx\Scripts\python.exe -m pip install -r requirements-dev.txt
+
+# Scan the source archive (read-only) and write the manifest
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan
+
+# Scan with explicit source path (does not require .env)
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan --source "C:\path\to\archive"
+
+# Copy one file per distinct hash to the local store
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter ingest
+
+# Re-hash the store against the manifest
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify
+```
 
 ## Install and test
 
@@ -166,9 +200,9 @@ This is expected and must not be reported as a fault by the audit.
 
 The approved plan for building the converter, ticked as milestones ship.
 This survives context loss; conversation memory doesn't. Current status:
-0.0.0 (scaffold + inventory complete).
+0.1.0 (ingestion complete).
 
-- [ ] **0.1.0** — Scaffold + ingestion. Read-only source walk, hash
+- [x] **0.1.0** — Scaffold + ingestion. Read-only source walk, hash
       cascade, `manifest.json`, copy `.fpx` into `source-files/`.
       Non-personal FPX fixtures committed.
 - [ ] **0.2.0** — Metadata engine. Custom property-set parser for all

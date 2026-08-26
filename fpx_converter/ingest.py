@@ -13,7 +13,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .config import ensure_outside_source
 from .scan import sha256_file
+
+
+def manifest_is_verified(manifest: dict[str, Any]) -> bool:
+    """True when the scan that produced this manifest proved the source
+    tree unchanged. A manifest from an older version has no verification
+    block at all, which counts as unverified."""
+    verification = manifest.get("verification")
+    return bool(verification) and verification.get("ok") is True
 
 
 @dataclass
@@ -35,6 +44,11 @@ def ingest(
     dest_dir: Path,
     dry_run: bool = False,
 ) -> IngestReport:
+    # Enforced here as well as in the CLI. This is the one function in the
+    # package that writes file content, so the guard belongs where the write
+    # happens, not only where the argument was parsed.
+    dest_dir = ensure_outside_source(dest_dir, source_root, "ingest destination")
+
     report = IngestReport()
     if not dry_run:
         dest_dir.mkdir(parents=True, exist_ok=True)

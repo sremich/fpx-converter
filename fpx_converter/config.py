@@ -26,6 +26,31 @@ class ConfigError(RuntimeError):
     """Raised when configuration is missing or points somewhere unusable."""
 
 
+class SourceWriteRefused(RuntimeError):
+    """Raised when something would write inside the read-only source root."""
+
+
+def ensure_outside_source(target: Path, source_root: Path, what: str) -> Path:
+    """Refuse a write target that lies inside the source archive.
+
+    Without this, a mistyped `--dest` or `--manifest` is enough to write into
+    the archive: `ingest` would `mkdir` there and then `shutil.copy2` would
+    truncate any source file whose name matched a store name. The read-only
+    rule has to be an invariant the code enforces, not a convention the
+    caller is trusted to observe.
+
+    Returns the resolved target so callers can use the checked value.
+    """
+    resolved = target.expanduser().resolve()
+    root = source_root.expanduser().resolve()
+    if resolved == root or root in resolved.parents:
+        raise SourceWriteRefused(
+            f"refusing to use {resolved} as the {what}: it is inside the read-only "
+            f"source archive at {root}. Nothing may be written under the source root."
+        )
+    return resolved
+
+
 def parse_env_file(text: str) -> dict[str, str]:
     """Parse `KEY=value` lines. Blank lines and `#` comments are ignored.
 

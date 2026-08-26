@@ -16,9 +16,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-#: Names a camera or import tool generated: DCP00123, P0000016, IMG_0042,
-#: DSC00001, PICT0003. Matched against the stem, case-insensitively.
-_CAMERA_NAME = re.compile(r"^(?:dcp|dc|dsc|dscn|img|pict|pic|p|mvc|kdc)[\s_-]?\d+$", re.IGNORECASE)
+#: Names a camera or import tool generated. Deliberately narrow: only the
+#: prefixes this corpus actually contains. Every distinct filename in the
+#: archive was checked, and the only camera-generated forms present are
+#: `DCP#####` and `P#######`.
+#:
+#: Speculative prefixes (IMG, DSC, PICT, MVC, ...) were removed rather than
+#: kept "just in case". Each one is a chance to misclassify a human-authored
+#: name as camera-generated, and that is the single direction of error that
+#: loses a caption permanently — filenames are the only human-authored
+#: content in this archive.
+_CAMERA_NAME = re.compile(r"^(?:dcp|dc|p)[\s_-]?\d+$", re.IGNORECASE)
 
 
 def strip_fpx_suffix(filename: str) -> str:
@@ -114,7 +122,17 @@ def assign_store_names(groups: list[tuple[str, str]]) -> dict[str, str]:
         stem = strip_fpx_suffix(preferred)
         candidate = f"{stem}.fpx"
         if candidate.lower() in taken:
+            # A single fallback is not enough: a source file literally named
+            # `<stem>_<8 hex>.fpx` claims the suffixed name first, and the
+            # next claimant would then silently overwrite it during ingest.
+            # The contract is *never*, so append an ordinal until the name is
+            # free. Widening the hash prefix instead would not terminate for
+            # hashes that share a long prefix; a counter always does.
             candidate = f"{stem}_{sha[:8]}.fpx"
+            ordinal = 2
+            while candidate.lower() in taken:
+                candidate = f"{stem}_{sha[:8]}-{ordinal}.fpx"
+                ordinal += 1
         taken.add(candidate.lower())
         assigned[sha] = candidate
     return assigned

@@ -148,3 +148,29 @@ def test_control_characters_in_stream_names_survive(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     manifest_mod.write(path, result)
     assert manifest_mod.load(path)["entries"][0]["streams"] == ["\x05Image Contents"]
+
+
+def test_store_names_are_unique_across_the_manifest() -> None:
+    """Two entries sharing a store name would mean one photo overwriting
+    another during ingest."""
+    files = [scanned(f"album{i}/photo.fpx", sha=sha_of(str(i))) for i in range(30)]
+    files += [scanned(f"other{i}/photo_{i:08x}.fpx", sha=sha_of(f"o{i}")) for i in range(30)]
+    result = build(files)
+    store_names = [e["store_name"].lower() for e in result["entries"]]
+    assert len(set(store_names)) == len(store_names)
+
+
+def test_verification_block_is_recorded() -> None:
+    result = manifest_mod.build(
+        [scanned("a/x.fpx", sha=sha_of("x"))],
+        source_root=ROOT,
+        tool_version="0.1.0",
+        verification={"ok": True, "files_checked": 1},
+    )
+    assert result["verification"] == {"ok": True, "files_checked": 1}
+
+
+def test_verification_defaults_to_absent_not_true() -> None:
+    """A manifest with no proof must not read as proven."""
+    result = build([scanned("a/x.fpx", sha=sha_of("x"))])
+    assert result["verification"] is None

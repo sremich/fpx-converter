@@ -2,8 +2,10 @@
 
 The four fixtures are Kodak stock sample images that shipped with Picture
 Easy — a squirrel on a fence, a harbour, a cloud time-lapse frame, and one
-frame of a vehicle burst. **No person appears in any of them**, which is why
-these four and only these four are committed. Never add a family photo here.
+frame of a burst sequence on a station platform. **No identifiable person
+appears in any of them** (the platform frame has one small, distant,
+unidentifiable figure), which is why these four and only these four are
+committed. Never add a family photo here.
 
 The pinned hashes are load-bearing twice over: they catch a fixture that got
 corrupted or replaced, and they catch a scanner that silently reads the wrong
@@ -76,9 +78,9 @@ def test_scanning_does_not_modify_the_fixtures() -> None:
     """The read-only promise, exercised against real files."""
     scanned, snapshot = scan.scan_tree(FIXTURES, progress_every=0)
     hashes = {str(i.path): i.sha256 for i in scanned}
-    report = scan.verify_unchanged(snapshot, hashes, sample_size=len(EXPECTED))
+    report = scan.verify_unchanged(snapshot, FIXTURES, hashes, sample_size=len(EXPECTED))
     assert report.resampled == len(EXPECTED)
-    assert report.ok, (report.modified, report.vanished, report.rehash_mismatches)
+    assert report.ok, (report.modified, report.vanished, report.added, report.rehash_mismatches)
 
 
 def test_manifest_over_real_files(tmp_path: Path) -> None:

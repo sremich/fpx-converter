@@ -27,7 +27,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
     source_root = (
         Path(args.source).resolve() if args.source else config.Settings.load().source_root
     )
-    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    requested = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    manifest_path = config.ensure_outside_source(requested, source_root, "manifest path")
+
+    if args.resample < 0:
+        print("--resample must not be negative.", file=sys.stderr)
+        return 1
 
     print(f"Scanning (read-only): {source_root}")
     scanned, snapshot = scan.scan_tree(source_root, progress_every=args.progress_every)
@@ -35,8 +40,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print("No .fpx files found.", file=sys.stderr)
         return 1
 
+    print()
+    print("Verifying the source tree is unchanged...")
+    hashes = {str(item.path): item.sha256 for item in scanned}
+    report = scan.verify_unchanged(snapshot, source_root, hashes, sample_size=args.resample)
+
+    # The manifest records the verification result rather than only printing
+    # it, so `ingest` can refuse a manifest whose scan could not prove the
+    # source was untouched.
     manifest = manifest_mod.build(
-        scanned, source_root=source_root, tool_version=__version__
+        scanned,
+        source_root=source_root,
+        tool_version=__version__,
+        verification=report.as_dict(),
     )
     manifest_mod.write(manifest_path, manifest)
 
@@ -51,36 +67,60 @@ def cmd_scan(args: argparse.Namespace) -> int:
     print(f"  manifest          {manifest_path}")
 
     print()
-    print("Verifying the source tree is unchanged...")
-    hashes = {str(item.path): item.sha256 for item in scanned}
-    report = scan.verify_unchanged(snapshot, hashes, sample_size=args.resample)
-    print(f"  stat-checked {report.checked}, re-hashed {report.resampled}")
     if report.ok:
-        print("  source tree is byte-identical to before the scan")
+        # Say what was actually proved. "byte-identical" would overstate a
+        # stat comparison plus a partial re-hash.
+        print(
+            f"  source tree unchanged: {report.checked} files stat-checked, "
+            f"{report.resampled} re-hashed, no additions"
+        )
+        if report.resampled == 0:
+            print("  WARNING: --resample 0 means no file content was re-verified.")
     else:
         for label, items in (
             ("MODIFIED", report.modified),
             ("VANISHED", report.vanished),
+            ("ADDED", report.added),
             ("HASH MISMATCH", report.rehash_mismatches),
         ):
             for path in items:
                 print(f"  {label}: {path}", file=sys.stderr)
+        print("SOURCE TREE CHANGED — investigate before ingesting.", file=sys.stderr)
         return 2
+
+    if counts["not_ole"]:
+        print(
+            f"  WARNING: {counts['not_ole']} file(s) are not parseable OLE2 documents.",
+            file=sys.stderr,
+        )
     return 0
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
-    # No Settings.load() here on purpose: the manifest records the source root
-    # it was built from, and ingest must copy from exactly that tree. Reading
-    # .env again would let a since-edited path silently repoint the copy.
+    # No Settings.load() here on purpose: the manifest records the source
+    # root it was built from, and ingest must copy from exactly that tree.
+    # Reading .env again would let a since-edited path silently repoint it.
     manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
     if not manifest_path.is_file():
         print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
         return 1
 
     manifest = manifest_mod.load(manifest_path)
-    dest = Path(args.dest) if args.dest else config.FPX_STORE_DIR
     source_root = Path(manifest["source_root"])
+
+    if not ingest_mod.manifest_is_verified(manifest) and not args.allow_unverified:
+        print(
+            "This manifest's scan did not prove the source tree was unchanged.\n"
+            "Re-run `scan`, or pass --allow-unverified if you know why.",
+            file=sys.stderr,
+        )
+        return 1
+
+    dest = config.ensure_outside_source(
+        Path(args.dest) if args.dest else config.FPX_STORE_DIR,
+        source_root,
+        "ingest destination",
+    )
 
     verb = "Would copy" if args.dry_run else "Copying"
     print(f"{verb} {len(manifest['entries'])} distinct files -> {dest}")
@@ -129,7 +169,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=25,
         metavar="N",
-        help="how many files to re-hash when proving the source is unchanged",
+        help="how many files to re-hash when proving the source is unchanged "
+        "(0 disables content re-verification)",
     )
     p_scan.set_defaults(func=cmd_scan)
 
@@ -137,6 +178,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--manifest")
     p_ingest.add_argument("--dest")
     p_ingest.add_argument("--dry-run", action="store_true")
+    p_ingest.add_argument(
+        "--allow-unverified",
+        action="store_true",
+        help="ingest from a manifest whose scan did not prove the source unchanged",
+    )
     p_ingest.set_defaults(func=cmd_ingest)
 
     p_verify = sub.add_parser("verify", help="re-hash the local store against the manifest")
@@ -151,6 +197,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
-    except config.ConfigError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
+    except (config.ConfigError, config.SourceWriteRefused) as exc:
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

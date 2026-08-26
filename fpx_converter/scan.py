@@ -1,15 +1,26 @@
 """Read-only walk of the source archive, and the hash cascade behind it.
 
 Every function here opens files in binary read mode and nothing else. The
-read-only promise is not left as a comment: `stat_snapshot` is taken before
-any file is touched and compared afterwards, and a random sample is re-hashed
-to catch a change that preserved size and mtime.
+read-only promise is not left as a comment: a snapshot of **every file** in
+the tree is taken before anything is opened and compared afterwards, and a
+random sample is re-hashed to catch a change that preserved size and mtime.
+
+Two properties of that check are load-bearing and easy to get wrong:
+
+* The snapshot covers the whole tree, not just the `.fpx` files. A file
+  *added* to the archive is a write, and a check that only looks at files it
+  already knew about cannot see one.
+* The sample is drawn from an unseeded generator. A fixed seed over a sorted
+  file list re-hashes the same handful of files on every run forever, which
+  leaves the rest of the archive permanently outside the check while looking
+  exactly like sampling.
 """
 
 from __future__ import annotations
 
 import hashlib
 import random
+import stat as stat_module
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -43,12 +54,24 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def stat_snapshot(paths: list[Path]) -> dict[str, tuple[int, int]]:
-    """size and mtime_ns per path — the cheap half of the read-only proof."""
+def tree_snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    """size and mtime_ns for every regular file under `root`.
+
+    Deliberately not limited to `.fpx`: creating a file is a write, and the
+    binding rule is that this tool writes nothing under the source root at
+    all. Restricting the snapshot to the files we care about would make an
+    added file invisible to the very check meant to catch it.
+    """
     snapshot: dict[str, tuple[int, int]] = {}
-    for path in paths:
-        info = path.stat()
-        snapshot[str(path)] = (info.st_size, info.st_mtime_ns)
+    for path in root.rglob("*"):
+        try:
+            info = path.stat()
+        except OSError:
+            # A path that cannot be stat'ed cannot be compared; it is
+            # reported by the after-pass as vanished if it was there before.
+            continue
+        if stat_module.S_ISREG(info.st_mode):
+            snapshot[str(path)] = (info.st_size, info.st_mtime_ns)
     return snapshot
 
 
@@ -58,39 +81,66 @@ class UnchangedReport:
     resampled: int
     modified: list[str] = field(default_factory=list)
     vanished: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)
     rehash_mismatches: list[str] = field(default_factory=list)
+    #: Which files were actually re-hashed. Recorded so the manifest shows
+    #: what the run really verified, and so successive runs can be seen to
+    #: cover different files rather than the same ones forever.
+    sampled: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        return not (self.modified or self.vanished or self.rehash_mismatches)
+        return not (self.modified or self.vanished or self.added or self.rehash_mismatches)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ok": self.ok,
+            "files_checked": self.checked,
+            "files_rehashed": self.resampled,
+            "modified": self.modified,
+            "vanished": self.vanished,
+            "added": self.added,
+            "rehash_mismatches": self.rehash_mismatches,
+            "sampled": self.sampled,
+        }
 
 
 def verify_unchanged(
     before: dict[str, tuple[int, int]],
+    root: Path,
     hashes: dict[str, str],
     sample_size: int = 25,
     rng: random.Random | None = None,
 ) -> UnchangedReport:
-    """Prove the source tree is byte-identical to before the scan.
+    """Prove the tree under `root` is unchanged since `before` was taken.
 
-    Size and mtime catch the ordinary accident. They would not catch a write
-    that restored both, so a random sample is re-hashed as well — that is the
-    check that would actually catch us corrupting the archive.
+    Size and mtime catch the ordinary accident, and re-walking catches an
+    addition. Neither would catch a write that restored size and mtime, so a
+    random sample is re-hashed as well — that is the check that would
+    actually catch us corrupting the archive.
+
+    `rng` exists so tests can pin the sample. Production runs leave it None
+    and get an unseeded generator, so repeated runs cover different files.
     """
-    report = UnchangedReport(checked=len(before), resampled=0)
-    for path_str, (size, mtime_ns) in before.items():
-        path = Path(path_str)
-        if not path.is_file():
-            report.vanished.append(path_str)
-            continue
-        info = path.stat()
-        if (info.st_size, info.st_mtime_ns) != (size, mtime_ns):
-            report.modified.append(path_str)
+    if sample_size < 0:
+        raise ValueError(f"sample_size must not be negative, got {sample_size}")
 
-    candidates = [p for p in before if p in hashes and Path(p).is_file()]
-    chooser = rng if rng is not None else random.Random(0xF9C)
+    after = tree_snapshot(root)
+    report = UnchangedReport(checked=len(before), resampled=0)
+
+    for path_str, signature in before.items():
+        current = after.get(path_str)
+        if current is None:
+            report.vanished.append(path_str)
+        elif current != signature:
+            report.modified.append(path_str)
+    report.added = sorted(set(after) - set(before))
+
+    candidates = [p for p in before if p in hashes and p in after]
+    chooser = rng if rng is not None else random.SystemRandom()
     sample = chooser.sample(candidates, min(sample_size, len(candidates)))
     report.resampled = len(sample)
+    report.sampled = sorted(sample)
     for path_str in sample:
         if sha256_file(Path(path_str)) != hashes[path_str]:
             report.rehash_mismatches.append(path_str)
@@ -133,9 +183,13 @@ def scan_tree(
     progress_every: int = 100,
     stream: object = sys.stderr,
 ) -> tuple[list[ScannedFile], dict[str, tuple[int, int]]]:
-    """Hash and inventory every `.fpx` under `root`. Returns files + snapshot."""
+    """Hash and inventory every `.fpx` under `root`.
+
+    Returns the scanned files and a whole-tree snapshot taken *before* any
+    file was opened, for `verify_unchanged` to compare against.
+    """
+    snapshot = tree_snapshot(root)
     paths = list(iter_fpx_files(root))
-    snapshot = stat_snapshot(paths)
 
     scanned: list[ScannedFile] = []
     for index, path in enumerate(paths, start=1):
