@@ -360,10 +360,27 @@ def _derive_metadata(
         decoder.TRANSFORM_IDENTITY,
     ) or not roi_is_full_frame
 
+    # The crop box, recorded so the sidecar says exactly which pixels the
+    # shareable JPEG kept. Without it the only evidence of a crop is the
+    # matrix, and reconstructing the box from that needs ResultAspectRatio
+    # and the declared size -- everything an audit would have to re-derive.
+    crop_box = None
+    if transform_status == decoder.TRANSFORM_CROP and isinstance(matrix_16, list):
+        crop_box = decoder.crop_box_for_transform(
+            [float(x) for x in matrix_16],
+            float(aspect_ratio) if isinstance(aspect_ratio, (int, float)) else None,
+            dims_dict["declared_width"],
+            dims_dict["declared_height"],
+        )
+        if crop_box is None:
+            transform_status = decoder.TRANSFORM_UNSUPPORTED
+            transform_note = "crop matrix did not resolve to a box inside the frame"
+
     transform_dict = {
         "has_transform": has_transform,
         "transform_status": transform_status,
         "transform_note": transform_note,
+        "crop_box": list(crop_box) if crop_box else None,
         "roi_is_full_frame": roi_is_full_frame,
         "is_rotation_90_ccw": is_rotation_90_ccw,
         "aspect_ratio": aspect_ratio,
