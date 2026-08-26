@@ -151,6 +151,195 @@ class TestVerify:
         assert main(["verify", "--manifest", str(manifest_path), "--dest", str(dest)]) == 2
 
 
+class TestMetadataCLI:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["metadata", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_dumps_sidecars_from_manifest(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "sidecars"
+        argv = [
+            "metadata",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+        ]
+        assert main(argv) == 0
+        assert len(list(dest.glob("*.json"))) == 4
+
+    def test_dry_run_writes_no_sidecars(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "sidecars"
+        argv = [
+            "metadata",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+            "--dry-run",
+        ]
+        assert main(argv) == 0
+        assert not dest.exists()
+
+    def test_refuses_sidecar_dest_inside_source(self, tmp_path: Path, capsys) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = [
+            "metadata",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(FIXTURES / "sidecars"),
+        ]
+        assert main(argv) == 1
+        assert "read-only source archive" in capsys.readouterr().err
+
+
+class TestCheckDatesCLI:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["check-dates", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_runs_check_dates_on_manifest(self, tmp_path: Path, capsys) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = [
+            "check-dates",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+        ]
+        assert main(argv) == 0
+        out = capsys.readouterr().out
+        assert "Album Ground-Truth Date Report" in out
+        assert "Total albums:" in out
+
+
+class TestThumbnailCLI:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["thumbnail", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_extracts_thumbnails_to_destination(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "thumbs"
+        argv = [
+            "thumbnail",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+        ]
+        assert main(argv) == 0
+        pngs = list(dest.glob("*.png"))
+        assert len(pngs) == 4
+
+    def test_dry_run_writes_no_thumbnails(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "thumbs"
+        argv = [
+            "thumbnail",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+            "--dry-run",
+        ]
+        assert main(argv) == 0
+        assert not dest.exists()
+
+    def test_refuses_thumbnail_dest_inside_source(self, tmp_path: Path, capsys) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = [
+            "thumbnail",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(FIXTURES / "thumbs"),
+        ]
+        assert main(argv) == 1
+        assert "read-only source archive" in capsys.readouterr().err
+
+
+class TestConvertCLI:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["convert", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_converts_fixtures_to_dual_output(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "output"
+        argv = [
+            "convert",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+        ]
+        assert main(argv) == 0
+        archive_tifs = list((dest / "archive").rglob("*.tif"))
+        sharing_jpgs = list((dest / "sharing").rglob("*.jpg"))
+        archive_fpxs = list((dest / "archive").rglob("*.fpx"))
+        archive_sidecars = list((dest / "archive").rglob("*.fpx.json"))
+
+        assert len(archive_tifs) == 4
+        assert len(sharing_jpgs) == 4
+        assert len(archive_fpxs) == 4
+        assert len(archive_sidecars) == 4
+
+    def test_dry_run_writes_no_conversion_files(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "output"
+        argv = [
+            "convert",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+            "--dry-run",
+        ]
+        assert main(argv) == 0
+        assert not (dest / "archive").exists()
+        assert not (dest / "sharing").exists()
+
+    def test_refuses_convert_dest_inside_source(self, tmp_path: Path, capsys) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = [
+            "convert",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(FIXTURES / "output"),
+        ]
+        assert main(argv) == 1
+        assert "read-only source archive" in capsys.readouterr().err
+
+
 def test_version_reports_the_version_file() -> None:
     from fpx_converter import __version__
 
@@ -162,3 +351,4 @@ def test_no_subcommand_is_an_error() -> None:
     with pytest.raises(SystemExit) as exc:
         main([])
     assert exc.value.code != 0
+

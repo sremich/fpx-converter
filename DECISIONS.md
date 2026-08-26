@@ -419,3 +419,226 @@ never have exposed it, which is the point of writing the hostile case.
 **Implication:** A disambiguator must terminate for *any* input, not for the
 inputs a real corpus happens to produce. When a retry loop derives its next
 candidate from the data, check that the derivation can actually run out.
+
+## 2026-08-26 — VT_VARIANT decoding and OLE property set completeness
+
+**Decision/Lesson:** FlashPix property sets embed composite `VT_VARIANT`
+(type 12) values (e.g. film extension data in film scans). In OLE property sets,
+each `VT_VARIANT` entry carries its own 4-byte type code followed by the typed
+payload. Handling `VT_VARIANT` as both scalar and vector elements allows full
+zero-loss decoding of the entire archive without unparsed properties or dropped
+metadata.
+**Why:** The inventory prototype skipped `VT_VARIANT` on 4 film scan files.
+Supporting recursive typed parsing decodes them cleanly across 100% of files.
+**Implication:** Never swallow parser gaps. When a format specification
+defines variant containers, decode them recursively or capture the structured
+type and raw bytes explicitly.
+
+## 2026-08-26 — Windows zoneinfo is empty without tzdata; calculate US DST directly
+
+**Decision/Lesson:** On Windows without the `tzdata` wheel installed, Python's
+`zoneinfo.ZoneInfo` finds no system timezone database (`available_timezones()`
+returns an empty set). For calculating standard vs daylight saving UTC offsets
+(`OffsetTime*`) on historical US dates (1998–2002) without modifying the local
+wall-clock digits, calculating the 1987–2006 US DST rule (1st Sunday in April
+to last Sunday in October) in pure Python is exact, portable, and dependency-free.
+**Why:** Running `zoneinfo` lookups on clean Windows environments failed
+silently and fell back to standard-time offsets.
+**Implication:** Avoid unnecessary runtime dependencies for well-defined
+historical schedules; a 15-line deterministic date formula is more reliable
+than relying on OS-level IANA timezone databases on Windows.
+
+## 2026-08-26 — FlashPix tile table offset 36 is relative to section start (0x1C)
+
+**Decision/Lesson:** In the FlashPix `Subimage 0000 Header` stream, the header
+field at offset `0x38` states the tile-table offset as 36 (`0x00000024`), while
+the tile records physically begin at byte 64 (`0x00000040`). The offset is
+relative to the start of the section header at byte 28 (`0x1C`):
+`28 + 36 = 64` (0x40).
+**Why:** Resolves the discrepancy flagged during the initial format reverse-engineering.
+The subimage header follows standard OLE section layout conventions where
+internal offsets are measured from the section header boundary.
+**Implication:** Both the relative offset calculation (`28 + table_offset`) and
+the fixed 64-byte preamble formula yield identical, byte-exact pointers across
+100% of corpus files.
+
+## 2026-08-26 — Retain binary payloads in VT_BLOB and VT_CF for downstream consumers
+
+**Decision/Lesson:** OLE property parsers that convert binary types (`VT_BLOB`,
+`VT_CF`) strictly into summary descriptors or truncated hex previews prevent
+downstream modules (such as pixel decoders and thumbnail extractors) from
+accessing essential payload streams (e.g. the 574-byte JPEG table blob or the
+24-bit DIB pixel array). Retaining `raw_bytes` in memory while sanitizing/omitting
+them during JSON sidecar serialization gives in-process decoders zero-copy access
+without bloating disk sidecars.
+**Why:** Discovered during milestone 0.3.0 when `decoder.py` required access to
+`0x03TT0001` JPEG tables parsed by `propset.py`.
+**Implication:** Property parsers in multi-stage pipelines should preserve raw
+binary payloads on parsed objects and delegate serialization filtering to the
+output serialization layer.
+
+## 2026-08-26 — ExifTool CreateDate maps to EXIF DateTimeDigitized (0x9004)
+
+**Decision/Lesson:** In ExifTool, the command-line flag `-EXIF:CreateDate` writes
+standard EXIF tag `0x9004` (`Exif.Photo.DateTimeDigitized`) and `XMP-xmp:CreateDate`.
+The flag `-EXIF:DateTimeOriginal` writes tag `0x9003` (`Exif.Photo.DateTimeOriginal`).
+Setting `-EXIF:CreateDate` for the import timestamp ensures consistent, conflict-free
+tag representation across both TIFF and JPEG containers when independently read
+back via pyexiv2.
+**Why:** Confirmed during dual output implementation and pyexiv2 round-trip testing.
+**Implication:** Do not use proprietary or conflicting tag aliases. Maintain
+strict separation between `CreateDate` (import batch stamp) and `DateTimeOriginal`
+(defensible capture/folder date).
+
+## 2026-08-26 — Deflate TIFF compression (Tag 8 / 32946) over LZW
+
+**Decision/Lesson:** Saving archival TIFF derivatives with Pillow's
+`compression="tiff_deflate"` writes Adobe Deflate (tag 8) or PKZIP Deflate
+(tag 32946), producing byte-exact lossless images with superior compression ratios
+over LZW while avoiding legacy LZW patent compatibility quirks.
+**Why:** Required by project specification (requirement 18 and section 4).
+**Implication:** Validate compression tags directly on written files via
+`img.tag_v2.get(259)` during test execution.
+
+## 2026-08-26 — DateTimeOriginal only from a day-precise folder name
+
+**Decision/Lesson:** A folder date may become EXIF `DateTimeOriginal` only when
+it names a single day. A bare year, a two-year span, a season and a month may
+not, and the time-of-day is written as midnight rather than borrowed from the
+import stamp.
+
+**Why:** The first implementation accepted any folder name that parsed and used
+the first day of the range, then took the hour, minute and second from the Kodak
+import batch. Measured over the 687 distinct files: 219 were given a
+folder-derived capture date, of which 151 had no day-precise evidence — 97 from
+a bare year, 34 from a year span, 20 from a season. That is 22% of the archive
+carrying a fabricated capture moment, precise to the second, in the one field
+this project says may hold only a defensible date. After the change, 70 files
+carry `DateTimeOriginal`: 68 day-precise folders and the 2 embedded scan dates.
+
+**Implication:** Coarse folder dates are still useful and are still kept — as
+`sort_datetime`, which drives the filesystem mtime and the filename prefix.
+Those are ordering affordances, not claims. The prefix writes unknown
+components as zeros (`2001-00-00_000000_`), which sorts correctly and can never
+be mistaken for a date somebody knew. EXIF has no way to say "sometime in
+2001"; a filename does.
+
+## 2026-08-26 — Viewing-transform crops (superseded: now applied to the JPEG)
+
+**Decision/Lesson:** `0x10000003` carries three shapes in this corpus, and the
+decoder now classifies all three rather than testing for one. Measured over 687
+files: 612 identity, 22 a 90° CCW rotation (applied), and **53 a
+scale-and-translate matrix — a crop, which is not applied**. Six files also
+carry a non-standard `RectangleOfInterest`.
+
+**Why:** The decoder tested only for the rotation and let everything else fall
+through to an unrotated image with `rotation_applied = 0`. An identity matrix, a
+crop matrix and a `Transform` stream that failed to parse produced byte-identical
+output and the same empty report, so 53 discarded crops were invisible.
+
+**Implication:** Whether an archival TIFF should honour a crop somebody made in
+Kodak's software in 2002, or preserve the full frame the camera captured, is an
+owner decision and is still open. Until it is made, `convert` names every
+affected file. Note also that `has_transform` previously compared the ROI
+against `[0, 0, 1, 1]` and was therefore `True` for all 687 files: FlashPix
+normalises height to 1 and expresses width as the aspect ratio, so a 4:3
+full-frame ROI is `[0, 0, 1.333, 1]`.
+
+## 2026-08-26 — CI installs ExifTool; a missing one fails rather than skips
+
+**Decision/Lesson:** The CI workflow installs ExifTool and sets
+`FPX_REQUIRE_EXIFTOOL=1`, which converts the tier-2 skip guard into a failure. A
+tier-1 test asserts the workflow keeps doing both.
+
+**Why:** The tier-2 tests that write tags with ExifTool and read them back with
+pyexiv2 were gated on the tool being present. GitHub's Windows runners ship no
+ExifTool, so on CI they skipped — meaning the "validate with a different tool
+than the one that wrote" rule was advertised as covered while running nowhere.
+Separately, one convert test had no skip guard at all, so **every commit on
+`feat/0.4.0-dual-output` failed CI** while the milestone was reported green from
+a local run.
+
+**Implication:** A skip that hides a binding rule is worse than a missing test,
+because the suite still reports green. Where a tier depends on an external tool,
+either install it in CI or make its absence loud. The CI ExifTool is deliberately
+unpinned, unlike `requirements.txt`: the pinned copy is the one on the conversion
+machine, and CI's job is to notice when upstream changes break the round-trip.
+
+## 2026-08-26 — Output names are assigned per album from the manifest
+
+**Decision/Lesson:** Output stems are resolved for the whole batch up front by
+`naming.assign_output_stems`, from the manifest alone, before any metadata is
+extracted.
+
+**Why:** `<album>/<date>_<stem>.<ext>` has no collision handling, and files in one
+album usually share a date prefix, so the stem was the only thing separating two
+photos. This corpus already contains distinct SHA-256s sharing a filename, because
+Kodak cameras reset their numbering — the second file overwrote the first and the
+run reported both converted. This is the same defect the 0.1.0 audit found in
+`assign_store_names`, one layer further down.
+
+**Implication:** Assignment must not depend on filesystem state or on which files
+have already been converted, or a resumed run would name things differently from
+the run it resumed. Ordering is by hash for the same reason it is in
+`assign_store_names`.
+
+## 2026-08-26 — VT_LPSTR honours the section CODEPAGE; sidecars keep binary payloads
+
+**Decision/Lesson:** Two fidelity fixes in the property-set layer. Strings are
+decoded with the codec the section's `CODEPAGE` declares (resolved before any
+string is parsed, not whenever PID 1 is reached), and binary payloads up to
+64 KiB are carried in the sidecar as base64 with a SHA-256 alongside.
+
+**Why:** The parser read `CODEPAGE`, stored it, and then decoded every `VT_LPSTR`
+as latin-1 regardless. 1,374 sections in this corpus declare 1252, which differs
+from latin-1 in exactly the `0x80`–`0x9F` range holding curly quotes, dashes and
+ellipsis — latin-1 maps those to C1 control characters. No `VT_LPSTR` in the
+corpus currently contains such a byte, so this repairs nothing today; it stops a
+name that does from reaching XMP as junk. Separately, the sidecar dropped every
+binary buffer and kept a 32-byte `hex_preview`, while describing itself as the
+complete raw property dump — losing the embedded thumbnail DIB (~20 KB) and the
+external JPEG tables, the two properties anyone would come back for.
+
+**Implication:** A parser that reads an encoding declaration and ignores it is
+worse than one that never read it, because the sidecar then records a code page
+that does not describe its own strings.
+
+## 2026-08-26 — The crop goes to sharing/, the full frame stays in archive/
+
+**Decision/Lesson:** The 53 files carrying a crop matrix now produce a
+full-frame TIFF in `archive/` and a cropped JPEG in `sharing/`. Owner
+decision, taken after the transform was measured. Supersedes the entry above,
+which recorded crops as detected-but-not-applied.
+
+**Why:** The crop is a composition somebody deliberately framed in the Kodak
+software; the full frame is what the camera actually captured. Both are worth
+keeping, and the two output trees already have exactly those two jobs. The
+`.fpx` original sits beside the TIFF either way, so nothing is one-way.
+
+**The geometry, which is not obvious.** FlashPix normalises image coordinates
+so height is 1.0 and width is the aspect ratio, making one normalised unit
+exactly `height` pixels on *both* axes. The matrix maps the result viewport —
+spanning `[0, ResultAspectRatio] × [0, 1]` — back into the source:
+
+    left = tx·H,  top = ty·H,  width = scale·ResultAspectRatio·H,  height = scale·H
+
+`ResultAspectRatio` (`0x10000000`) is the term that makes this work, and it is
+per-file: it describes the *cropped* result, not the source. Without it the
+translation alone appears to push the crop box outside the frame, which is
+what made the first reading of the matrix look wrong. With it, all 53 boxes
+land inside the image and every resulting width/height matches the declared
+aspect ratio to four decimal places.
+
+**Verified against an independent oracle, not against the algebra.** The
+embedded DIB thumbnail was written by the same software that recorded the
+transform, so it witnesses the intended framing. Cropping improved
+correlation with the thumbnail on **53 of 53 files** — mean +0.61, minimum
++0.18, none worse. This is the same oracle that confirmed the 90° rotation.
+
+**Implication:** Round the crop origin and the crop *size* separately, not all
+four edges: rounding edges independently moves the width or height by a pixel
+and pushes the result off the declared aspect ratio, which is the quantity the
+whole calculation is anchored on. And the validator no longer asserts that
+TIFF and JPEG dimensions match — it asserts each is the size it was supposed
+to be, which is the stronger check, since a crop that silently failed to apply
+would satisfy a bare equality test.

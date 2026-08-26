@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from fpx_converter.config import ConfigError, Settings, parse_env_file
+from fpx_converter.config import (
+    ConfigError,
+    Settings,
+    parse_album_tz_overrides,
+    parse_env_file,
+    timezone_settings,
+)
 
 
 def test_parses_simple_pairs() -> None:
@@ -82,3 +88,47 @@ class TestSettings:
         env_file = tmp_path / ".env"
         env_file.write_text(f"FPX_SOURCE_ROOT={source}\n", encoding="utf-8")
         assert Settings.load(env_file).default_tz == "America/Chicago"
+
+
+class TestAlbumTimezoneOverrides:
+    """Album-name -> timezone overrides live in `.env`, never in the source.
+
+    The keys are album folder names, which are personal content. They used
+    to be hardcoded in `timestamps.py`.
+    """
+
+    def test_parses_the_documented_json_form(self) -> None:
+        parsed = parse_album_tz_overrides('{"Some Trip":"America/New_York"}')
+        assert parsed == {"some trip": "America/New_York"}
+
+    def test_empty_is_no_overrides_not_an_error(self) -> None:
+        # A checkout with no `.env` must still work.
+        assert parse_album_tz_overrides("") == {}
+        assert parse_album_tz_overrides("   ") == {}
+
+    @pytest.mark.parametrize("raw", ['{"a": 1}', "[1, 2]", "{not json"])
+    def test_malformed_overrides_are_refused_loudly(self, raw: str) -> None:
+        # A silently ignored override writes a wrong OffsetTime, and nothing
+        # downstream can tell that from a right one.
+        with pytest.raises(ConfigError):
+            parse_album_tz_overrides(raw)
+
+    def test_timezone_settings_reads_env_without_needing_a_source_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Converting from an ingested store must not require FPX_SOURCE_ROOT.
+        for var in ("FPX_SOURCE_ROOT", "FPX_DEFAULT_TZ", "FPX_TZ_OVERRIDES"):
+            monkeypatch.delenv(var, raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "FPX_DEFAULT_TZ=America/Denver",
+                    'FPX_TZ_OVERRIDES={"beach trip":"Pacific/Honolulu"}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        default_tz, overrides = timezone_settings(env_file)
+        assert default_tz == "America/Denver"
+        assert overrides == {"beach trip": "Pacific/Honolulu"}
