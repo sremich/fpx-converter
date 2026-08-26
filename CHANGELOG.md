@@ -8,7 +8,38 @@ commit, then tag.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- **Metadata extraction engine (milestone 0.2.0).**
+  - Custom OLE property-set parser (`fpx_converter.propset`) decoding all 10
+    FlashPix property sets, extension storages (`viewprmlog` edit log and Kodak
+    pedigree), and composite types (`VT_VARIANT`, `VT_VECTOR`, `VT_CF`,
+    `VT_BLOB`, `VT_FILETIME`, strings, and numerics) with typed error reporting.
+  - Closed the `VT_VARIANT` parser gap for `ImageInfo` PID `0x29000000` (film
+    extension composite on film scan files).
+  - High-level metadata extractor (`fpx_converter.metadata`) deriving declared
+    image dimensions across resolution pyramids, colour spaces (NIF RGB vs
+    PhotoYCC), viewing transforms (orientation matrix, aspect ratio, ROI,
+    90° CCW rotation detection), camera identity, scanner acquisition data,
+    IPTC keywords, and human-authored captions.
+  - Complete raw JSON sidecar writer emitting `.fpx.json` sidecar dumps for
+    every manifest entry, preserving every property, ID, type, raw value, and
+    decoded value.
+  - Timestamp resolution (`fpx_converter.timestamps`) strictly following dating
+    rules: import-batch stamp (`PIDSI_CREATE_DTM`) maps to `DateTimeDigitized`
+    only (never `DateTimeOriginal`); FILETIMEs treated as local wall-clock
+    time without UTC conversion; timezone offsets (`OffsetTime*`) selected via
+    offline US DST calculation with per-album overrides.
+  - Defensible `DateTimeOriginal` populated only from folder ground truth,
+    embedded scan date, or owner review, with date provenance recorded per file.
+  - Automated album folder ground-truth date comparison gate
+    (`fpx_converter.timestamps.check_manifest_ground_truth` and `check-dates`
+    CLI command) reporting pass/fail/marginal status per album without silently
+    modifying date sources.
+  - CLI commands `metadata` (dump sidecars with containment guard) and
+    `check-dates` (ground-truth date report).
+  - 48 new tests (159 total): tier-1 property-set unit tests over hand-built
+    bytes, timestamp/DST/gate tests, metadata schema tests, and tier-2 e2e
+    fixture tests over all 4 committed Kodak stock sample files.
 
 ## [0.1.0] - 2026-08-26
 

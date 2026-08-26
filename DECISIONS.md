@@ -419,3 +419,32 @@ never have exposed it, which is the point of writing the hostile case.
 **Implication:** A disambiguator must terminate for *any* input, not for the
 inputs a real corpus happens to produce. When a retry loop derives its next
 candidate from the data, check that the derivation can actually run out.
+
+## 2026-08-26 — VT_VARIANT decoding and OLE property set completeness
+
+**Decision/Lesson:** FlashPix property sets embed composite `VT_VARIANT`
+(type 12) values (e.g. film extension data in film scans). In OLE property sets,
+each `VT_VARIANT` entry carries its own 4-byte type code followed by the typed
+payload. Handling `VT_VARIANT` as both scalar and vector elements allows full
+zero-loss decoding of the entire archive without unparsed properties or dropped
+metadata.
+**Why:** The inventory prototype skipped `VT_VARIANT` on 4 film scan files.
+Supporting recursive typed parsing decodes them cleanly across 100% of files.
+**Implication:** Never swallow parser gaps. When a format specification
+defines variant containers, decode them recursively or capture the structured
+type and raw bytes explicitly.
+
+## 2026-08-26 — Windows zoneinfo is empty without tzdata; calculate US DST directly
+
+**Decision/Lesson:** On Windows without the `tzdata` wheel installed, Python's
+`zoneinfo.ZoneInfo` finds no system timezone database (`available_timezones()`
+returns an empty set). For calculating standard vs daylight saving UTC offsets
+(`OffsetTime*`) on historical US dates (1998–2002) without modifying the local
+wall-clock digits, calculating the 1987–2006 US DST rule (1st Sunday in April
+to last Sunday in October) in pure Python is exact, portable, and dependency-free.
+**Why:** Running `zoneinfo` lookups on clean Windows environments failed
+silently and fell back to standard-time offsets.
+**Implication:** Avoid unnecessary runtime dependencies for well-defined
+historical schedules; a 15-line deterministic date formula is more reliable
+than relying on OS-level IANA timezone databases on Windows.
+
