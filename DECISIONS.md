@@ -233,3 +233,57 @@ most likely to lag. Keep venvs, working directories, and the output root at
 exceeds the limit. The output root must also sit **outside cloud-synced
 folders** — writing gigabytes of derivatives inside one triggers a full
 upload of data that is by policy never meant to leave the machine.
+
+## 2026-08-26 — Dating strategy: folder-derived dates plus an owner review pass
+
+**Decision/Lesson:** Because no capture date exists in the corpus, the
+absolute capture day comes from the **folder name**, not the file. Folders
+whose names encode a date are parsed automatically; the remaining folders,
+and the large flat folder that has no name-derived date at all, are surfaced
+in the QA gallery with a per-group date field for the owner to fill once.
+`EXIF:DateTimeOriginal` is written **only** where a date is defensible;
+`DateTimeDigitized` / `xmp:CreateDate` always carry the import stamp.
+Ordering within a group comes from the camera filename sequence and the
+import order, both of which survive even where the absolute day does not.
+**Why:** Three alternatives were rejected. Writing the import stamp to
+`DateTimeOriginal` was rejected as knowingly false — it puts one folder's
+photos in the wrong calendar year while looking authoritative. Automated
+folder parsing alone was rejected as leaving most of the corpus undated.
+Writing no `DateTimeOriginal` at all was rejected because chronological
+sorting in photo apps is the owner's primary goal.
+**Implication:** The review pass is a **product requirement**, not a
+nice-to-have — the gallery must collect dates, not just display them. The
+timestamp source (folder-parsed / owner-supplied / import-stamp-only) must
+be recorded per file in the sidecar and in the audit report, so the mapping
+can be redone later. The folder-name ground-truth check remains an automated
+gate against the parsed dates.
+
+## 2026-08-26 — Deduplication keys on whole-file SHA-256, not the pixel hash
+
+**Decision/Lesson:** One output per distinct whole-file SHA-256 (687 units,
+~2.4 GB), rather than per distinct pixel payload (541 units, ~1.9 GB).
+**Why:** Owner's decision, overriding the analysis recommendation. The
+prompt specified SHA-256 keying and the owner chose to keep it.
+**Implication:** The run will emit roughly 146 output pairs that are
+pixel-identical and differ only by a ~14-byte save timestamp in a property
+stream. This is expected and must **not** be reported as a fault by the
+audit. The filename-preservation rule still applies *within* each hash
+group, because one hash still maps to several source paths and folders: the
+output name must prefer a human-authored filename over a camera-generated
+one, and the sidecar must record every contributing path and folder.
+
+## 2026-08-26 — Output lives in the repo folder, gitignored, inside cloud sync
+
+**Decision/Lesson:** The output root stays at `output/` inside the project
+folder. `/output/` is gitignored, verified empirically: files planted at
+every output subpath (archive, sharing, report, audit JSON, log) were
+invisible to `git status --untracked-files=all`.
+**Why:** Owner's decision, and one the prompt explicitly offered. The
+machine has only one fixed drive, so an out-of-sync-scope location would
+have been an arbitrary sibling directory rather than a separate volume.
+**Implication:** The output root sits **inside cloud sync**, so the folder
+must be pinned "always keep on this device" or sync will upload several GB
+of personal derivatives. The path is configured in `.env` and is never
+hardcoded, so relocating it later costs one line. The gitignore rule is
+load-bearing — any change to it must be re-verified with the planted-file
+test, not by inspection.
