@@ -191,7 +191,7 @@ difference).
 ### Viewing transforms: 22 files need 90° rotation; 70 files are cropped
 
 Every file has a Transform stream with a spatial orientation matrix
-(`0x10000003`). Across the corpus it is identity on 608 files, a **pure 90°
+(`0x10000003`). Across the corpus it is identity on 609 files, a **pure 90°
 counter-clockwise rotation on 22 files** (14 of which also carry a crop), and
 a scale-and-translate crop matrix on 56 axis-aligned files, for **70 files
 total that resolve to a crop**.
@@ -238,7 +238,7 @@ This survives context loss; conversation memory doesn't. Current status:
       crops). Thumbnail extractor as correctness and orientation oracle.
 - [x] **0.4.0** — Dual output. Deflate TIFF + q95 4:4:4 JPEG, ExifTool
       writes, pyexiv2 read-back validation, filesystem mtime, naming
-      scheme. Tier-3 sample batch (48 files) passed all verification gates.
+      scheme. Tier-3 sample batch (50 files) passed all verification gates.
 - [ ] **0.5.0** — Batch engine + audit. CLI with resume-by-hash,
       `conversion.log`, `audit_report.json`; never aborts on one bad
       file.
