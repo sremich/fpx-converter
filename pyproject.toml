@@ -1,0 +1,26 @@
+[project]
+name = "fpx-converter"
+description = "Batch-converts Kodak FlashPix (.fpx) photos to archival TIFF and shareable JPEG, preserving every recoverable property."
+requires-python = ">=3.14"
+dynamic = ["version"]
+
+# The version lives ONLY in the VERSION file. Nothing here duplicates it --
+# it is declared dynamic and read from that file, so there is exactly one
+# place to bump and CI's tag check has one thing to compare against.
+[tool.setuptools.dynamic]
+version = { file = ["VERSION"] }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+  "fixtures: tier-2 tests that need the committed non-personal FPX fixtures",
+  "corpus: tier-3/4 tests that need the real source archive (never run in CI)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]

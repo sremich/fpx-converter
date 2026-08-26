@@ -8,26 +8,34 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # windows-latest, not ubuntu: this project ships no container and its
+    # only runtime is a Windows CLI. Testing on Linux would test a platform
+    # nothing ever runs on -- path handling and the ExifTool integration are
+    # exactly where a cross-platform difference would hide.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      # TODO(milestone-0): set up the project's toolchain here, e.g.
-      #   - uses: actions/setup-python@v5
-      #     with: { python-version: "3.12" }
-      # or
-      #   - uses: actions/setup-node@v4
-      #     with: { node-version: "22" }
+      - uses: actions/setup-python@v5
+        with:
+          # Pinned to the minor version, not "3.x". The dependency set is
+          # pinned to cp314 wheels; letting the runner drift to a newer
+          # Python would silently fall back to source builds or fail.
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
-      - name: Run tests
+      - name: Install dependencies
         run: |
-          # TODO(milestone-0): replace with the project's real test command
-          # (e.g. `make test`, `pytest -q`, `pnpm test`). Until then this
-          # only warns, so early scaffold pushes don't fail — but the
-          # release workflow refuses to run while TODO(milestone-0)
-          # markers remain, so this cannot reach a release unconfigured.
-          if [ -f Makefile ] && grep -q '^test:' Makefile; then
-            make test
-          else
-            echo "::warning::No test command configured yet (TODO(milestone-0) in ci.yml)"
-          fi
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Run tier-1 tests
+        # Tier 1 only: no real photos, no ExifTool, no source archive.
+        # Higher tiers are documented in CLAUDE.md and run locally, because
+        # tiers 3 and 4 need the personal corpus, which never leaves the
+        # machine.
+        run: python -m pytest

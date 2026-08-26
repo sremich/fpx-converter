@@ -1,5 +1,4 @@
-# Normalize line endings (dev happens on Windows, builds on Linux).
+# Normalize line endings. Dev and CI both run on Windows, but shell scripts
+# are executed by Git Bash on the runner and must keep LF.
 * text=auto
 *.sh text eol=lf
-Dockerfile text eol=lf
-Makefile text eol=lf

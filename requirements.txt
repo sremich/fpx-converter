@@ -1,0 +1,12 @@
+# Runtime dependencies. Pinned exactly: this pipeline runs once over an
+# irreplaceable archive, so a silent upstream change in a decoder or a
+# metadata writer is a correctness risk, not a convenience one.
+#
+# Every pin below publishes a cp314 win_amd64 wheel (verified 2026-08-26).
+# ExifTool is NOT a Python package -- see docs/REQUIREMENTS.md section 6 and
+# the README for how it is installed.
+
+olefile==0.47
+numpy==2.5.2
+pillow==12.3.0
+pyexiv2==2.16.0

@@ -14,7 +14,35 @@ commit, then tag.
   the full source corpus — FlashPix tile layout, external JPEG table
   splicing, colour space, viewing-transform orientation, embedded thumbnail
   format, deduplication analysis, and the environment constraints.
+- `requirements.txt` / `requirements-dev.txt`: exact pins for the runtime
+  (olefile, numpy, Pillow, pyexiv2) and the dev toolchain (pytest, ruff).
+  Every pin publishes a cp314 Windows wheel.
+- `pyproject.toml`: pytest and ruff configuration, with the package version
+  declared dynamic so it is read from `VERSION` rather than duplicated.
+- `tests/test_environment.py`: tier-1 guards — `VERSION` is three-part, no
+  second source of truth for it, the runtime dependencies import (pyexiv2 is
+  a compiled extension), installed versions match the pins, and no personal
+  media is tracked in git.
+- `CLAUDE.md`: working notes — commands, the four testing tiers, the
+  approved milestone plan, and the binding project rules the inventory paid
+  for.
+- `docs/REQUIREMENTS.md`: public-safe copy of the initial prompt, with every
+  starting hypothesis marked confirmed, partial, or refuted.
+- `docs/wiki/Home.md` and `docs/wiki/Release-History.md`: in-repo wiki
+  (the repo is private, so GitHub's wiki section is not used).
 
 ### Changed
-- `.gitignore` extended with the personal-image, sidecar, and output rules
-  this project requires; test fixtures under `tests/fixtures/` exempted.
+- CI now runs on `windows-latest` with Python 3.14, installs the pinned
+  dependencies, and runs ruff plus the tier-1 test suite. It was previously
+  an ubuntu job that only warned when no test command was configured.
+- `release.yml` mirrors that toolchain in its verify job.
+- `.env.example`: the project's real variables (source root, output root,
+  ExifTool path, default time zone and per-album overrides, log level,
+  worker count) with placeholder values only.
+- `.claude/settings.json`: allowlist matched to the actual toolchain.
+
+### Removed
+- `Dockerfile` and `docker-compose.yml`, and the GHCR build/push/smoke-pull
+  jobs from `release.yml`. This project ships no container — the scaffold's
+  container path is deleted rather than left as a dead stub, so
+  `release.yml` now goes verify → GitHub release.
