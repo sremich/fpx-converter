@@ -191,10 +191,12 @@ difference).
 ### Viewing transforms: 22 files need 90° rotation; 70 files are cropped
 
 Every file has a Transform stream with a spatial orientation matrix
-(`0x10000003`). Across the corpus it is identity on 609 files, a **pure 90°
-counter-clockwise rotation on 22 files** (14 of which also carry a crop), and
-a scale-and-translate crop matrix on 56 axis-aligned files, for **70 files
-total that resolve to a crop**.
+(`0x10000003`). By the *shape of the matrix*, the corpus divides 612 identity
+/ 22 rotation / 53 scale-and-translate crop. By what that resolves to — which
+is a different question, because a rotation can carry a crop and a matrix
+inside the classifier's 2% identity tolerance can too — it divides **609
+untouched / 8 rotation only / 14 rotation-plus-crop / 56 crop**, for **70
+files that resolve to a crop**.
 
 **Implication:** A naive tile decoder will emit the rotated images sideways.
 The crop is a composition somebody framed in the Kodak software; the matrix

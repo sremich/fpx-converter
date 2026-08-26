@@ -183,6 +183,61 @@ class TestTileDecoding:
         assert more_c2.getpixel((0, 0))[2] == n_b, "C2 must not touch blue"
         assert more_c2.getpixel((0, 0))[1] < n_g, "raising C2 must darken green"
 
+    def test_raw_and_fill_tiles_are_converted_in_a_photoycc_file(self) -> None:
+        """Neither branch is reachable from this corpus, and both must be right.
+
+        Both PhotoYCC files are entirely type-2 tiles, so a type-0 or type-1
+        tile in a PhotoYCC file is exercised by nothing -- which is exactly
+        the situation the JPEG branch was in when it was found to be
+        converting twice. "Detect per file, never assume corpus-wide" is a
+        binding rule for this reason.
+        """
+        stored = (128, 200, 90)  # Y, C1, C2 -- not RGB
+        expected = decoder._photoycc_to_rgb(Image.new("RGB", (4, 4), stored)).getpixel((0, 0))
+        assert expected != stored, "precondition: the transform actually changes this value"
+
+        raw = decoder.TileRecord(
+            offset=0,
+            size=decoder.UNCOMPRESSED_TILE_SIZE,
+            compression_type=decoder.COMPRESSION_UNCOMPRESSED,
+            compression_subtype=0,
+        )
+        payload = bytes(stored) * (64 * 64)
+        assert decoder._decode_tile(raw, payload, {}, "PhotoYCC").getpixel((0, 0)) == expected
+        # ...and is left alone in an ordinary file.
+        assert decoder._decode_tile(raw, payload, {}, "NIF_RGB").getpixel((0, 0)) == stored
+
+        fill = decoder.TileRecord(
+            offset=0,
+            size=0,
+            compression_type=decoder.COMPRESSION_SINGLE_COLOUR,
+            compression_subtype=stored[0] | (stored[1] << 8) | (stored[2] << 16),
+        )
+        assert decoder._decode_tile(fill, b"", {}, "PhotoYCC").getpixel((0, 0)) == expected
+
+    def test_a_greyscale_tile_in_a_photoycc_file_refuses_rather_than_inventing_chroma(
+        self,
+    ) -> None:
+        # `draft("YCbCr")` is a request, not a guarantee: a single-component
+        # JPEG stays in mode "L", and converting it would fabricate chroma at
+        # 128 -- which this transform turns into a strong green cast on a
+        # neutral tile. Loud beats plausible.
+        grey = Image.new("L", (64, 64), 128)
+        buf = io.BytesIO()
+        grey.save(buf, format="JPEG", quality=95)
+        jpeg = buf.getvalue()
+
+        rec = decoder.TileRecord(
+            offset=0,
+            size=len(jpeg) - 2,
+            compression_type=decoder.COMPRESSION_JPEG,
+            compression_subtype=254 << 24,
+        )
+        with pytest.raises(decoder.DecoderError, match="not YCbCr"):
+            decoder._decode_tile(
+                rec, b"\xff\xd8" + jpeg[100:], {254: jpeg[:100] + b"\xff\xd9"}, "PhotoYCC"
+            )
+
     def test_a_photoycc_jpeg_tile_is_not_converted_twice(self) -> None:
         """The tile path must hand `_photoycc_to_rgb` the stored components.
 
@@ -441,6 +496,52 @@ class TestOutputGeometry:
             self.ROTATION_AND_CROP, self.ROTATION_AND_CROP_ASPECT, 1152, 864
         )
         assert "crop" in geom.note
+
+    @pytest.mark.parametrize(
+        ("matrix_kind", "aspect"),
+        [
+            # A viewport that maps outside the frame: the matrix was misread,
+            # and the honest report is "cannot tell", not "no crop".
+            ("rotation", 1.12),
+            ("crop", 4.0),
+            # A degenerate scale resolves to a box with no area.
+            ("degenerate", 1.0),
+        ],
+    )
+    def test_an_unresolvable_box_is_never_reported_as_no_crop(
+        self, matrix_kind: str, aspect: float
+    ) -> None:
+        """Every "cannot tell" path, not just the one the last fix covered.
+
+        `resolve_crop_box` returns None for "no crop" and for three distinct
+        "cannot tell" reasons, and an earlier version distinguished only the
+        missing-`ResultAspectRatio` one. The other two shipped the full frame
+        in both trees with an empty note, and the validator agreed because its
+        expectation comes from the same function.
+        """
+        matrices = {
+            "rotation": [0.0, -1.113, 0, 1.113, 1.113, 0.0, 0, 0.0,
+                         0, 0, 1.0, 0, 0, 0, 0, 1.0],
+            "crop": [0.9, 0, 0, 0.9, 0, 0.9, 0, 0.9, 0, 0, 1.0, 0, 0, 0, 0, 1.0],
+            "degenerate": [1e-9, 0, 0, 0.0, 0, 1e-9, 0, 0.0, 0, 0, 1.0, 0, 0, 0, 0, 1.0],
+        }
+        geom = decoder.output_geometry(matrices[matrix_kind], aspect, 1152, 864)
+        assert geom.status == decoder.TRANSFORM_UNSUPPORTED
+        assert geom.crop_box is None
+        assert geom.rotation == 0, "an unresolvable transform must not be half-applied"
+        assert geom.note, "an unresolvable transform with an empty note is invisible"
+
+    def test_an_aspect_alone_can_crop_when_there_is_no_matrix(self) -> None:
+        # No orientation matrix means identity -- but ResultAspectRatio still
+        # narrows the viewport, and that is a crop. Reading it as "absent, no
+        # crop" is how one goes missing.
+        geom = decoder.output_geometry(None, 1.0, 1152, 864)
+        assert geom.crop_box is not None
+        assert geom.status == decoder.TRANSFORM_CROP
+        assert geom.jpeg_size == (864, 864)
+
+        # And a full-frame aspect with no matrix really is nothing to do.
+        assert decoder.output_geometry(None, 1152 / 864, 1152, 864).crop_box is None
 
     @pytest.mark.parametrize("aspect", [None, 0.0, -1.0])
     def test_a_rotation_with_no_usable_aspect_never_claims_there_is_no_crop(

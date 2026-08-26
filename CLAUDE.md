@@ -74,10 +74,15 @@ orientation need eyes at least once per variant.
 
 **The two oracles are not interchangeable.** `compute_image_correlation`
 folds both images to greyscale, so it witnesses framing and orientation and
-says *nothing* about colour; a per-channel correlation against the same
-embedded DIB thumbnail is what answers the colour question. Never cite the
-first in support of the second — that is exactly how two solidly green files
-passed every check in the project.
+says *nothing* about colour. Never cite it in support of a colour claim —
+that is exactly how two solidly green files passed every check in the
+project. Colour is `chroma_agreement` in `scripts/tier3_sample.py`, which
+compares `R-G` and `B-G` against the same embedded DIB. **Correlating the R,
+G and B channels separately is not a colour check either**: Pearson
+correlation is invariant under any per-channel affine map, so a wrong gain or
+a wrong neutral point scores as well as a correct decode. That version was
+written, shipped and caught. Whatever the metric, a 96-pixel thumbnail is
+evidence and not sight; tier 4 still needs eyes.
 
 Tiers 3 and 4 read the personal corpus and therefore **never run in CI**.
 They run locally, and their outputs are gitignored. CI's job is tier 1.

@@ -44,9 +44,15 @@ class TestDerivedMetadata:
 
     def test_detects_90_deg_ccw_viewing_transform(self) -> None:
         # 90 CCW rotation matrix
+        # A real full-frame rotation of a 4:3 image, taken from the archive.
+        # The numbers have to be consistent with each other: the result
+        # viewport must land inside the source frame. The previous version of
+        # this test paired k=1.113 with an aspect of 1.12, which maps to a
+        # box 1077 pixels tall in an 864-pixel frame -- impossible, and it
+        # passed, because nothing checked.
         rot_matrix = [
-            0.0, -1.113, 0.0, 1.113,
-            1.113, 0.0, 0.0, 0.0,
+            0.0, -1.333333, 0.0, 1.333333,
+            1.333333, 0.0, 0.0, 0.0,
             0.0, 0.0, 1.0, 0.0,
             0.0, 0.0, 0.0, 1.0,
         ]
@@ -70,7 +76,7 @@ class TestDerivedMetadata:
                     {
                         "properties": {
                             "SpatialOrientationMatrix": {"decoded_value": rot_matrix},
-                            "ResultAspectRatio": {"decoded_value": 1.12},
+                            "ResultAspectRatio": {"decoded_value": 0.75},
                         }
                     }
                 ]
@@ -80,7 +86,7 @@ class TestDerivedMetadata:
         tx = derived["viewing_transform"]
         assert tx["has_transform"] is True
         assert tx["is_rotation_90_ccw"] is True
-        assert tx["aspect_ratio"] == 1.12
+        assert tx["aspect_ratio"] == 0.75
         # A rotated file's TIFF is the declared size with the axes swapped.
         assert tx["tiff_size"] == [864, 1152]
 

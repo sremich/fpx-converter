@@ -763,12 +763,30 @@ What found it was **pixel statistics** — a plain mean/stdev/clipped-fraction
 pass over the sample, which tier 3 had never had. 44% of an image pinned at
 zero is not something a photograph does.
 
-**Implication — the colour oracle exists and is cheap.** The embedded DIB
-thumbnail is stored as *uncompressed RGB*, so correlating it **per channel**
-rather than on luminance answers the colour question directly, using the same
-witness the geometry work already relies on. Both are now in
-`scripts/tier3_sample.py`. After the fix the two PhotoYCC files correlate
-0.86–0.95 per channel with 0% clipping; before it, 0.36–0.89.
+**Implication — the colour oracle exists, but not where I first put it.**
+The embedded DIB thumbnail is stored as *uncompressed RGB*, so it can witness
+colour, using the same evidence the geometry work already relies on. My first
+attempt correlated the R, G and B channels **separately**, and that is not a
+colour check: Pearson correlation is invariant under any per-channel affine
+map, so a wrong gain or a wrong neutral point scores exactly as well as a
+correct decode. Measured on this corpus, that version passed a decode with the
+wrong PhotoYCC neutral — *half of the very bug it was written for* — passed a
+fully desaturated decode, and passed one with red and blue swapped. It caught
+the double conversion only because that also clipped 42% of the pixels, which
+is not an affine map.
+
+What works is comparing **chroma**: `R-G` and `B-G`, which divide out the luma
+the greyscale oracle already covers. Three statistics, because each catches a
+different fault and none catches all three:
+
+| metric | baseline, 685 NIF_RGB files | R/B swap | desaturated | wrong neutral |
+|---|---|---|---|---|
+| correlation | 0.893 – 0.999 | −0.76 | 0.0 | unchanged |
+| scale | 0.754 – 1.179 | 0.47 / 1.32 | 0.0 | unchanged |
+| offset | −17.1 – +9.7 | −39 – +42 | unchanged | −50 – −53 |
+
+Gates sit outside the observed baseline in every case, and all four faults
+were re-injected into the decoder and confirmed to fail the run.
 
 Two smaller lessons in the same defect:
 

@@ -205,12 +205,35 @@ def source_crop_box(
     improved correlation with the thumbnail on every one of them, mean +0.56,
     min +0.18, and the worst post-crop correlation is 0.981.
     """
-    if len(matrix) != 16 or not result_aspect or result_aspect <= 0:
-        return None
+    return resolve_crop_box(matrix, result_aspect, width, height)[0]
+
+
+def resolve_crop_box(
+    matrix: list[float],
+    result_aspect: float | None,
+    width: int,
+    height: int,
+) -> tuple[tuple[int, int, int, int] | None, str]:
+    """`(box, reason)`. The reason is why no box, and it is the whole point.
+
+    `(None, "")` means the result really is the full frame. `(None, reason)`
+    means the geometry could not be resolved -- which is a different answer
+    and must not be written to a file as though it were the first.
+
+    Collapsing the two is the defect that keeps coming back in this module:
+    a matrix whose viewport lands outside the frame, or whose scale is zero,
+    used to return a bare None and ship the full frame in both trees with an
+    empty note. It is the same shape as the bug that shipped 14 rotated
+    photos uncropped, one layer further down.
+    """
+    if len(matrix) != 16:
+        return None, f"expected a 4x4 matrix, got {len(matrix)} values"
+    if not result_aspect or result_aspect <= 0:
+        return None, f"no usable ResultAspectRatio ({result_aspect})"
     if width <= 0 or height <= 0:
         # No declared size: there is nothing to resolve the normalised
         # coordinates into. Refusing beats inventing a box.
-        return None
+        return None, f"no declared size ({width}x{height})"
 
     m0, m1, _m2, m3 = matrix[0:4]
     m4, m5, _m6, m7 = matrix[4:8]
@@ -228,12 +251,15 @@ def source_crop_box(
     box_h = round((max(ys) - min(ys)) * height)
 
     if box_w < 1 or box_h < 1:
-        return None
+        return None, f"degenerate box {box_w}x{box_h}"
     # A box outside the frame means the matrix was misread. Refuse, so it
     # reports as unsupported rather than silently cropping to the wrong
     # pixels. One pixel of slack absorbs the rounding above.
     if left < -1 or top < -1 or left + box_w > width + 1 or top + box_h > height + 1:
-        return None
+        return None, (
+            f"viewport maps to ({left}, {top}) {box_w}x{box_h}, outside the "
+            f"{width}x{height} frame"
+        )
 
     left = max(0, left)
     top = max(0, top)
@@ -248,8 +274,8 @@ def source_crop_box(
     # audit. The threshold is a pixel on each axis, not a fraction: at these
     # sizes anything larger would start discarding real crops.
     if left <= 1 and top <= 1 and box_w >= width - 1 and box_h >= height - 1:
-        return None
-    return (left, top, right, bottom)
+        return None, ""
+    return (left, top, right, bottom), ""
 
 
 def rotate_box_90_ccw(box: tuple[int, int, int, int], width: int) -> tuple[int, int, int, int]:
@@ -292,32 +318,6 @@ class OutputGeometry:
         return (right - left, bottom - top)
 
 
-def _geometry_is_derivable(
-    matrix: list[float],
-    result_aspect: float | None,
-    width: int,
-    height: int,
-) -> bool:
-    """Can a crop box be resolved from this matrix at all?
-
-    An exactly-identical matrix needs nothing resolved -- the result is the
-    source. Anything else needs both `ResultAspectRatio` and a declared size,
-    and without them the honest answer is "unknown", not "no crop".
-
-    The identity test here is exact, deliberately. `classify_orientation_matrix`
-    allows 2% so it can name the shape of a matrix, but within that tolerance
-    the label is unreliable: three files in this corpus classify as identity
-    and carry a real crop, one of them cutting a quarter of the frame. The box is
-    the authority, so a matrix that is only nearly identity still has to be
-    resolved rather than assumed away. Three files in this corpus are exactly
-    that case.
-    """
-    identity = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
-    if len(matrix) == 16 and all(abs(a - b) < 1e-6 for a, b in zip(matrix, identity, strict=True)):
-        return True
-    return bool(result_aspect) and result_aspect > 0 and width > 0 and height > 0
-
-
 def output_geometry(
     matrix: list[float] | None,
     result_aspect: float | None,
@@ -329,36 +329,65 @@ def output_geometry(
     Rotation and crop are independent: 14 of this corpus's 22 rotated files
     are also cropped. Treating "is it a rotation?" as the whole question is
     what dropped those crops.
+
+    Every path that cannot resolve the geometry returns `unsupported` with a
+    reason. That is not a nicety -- an unresolvable transform and a file with
+    no transform produce the same pixels, so if they also produce the same
+    report there is nothing left that could tell them apart. The validator
+    takes its expectation from this function too, so it would agree with
+    whatever came out.
     """
+    IDENTITY_MATRIX = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+
     if matrix is None:
-        return OutputGeometry(status=TRANSFORM_ABSENT, tiff_size=(width, height))
+        # No orientation matrix means identity -- but `ResultAspectRatio` can
+        # still narrow the viewport, and that is a crop. Resolving it against
+        # the identity matrix is the honest reading; ignoring the term
+        # because the matrix was absent is how a crop goes missing.
+        if not result_aspect or width <= 0 or height <= 0:
+            return OutputGeometry(status=TRANSFORM_ABSENT, tiff_size=(width, height))
+        box, reason = resolve_crop_box(IDENTITY_MATRIX, result_aspect, width, height)
+        if reason:
+            return OutputGeometry(
+                status=TRANSFORM_UNSUPPORTED,
+                note=f"no orientation matrix, and the declared aspect {reason}",
+                tiff_size=(width, height),
+            )
+        return OutputGeometry(
+            status=TRANSFORM_CROP if box else TRANSFORM_ABSENT,
+            tiff_size=(width, height),
+            crop_box=box,
+        )
 
     status, note = classify_orientation_matrix(matrix)
 
     if status == TRANSFORM_UNSUPPORTED:
         return OutputGeometry(status=status, note=note, matrix=matrix, tiff_size=(width, height))
 
-    # Whether a crop is derivable at all is a separate question from whether
-    # there is one. `source_crop_box` returns None for both "no crop" and
-    # "cannot tell", and only the crop branch used to distinguish them -- so a
-    # rotated file with no usable `ResultAspectRatio` shipped rotated and
-    # uncropped, with an empty note, and the validator's expectation agreed
-    # with the output because both came from here. Nothing would have caught
-    # it. No file in this corpus is missing the term today; that is a fact
-    # about the corpus, not a property of the format.
-    if not _geometry_is_derivable(matrix, result_aspect, width, height):
+    # An *exactly* identical matrix with no aspect needs nothing resolved:
+    # the result is the source. Anything else does. The classifier's 2%
+    # tolerance is too loose to lean on here -- three files in this corpus
+    # classify as identity and carry a real crop, one cutting a quarter of
+    # the frame -- so only an exact match takes this exit.
+    exactly_identity = all(
+        abs(a - b) < 1e-6 for a, b in zip(matrix, IDENTITY_MATRIX, strict=True)
+    )
+    if exactly_identity and not result_aspect:
+        return OutputGeometry(
+            status=TRANSFORM_IDENTITY, matrix=matrix, tiff_size=(width, height)
+        )
+
+    box, reason = resolve_crop_box(matrix, result_aspect, width, height)
+    if reason:
         return OutputGeometry(
             status=TRANSFORM_UNSUPPORTED,
             note=(
                 f"{note + '; ' if note else ''}cannot resolve a crop box for a "
-                f"{status} matrix: ResultAspectRatio={result_aspect}, "
-                f"declared size {width}x{height}"
+                f"{status} matrix: {reason}"
             ),
             matrix=matrix,
             tiff_size=(width, height),
         )
-
-    box = source_crop_box(matrix, result_aspect, width, height)
 
     if status == TRANSFORM_ROTATE_90_CCW:
         rotated = rotate_box_90_ccw(box, width) if box else None
@@ -631,7 +660,18 @@ def _decode_tile(
                     # greyscale.
                     tile_im.draft("YCbCr", tile_im.size)
                     tile_im.load()
-                    return _photoycc_to_rgb(tile_im.convert("YCbCr"))
+                    if tile_im.mode != "YCbCr":
+                        # draft() is a request, not a guarantee. A
+                        # single-component (greyscale) JPEG stays in mode "L",
+                        # and `convert("YCbCr")` would then *fabricate* chroma
+                        # at 128 -- which this transform turns into a strong
+                        # green cast on what was a neutral tile. Refuse
+                        # rather than invent.
+                        raise DecoderError(
+                            f"PhotoYCC tile decoded as mode {tile_im.mode!r}, not YCbCr; "
+                            f"its stored components are not recoverable"
+                        )
+                    return _photoycc_to_rgb(tile_im)
                 tile_im.load()
                 return tile_im.convert("RGB")
         except DecoderError:

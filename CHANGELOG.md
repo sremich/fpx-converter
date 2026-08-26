@@ -19,9 +19,15 @@ commit, then tag.
   clipped to zero** — past every automated check in the project, because the
   geometry was perfect and the thumbnail oracle folds both images to
   greyscale before correlating. Found by a new pixel-statistics pass in tier
-  3. The two files now correlate 0.86–0.95 per channel with 0% clipping.
-  A per-channel correlation against the same embedded DIB thumbnail is now
-  part of tier 3, and *is* a colour oracle; the greyscale one never was.
+  3. The two files now decode with 0% clipping and chroma that tracks the
+  thumbnail. Tier 3 gained a colour check against the same embedded DIB —
+  comparing **chroma** (`R-G`, `B-G`), not each channel separately, because
+  per-channel correlation is invariant under any per-channel affine map and
+  so scores a wrong gain or a wrong neutral point exactly as well as a
+  correct decode. Verified by re-injecting four faults into the decoder and
+  confirming the run fails on each: the double conversion, the wrong C2
+  neutral, a fully desaturated decode, and red/blue swapped. It is still not
+  a substitute for looking: the tier-4 eyeball at 1.0.0 stands.
 - **`DateTimeOriginal` is no longer invented from a coarse folder name.** Any
   folder that parsed produced a capture date, using the first day of the
   range and the hour, minute and second of the Kodak import batch. Over the

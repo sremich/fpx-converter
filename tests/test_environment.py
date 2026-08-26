@@ -19,6 +19,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+#: Kodak's camera-generated filenames. Not captions -- the absence of one.
+_CAMERA_NAME = re.compile(r"(?i)(dcp|dsc|dcs|img|pic|mvc|p)[_-]?\d+")
+
 
 def test_version_file_is_three_part() -> None:
     """VERSION is the single source of truth; CI refuses tags that disagree."""
@@ -151,8 +154,8 @@ def test_no_developer_home_paths_are_hardcoded() -> None:
     assert not offenders, f"hardcoded home-directory paths: {offenders}"
 
 
-def test_no_real_album_name_is_tracked_in_git() -> None:
-    """No album folder name from the private archive appears in a tracked file.
+def test_no_personal_name_from_the_archive_is_tracked_in_git() -> None:
+    """No album name and no human-authored filename appears in a tracked file.
 
     Checked against `source-files/manifest.json` — the actual list — rather
     than against a hand-written pattern list. That distinction matters: a
@@ -182,9 +185,43 @@ def test_no_real_album_name_is_tracked_in_git() -> None:
         pytest.skip("no local manifest; this guard only applies where the archive is")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    albums = {a for e in manifest.get("entries", []) for a in e.get("albums", []) if a}
-    # Distinctive = more than one word, or containing a digit.
-    distinctive = {a for a in albums if len(a.split()) > 1 or any(c.isdigit() for c in a)}
+    entries = manifest.get("entries", [])
+
+    personal = {a for e in entries for a in e.get("albums", []) if a}
+    # Human-authored filenames too, not only albums. `CLAUDE.md` bans
+    # "personal filenames, album names, or photo captions", and it also says
+    # filenames ARE the captions -- "the only human-authored content in the
+    # archive". A guard that covered albums alone left 109 of the 611 stems
+    # in this manifest unprotected, which is most of the actual captions.
+    fixture_stems = {
+        path.name.split(".")[0].lower()
+        for path in (REPO_ROOT / "tests" / "fixtures").glob("*")
+        if path.is_file()
+    }
+    for entry in entries:
+        if not entry.get("preferred_name_is_human_authored"):
+            continue
+        stem = entry.get("preferred_name", "").split(".")[0].strip()
+        if not stem:
+            continue
+        # A camera-generated name carries no human intent -- it is the
+        # opposite of a caption, and the codebase uses one as the worked
+        # example of exactly that. The manifest's human-authored flag says
+        # True for a few of them, so the pattern is checked here rather than
+        # trusted from the flag.
+        if _CAMERA_NAME.fullmatch(stem):
+            continue
+        # A committed fixture is the sanctioned exception: Kodak stock
+        # samples, not family photos. Some of them are also in the archive,
+        # which is why their names appear in both places.
+        if stem.lower() in fixture_stems:
+            continue
+        personal.add(stem)
+
+    # Distinctive = more than one word, or containing a digit. A single
+    # dictionary word is excluded: some folders are named things like
+    # "Sample", and banning that string from the codebase would be absurd.
+    distinctive = {s for s in personal if len(s.split()) > 1 or any(c.isdigit() for c in s)}
 
     # splitlines, not split: a tracked path containing a space would
     # otherwise be torn into fragments and never opened.
@@ -196,7 +233,7 @@ def test_no_real_album_name_is_tracked_in_git() -> None:
         check=True,
     ).stdout.splitlines()
 
-    folded = [(album, album.lower()) for album in distinctive]
+    folded = [(name, name.lower()) for name in distinctive]
     offenders: list[str] = []
     for rel in tracked:
         path = REPO_ROOT / rel
@@ -205,11 +242,14 @@ def test_no_real_album_name_is_tracked_in_git() -> None:
         except (OSError, UnicodeDecodeError):
             # Binary or unreadable: nothing to match a folder name against.
             continue
-        for album, needle in folded:
+        for name, needle in folded:
             if needle in text:
-                offenders.append(f"{rel}: {album!r}")
+                # Report the file and the length only. Printing the string
+                # would put the very thing this test exists to keep out of
+                # git into a CI log.
+                offenders.append(f"{rel}: a {len(name)}-character personal name")
 
     assert not offenders, (
-        "real album names from the archive are committed to git "
-        f"(CLAUDE.md forbids this): {sorted(offenders)}"
+        "album names or human-authored filenames from the archive are committed "
+        f"to git (CLAUDE.md forbids this): {sorted(offenders)}"
     )

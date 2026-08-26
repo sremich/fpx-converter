@@ -82,31 +82,93 @@ def pixel_stats(image) -> tuple[float, float, float]:
     return float(arr.mean()), float(arr.std()), clipped
 
 
-def channel_correlation(image, thumb) -> list[float]:
-    """Per-channel correlation with the embedded DIB thumbnail.
+#: Gates for `chroma_agreement`, calibrated against the 685 NIF_RGB files in
+#: this corpus and checked against deliberately broken decodes. Baseline
+#: spread, then the value each fault produces:
+#:
+#:   metric        baseline (685 files)      R/B swap   greyscale   wrong neutral
+#:   correlation   0.893 .. 0.999            -0.76      0.0         unchanged
+#:   scale         0.754 .. 1.179            0.47/1.32  0.0         unchanged
+#:   offset        -17.1 .. +9.7             -39 .. +42 unchanged   -50 .. -53
+#:
+#: All three are needed. Correlation catches a swap, scale catches a lost or
+#: exaggerated chroma, and offset catches a wrong neutral point -- which is
+#: half of the bug this release exists to fix and which the other two cannot
+#: see, because a constant shift leaves both unchanged.
+CHROMA_MIN_CORRELATION = 0.5
+CHROMA_SCALE_RANGE = (0.45, 2.2)
+CHROMA_MAX_OFFSET = 30.0
 
-    This is the colour oracle. `thumbnail.compute_image_correlation` folds
-    both images to greyscale before correlating, so it witnesses framing and
-    orientation and says nothing whatever about colour -- a file decoded with
-    the wrong chroma transform scores just as well as a correct one. The DIB
-    itself is stored as uncompressed RGB and was written by the same software
-    that wrote the pixels, so correlating the channels separately does answer
-    the colour question.
 
-    It found a real one immediately: both PhotoYCC files were being converted
-    twice and came out solidly green, having passed every other check in the
-    project.
+def _chroma(image) -> tuple[np.ndarray, np.ndarray]:
+    """`(R-G, B-G)` at 64x64. Chroma, with luma divided out."""
+    arr = np.asarray(image.resize((64, 64)).convert("RGB"), dtype=np.float32)
+    return arr[:, :, 0] - arr[:, :, 1], arr[:, :, 2] - arr[:, :, 1]
+
+
+def chroma_agreement(image, thumb) -> dict[str, float]:
+    """How the output's colour compares with the embedded DIB thumbnail.
+
+    This is the colour check. `thumbnail.compute_image_correlation` folds both
+    images to greyscale before correlating, so it witnesses framing and
+    orientation and says nothing whatever about colour. The DIB itself is
+    stored as uncompressed RGB by the same software that wrote the pixels, so
+    it can answer the colour question -- but only if it is asked properly.
+
+    Correlating the R, G and B channels *separately* is not asking properly,
+    and that was this function's first form. Pearson correlation is invariant
+    under any per-channel affine map, so a wrong gain or a wrong neutral point
+    scores exactly as well as a correct decode. Measured on this corpus, that
+    version passed a decode with the wrong PhotoYCC neutral, passed a fully
+    desaturated decode, and passed one with red and blue swapped. It caught
+    the shipped double-conversion bug only because that also clipped 42% of
+    the pixels -- which is not an affine map, and is not what was being
+    tested.
+
+    Comparing chroma directly fixes that: `R-G` and `B-G` remove the luma the
+    greyscale oracle already covers and leave the part it cannot see.
+    Correlation, scale and offset are reported separately because each
+    catches a different fault; see the constants above for the numbers.
+
+    It is still not an eye. A 96-pixel thumbnail cannot settle whether a
+    photograph looks right, and the tier-4 pass at 1.0.0 is not optional
+    because this exists.
     """
-    a = np.asarray(image.resize((64, 64)).convert("RGB"), dtype=np.float32)
-    b = np.asarray(thumb.resize((64, 64)).convert("RGB"), dtype=np.float32)
-    out = []
-    for channel in range(3):
-        x, y = a[:, :, channel].ravel(), b[:, :, channel].ravel()
-        if x.std() < 1e-6 or y.std() < 1e-6:
-            out.append(1.0)  # a flat channel correlates with nothing; not a fault
+    out: dict[str, float] = {}
+    image_chroma, thumb_chroma = _chroma(image), _chroma(thumb)
+    for name, x, y in zip(("cr", "cb"), image_chroma, thumb_chroma, strict=True):
+        sx, sy = float(x.std()), float(y.std())
+        # A flat chroma channel is the strongest colour-fault signal there is
+        # -- fully desaturated, or fully clipped. The first version scored it
+        # 1.0 and called it "not a fault", which made the one unambiguous
+        # case the one guaranteed to pass.
+        if sy < 1e-6:
+            # The *thumbnail* is flat: a genuinely monochrome subject. Nothing
+            # to compare against, so only the output being non-flat is odd.
+            out[f"{name}_corr"] = 1.0
+            out[f"{name}_scale"] = 1.0 if sx < 1e-6 else float("inf")
+        elif sx < 1e-6:
+            out[f"{name}_corr"] = 0.0
+            out[f"{name}_scale"] = 0.0
         else:
-            out.append(float(np.corrcoef(x, y)[0, 1]))
+            out[f"{name}_corr"] = float(np.corrcoef(x.ravel(), y.ravel())[0, 1])
+            out[f"{name}_scale"] = sx / sy
+        out[f"{name}_offset"] = float(x.mean() - y.mean())
     return out
+
+
+def chroma_faults(metrics: dict[str, float]) -> list[str]:
+    """Which gates a `chroma_agreement` result trips, by name. Empty is good."""
+    faults = []
+    for name in ("cr", "cb"):
+        if metrics[f"{name}_corr"] < CHROMA_MIN_CORRELATION:
+            faults.append(f"{name} correlation {metrics[f'{name}_corr']:.2f}")
+        scale = metrics[f"{name}_scale"]
+        if not CHROMA_SCALE_RANGE[0] <= scale <= CHROMA_SCALE_RANGE[1]:
+            faults.append(f"{name} scale {scale:.2f}")
+        if abs(metrics[f"{name}_offset"]) > CHROMA_MAX_OFFSET:
+            faults.append(f"{name} offset {metrics[f'{name}_offset']:+.1f}")
+    return faults
 
 
 def main() -> int:
@@ -208,10 +270,10 @@ def main() -> int:
     for r in warned:
         print(f"  WARNING {r.warnings[:1]}")  # type: ignore[attr-defined]
 
-    # --- pixel statistics -------------------------------------------------
+    # --- pixel statistics and colour ---------------------------------------
     print("\npixel statistics and colour over the sample:")
-    means, stdevs, flat, suspect_clip, off_colour = [], [], [], [], []
-    worst_channel = 1.0
+    means, stdevs, flat, suspect_clip, off_colour, no_thumb = [], [], [], [], [], []
+    worst_corr, worst_offset = 1.0, 0.0
     for sha in picked:
         path = store / by_sha[sha]["store_name"]
         dec = decoder.decode_fpx(path)
@@ -223,40 +285,49 @@ def main() -> int:
 
         try:
             thumb = thumbnail.extract_thumbnail(path)
-        except Exception:  # noqa: BLE001
-            if clip > 0.5:
-                suspect_clip.append(f"{sha[:8]} ({clip:.0%}, no thumbnail to check against)")
+        except Exception as exc:  # noqa: BLE001
+            # Counted and printed, never skipped in silence. A file the colour
+            # check could not examine is a gap in the run, not a pass.
+            no_thumb.append(f"{sha[:8]} ({type(exc).__name__})")
             continue
 
         # Against the cropped image, not the full frame: the thumbnail shows
         # the composition somebody framed, so a cropped file's full frame
-        # correlates badly with it for reasons that have nothing to do with
-        # colour. All 9 cropped files in the sample scored 0.15-0.65 that way
-        # and 0.98-1.00 this way -- which is also a per-channel confirmation
-        # of the crop geometry, independent of the greyscale oracle.
-        channels = channel_correlation(dec.cropped_image(), thumb)
-        worst_channel = min(worst_channel, min(channels))
-        if min(channels) < 0.6:
-            off_colour.append(f"{sha[:8]} per-channel {[round(c, 2) for c in channels]}")
-        # Heavy clipping is a fault only when the thumbnail disagrees. Some
+        # disagrees with it for reasons that have nothing to do with colour.
+        metrics = chroma_agreement(dec.cropped_image(), thumb)
+        worst_corr = min(worst_corr, metrics["cr_corr"], metrics["cb_corr"])
+        worst_offset = max(
+            worst_offset, abs(metrics["cr_offset"]), abs(metrics["cb_offset"])
+        )
+        faults = chroma_faults(metrics)
+        if faults:
+            off_colour.append(f"{sha[:8]}: {', '.join(faults)}")
+
+        # Heavy clipping is a fault only when the thumbnail disagrees: some
         # photographs really are blown out, and their own thumbnail says so.
-        if clip > 0.5:
+        # The gate is 25%, not 50% -- the double-conversion bug this check was
+        # written for clipped 42%, and a threshold its own motivating defect
+        # slides under is decoration.
+        if clip > 0.25:
             _, _, thumb_clip = pixel_stats(thumb)
             if thumb_clip < clip / 2:
                 suspect_clip.append(f"{sha[:8]} ({clip:.0%} vs thumbnail {thumb_clip:.0%})")
     print(f"  mean brightness  {min(means):.1f} .. {max(means):.1f}")
     print(f"  stdev            {min(stdevs):.1f} .. {max(stdevs):.1f}")
     print(f"  median stdev     {statistics.median(stdevs):.1f}")
-    print(f"  worst per-channel correlation with the thumbnail: {worst_channel:.3f}")
+    print(f"  worst chroma correlation {worst_corr:.3f} (gate {CHROMA_MIN_CORRELATION})")
+    print(f"  worst chroma offset      {worst_offset:+.1f} (gate {CHROMA_MAX_OFFSET})")
     if flat:
         failures.append(f"near-flat images (a fill-tile fallback would look like this): {flat}")
     if suspect_clip:
         failures.append(f"clipped far more than their own thumbnail: {suspect_clip}")
     if off_colour:
         failures.append(f"colour disagrees with the embedded thumbnail: {off_colour}")
+    if no_thumb:
+        failures.append(f"no thumbnail, so colour could not be checked at all: {no_thumb}")
     print(
         f"  near-flat: {len(flat)}   suspect clipping: {len(suspect_clip)}   "
-        f"off-colour: {len(off_colour)}"
+        f"off-colour: {len(off_colour)}   unchecked: {len(no_thumb)}"
     )
 
     # --- thumbnail oracle, geometry only ----------------------------------

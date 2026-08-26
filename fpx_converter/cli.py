@@ -1,6 +1,6 @@
 """Command line entry point: `python -m fpx_converter <command>`.
 
-Commands available at 0.4.0:
+Commands (the version lives in `VERSION`; `--version` prints it):
 - `scan`: walk the source archive read-only and write `manifest.json`.
 - `ingest`: copy one file per distinct hash into the local store.
 - `verify`: re-hash the local store against the manifest.
