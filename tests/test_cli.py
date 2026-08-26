@@ -278,6 +278,68 @@ class TestThumbnailCLI:
         assert "read-only source archive" in capsys.readouterr().err
 
 
+class TestConvertCLI:
+    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+        assert main(["convert", "--manifest", str(tmp_path / "nope.json")]) == 1
+
+    def test_converts_fixtures_to_dual_output(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "output"
+        argv = [
+            "convert",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+        ]
+        assert main(argv) == 0
+        archive_tifs = list((dest / "archive").rglob("*.tif"))
+        sharing_jpgs = list((dest / "sharing").rglob("*.jpg"))
+        archive_fpxs = list((dest / "archive").rglob("*.fpx"))
+        archive_sidecars = list((dest / "archive").rglob("*.fpx.json"))
+
+        assert len(archive_tifs) == 4
+        assert len(sharing_jpgs) == 4
+        assert len(archive_fpxs) == 4
+        assert len(archive_sidecars) == 4
+
+    def test_dry_run_writes_no_conversion_files(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        dest = tmp_path / "output"
+        argv = [
+            "convert",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(dest),
+            "--dry-run",
+        ]
+        assert main(argv) == 0
+        assert not (dest / "archive").exists()
+        assert not (dest / "sharing").exists()
+
+    def test_refuses_convert_dest_inside_source(self, tmp_path: Path, capsys) -> None:
+        manifest_path = tmp_path / "m.json"
+        main(scan_argv(FIXTURES, manifest_path))
+        argv = [
+            "convert",
+            "--manifest",
+            str(manifest_path),
+            "--store",
+            str(FIXTURES),
+            "--dest",
+            str(FIXTURES / "output"),
+        ]
+        assert main(argv) == 1
+        assert "read-only source archive" in capsys.readouterr().err
+
+
 def test_version_reports_the_version_file() -> None:
     from fpx_converter import __version__
 

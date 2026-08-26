@@ -1,12 +1,13 @@
 """Command line entry point: `python -m fpx_converter <command>`.
 
-Commands available at 0.3.0:
+Commands available at 0.4.0:
 - `scan`: walk the source archive read-only and write `manifest.json`.
 - `ingest`: copy one file per distinct hash into the local store.
 - `verify`: re-hash the local store against the manifest.
 - `metadata`: extract full metadata and emit raw `.fpx.json` sidecars.
 - `check-dates`: execute the automated album folder ground-truth date gate.
 - `thumbnail`: extract embedded DIB thumbnails as PNG images.
+- `convert`: execute dual output conversion (Deflate TIFF + q95 4:4:4 JPEG).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from . import manifest as manifest_mod
 from . import metadata as metadata_mod
 from . import thumbnail as thumbnail_mod
 from . import timestamps as timestamps_mod
+from . import writer as writer_mod
 
 
 def _human_mb(n: int) -> str:
@@ -285,6 +287,73 @@ def cmd_thumbnail(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_convert(args: argparse.Namespace) -> int:
+    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    if not manifest_path.is_file():
+        print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
+        return 1
+
+    manifest = manifest_mod.load(manifest_path)
+    source_root = Path(manifest["source_root"])
+    store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
+
+    output_base = (
+        Path(args.dest) if args.dest else (config.REPO_ROOT / "output")
+    )
+    dest = config.ensure_outside_source(output_base, source_root, "conversion destination")
+
+    entries = manifest.get("entries", [])
+    if args.limit and args.limit > 0:
+        entries = entries[: args.limit]
+
+    verb = "Would convert" if args.dry_run else "Converting"
+    print(f"{verb} {len(entries)} files -> {dest}")
+
+    converted = 0
+    dated_count = 0
+    undated_count = 0
+    failures: list[tuple[str, str]] = []
+
+    for idx, entry in enumerate(entries):
+        store_name = entry["store_name"]
+        fpx_path = store_dir / store_name
+        if not fpx_path.is_file():
+            alt = source_root / entry["preferred_relpath"]
+            if alt.is_file():
+                fpx_path = alt
+            else:
+                failures.append((store_name, "source file not found"))
+                continue
+
+        try:
+            res = writer_mod.write_single_entry_dual_output(
+                fpx_path=fpx_path,
+                entry=entry,
+                output_root=dest,
+                source_root=source_root,
+                dry_run=args.dry_run,
+            )
+            if res.validation_ok:
+                converted += 1
+                if res.is_undated:
+                    undated_count += 1
+                else:
+                    dated_count += 1
+            else:
+                failures.append((store_name, "; ".join(res.errors)))
+        except Exception as exc:  # noqa: BLE001
+            failures.append((store_name, str(exc)))
+
+    print(
+        f"  converted {converted} files ({dated_count} dated, {undated_count} undated)"
+    )
+    if failures:
+        for name, why in failures:
+            print(f"  FAILED {name}: {why}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fpx-converter",
@@ -354,6 +423,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_thumb.add_argument("--dest", help="output directory for thumbnails")
     p_thumb.add_argument("--dry-run", action="store_true")
     p_thumb.set_defaults(func=cmd_thumbnail)
+
+    # 7. convert
+    p_conv = sub.add_parser(
+        "convert", help="execute dual output conversion (Deflate TIFF + q95 4:4:4 JPEG)"
+    )
+    p_conv.add_argument("--manifest")
+    p_conv.add_argument("--store", help="path to ingested .fpx store directory")
+    p_conv.add_argument("--dest", help="output root directory (defaults to output/)")
+    p_conv.add_argument("--limit", type=int, help="limit number of files to convert")
+    p_conv.add_argument("--dry-run", action="store_true")
+    p_conv.set_defaults(func=cmd_convert)
 
     return parser
 

@@ -403,16 +403,18 @@ def build_sidecar_dict(
     """Assemble the complete raw JSON sidecar document matching requirement 17."""
     return {
         "sidecar_version": 1,
-        "sha256": manifest_entry["sha256"],
-        "size": manifest_entry["size"],
-        "store_name": manifest_entry["store_name"],
-        "preferred_name": manifest_entry["preferred_name"],
-        "preferred_relpath": manifest_entry["preferred_relpath"],
-        "preferred_name_is_human_authored": manifest_entry["preferred_name_is_human_authored"],
-        "albums": manifest_entry["albums"],
-        "trees": manifest_entry["trees"],
-        "duplicate_count": manifest_entry["duplicate_count"],
-        "contributing_sources": manifest_entry["sources"],
+        "sha256": manifest_entry.get("sha256", extracted.sha256),
+        "size": manifest_entry.get("size", 0),
+        "store_name": manifest_entry.get("store_name", extracted.store_name),
+        "preferred_name": manifest_entry.get("preferred_name", extracted.store_name),
+        "preferred_relpath": manifest_entry.get("preferred_relpath", extracted.store_name),
+        "preferred_name_is_human_authored": manifest_entry.get(
+            "preferred_name_is_human_authored", False
+        ),
+        "albums": manifest_entry.get("albums", []),
+        "trees": manifest_entry.get("trees", []),
+        "duplicate_count": manifest_entry.get("duplicate_count", 1),
+        "contributing_sources": manifest_entry.get("sources", []),
         "stream_inventory": extracted.stream_inventory,
         "property_sets": extracted.property_sets,
         "extension_storages": extracted.extension_storages,
