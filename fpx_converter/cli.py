@@ -17,7 +17,7 @@ import datetime
 import sys
 from pathlib import Path
 
-from . import __version__, config, scan
+from . import __version__, config, naming, scan
 from . import ingest as ingest_mod
 from . import manifest as manifest_mod
 from . import metadata as metadata_mod
@@ -314,6 +314,17 @@ def cmd_convert(args: argparse.Namespace) -> int:
     undated_count = 0
     failures: list[tuple[str, str]] = []
 
+    # Names are resolved for the whole batch up front, from the manifest
+    # alone, so two same-named photos in one album cannot resolve to the
+    # same output file -- and so a resumed run assigns identical names.
+    stems = naming.assign_output_stems(
+        [
+            (e["sha256"], writer_mod.primary_album(e), e.get("preferred_name", e["store_name"]))
+            for e in entries
+        ]
+    )
+    claimed: set[Path] = set()
+
     for entry in entries:
         store_name = entry["store_name"]
         fpx_path = store_dir / store_name
@@ -332,6 +343,8 @@ def cmd_convert(args: argparse.Namespace) -> int:
                 output_root=dest,
                 source_root=source_root,
                 dry_run=args.dry_run,
+                stem=stems.get(entry["sha256"]),
+                claimed=claimed,
             )
             if res.validation_ok:
                 converted += 1

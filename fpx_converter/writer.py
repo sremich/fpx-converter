@@ -105,30 +105,35 @@ def format_date_prefix(ts_dict: dict[str, Any]) -> tuple[str, bool]:
     return "0000-00-00_000000", True
 
 
+def primary_album(entry: dict[str, Any]) -> str:
+    """The album folder an entry is filed under. `Root` when it has none."""
+    for album in entry.get("albums", []):
+        if album:
+            return str(album)
+    return "Root"
+
+
 def build_output_relpath(
     entry: dict[str, Any],
     derived: dict[str, Any],
     ext: str,
+    stem: str | None = None,
 ) -> Path:
-    """Construct <album>/<YYYY-MM-DD_HHMMSS>_<originalname>.<ext> relative path."""
-    # 1. Primary album folder
-    albums = entry.get("albums", [])
-    album_name = "Root"
-    for a in albums:
-        if a:
-            album_name = a
-            break
+    """Construct the `<album>/<YYYY-MM-DD_HHMMSS>_<originalname>.<ext>` relative path.
 
-    # 2. Date prefix
-    ts_dict = derived.get("timestamps", {})
-    date_prefix, _is_undated = format_date_prefix(ts_dict)
-
-    # 3. Base original name (stripped of .fpx suffix)
-    pref_name = entry.get("preferred_name", "image.fpx")
-    base_stem = naming.strip_fpx_suffix(pref_name)
-
-    filename = f"{date_prefix}_{base_stem}.{ext}"
-    return Path(album_name) / filename
+    `stem` overrides the name taken from the manifest entry, and is how
+    `naming.assign_output_stems` keeps two same-named photos in one album
+    from resolving to the same file. Callers converting more than one entry
+    should always pass it.
+    """
+    album_name = primary_album(entry)
+    date_prefix, _is_undated = format_date_prefix(derived.get("timestamps", {}))
+    base_stem = (
+        stem
+        if stem is not None
+        else naming.strip_fpx_suffix(entry.get("preferred_name", "image.fpx"))
+    )
+    return Path(album_name) / f"{date_prefix}_{base_stem}.{ext}"
 
 
 def build_exiftool_args(
@@ -249,8 +254,15 @@ def write_single_entry_dual_output(
     source_root: Path,
     exiftool_path: str | Path | None = None,
     dry_run: bool = False,
+    stem: str | None = None,
+    claimed: set[Path] | None = None,
 ) -> OutputItemResult:
-    """Convert a single .fpx entry to dual output (TIFF and JPEG) with sidecar and tags."""
+    """Convert a single .fpx entry to dual output (TIFF and JPEG) with sidecar and tags.
+
+    `stem` comes from `naming.assign_output_stems`; `claimed` is a set the
+    caller carries across the batch so a path collision raises instead of
+    quietly overwriting a photo that was already converted.
+    """
     output_root = config.ensure_outside_source(output_root, source_root, "output root")
     store_name = entry["store_name"]
     pref_name = entry.get("preferred_name", store_name)
@@ -261,10 +273,10 @@ def write_single_entry_dual_output(
     derived = meta.derived
 
     # 2. Compute relative and absolute file paths
-    tif_rel = build_output_relpath(entry, derived, "tif")
-    jpg_rel = build_output_relpath(entry, derived, "jpg")
-    fpx_rel = build_output_relpath(entry, derived, "fpx")
-    sidecar_rel = build_output_relpath(entry, derived, "fpx.json")
+    tif_rel = build_output_relpath(entry, derived, "tif", stem)
+    jpg_rel = build_output_relpath(entry, derived, "jpg", stem)
+    fpx_rel = build_output_relpath(entry, derived, "fpx", stem)
+    sidecar_rel = build_output_relpath(entry, derived, "fpx.json", stem)
 
     archive_dir = output_root / "archive"
     sharing_dir = output_root / "sharing"
@@ -277,6 +289,20 @@ def write_single_entry_dual_output(
     _date_pfx, is_undated = format_date_prefix(derived.get("timestamps", {}))
     date_source = derived.get("timestamps", {}).get("date_source", "none")
     errors: list[str] = []
+
+    # 2b. Refuse to write over a path this run already produced. The stems
+    # assigned from the manifest should make this unreachable; it is here
+    # because the failure it guards against is silent, and losing a photo to
+    # a name clash is not a failure this archive can notice later.
+    if claimed is not None:
+        for path in (tif_path, jpg_path, fpx_copy_path, sidecar_path):
+            if path in claimed:
+                raise WriterError(
+                    f"output path collision: {path} was already written by another "
+                    f"entry in this run (this entry is {entry.get('sha256', '?')[:8]}). "
+                    f"Refusing to overwrite it."
+                )
+        claimed.update({tif_path, jpg_path, fpx_copy_path, sidecar_path})
 
     if not dry_run:
         tif_path.parent.mkdir(parents=True, exist_ok=True)

@@ -136,3 +136,42 @@ def assign_store_names(groups: list[tuple[str, str]]) -> dict[str, str]:
         taken.add(candidate.lower())
         assigned[sha] = candidate
     return assigned
+
+
+def assign_output_stems(groups: list[tuple[str, str, str]]) -> dict[str, str]:
+    """Map sha256 -> unique output stem, scoped per album.
+
+    `groups` is a list of `(sha256, album, preferred_name)` triples.
+
+    Two distinct hashes can land in the same album under the same preferred
+    name — Kodak cameras reset their numbering, and this corpus already
+    contains cross-album filename collisions between genuinely different
+    photos. The output path also folds in a date prefix that two files in
+    one album usually share, so the name alone is what keeps them apart.
+    Without this, the second file silently overwrites the first and the
+    conversion reports success for both.
+
+    Resolved from the manifest alone, with no metadata extraction and no
+    filesystem access, so a resumed run assigns exactly the same names as
+    the run it resumed: the decision must not depend on which files happen
+    to have been converted already.
+
+    Ordering is by hash, so the first claimant of a bare name is stable
+    regardless of traversal order — the same reasoning as
+    `assign_store_names`, and the same ordinal fallback for the case where a
+    source file is itself named `<stem>_<8 hex>`.
+    """
+    assigned: dict[str, str] = {}
+    taken: set[tuple[str, str]] = set()
+    for sha, album, preferred in sorted(groups):
+        stem = strip_fpx_suffix(preferred)
+        scope = album.lower()
+        if (scope, stem.lower()) in taken:
+            stem = f"{strip_fpx_suffix(preferred)}_{sha[:8]}"
+            ordinal = 2
+            while (scope, stem.lower()) in taken:
+                stem = f"{strip_fpx_suffix(preferred)}_{sha[:8]}-{ordinal}"
+                ordinal += 1
+        taken.add((scope, stem.lower()))
+        assigned[sha] = stem
+    return assigned

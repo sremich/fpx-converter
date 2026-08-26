@@ -228,3 +228,28 @@ def test_year_only_album_gets_no_datetime_original(tmp_path: Path) -> None:
             # The import stamp is still recorded -- in the field for it.
             assert exif.get("Exif.Photo.DateTimeDigitized") == "1998:02:28 11:34:38"
 
+
+
+def test_claimed_paths_refuse_a_repeat_write(tmp_path: Path) -> None:
+    """A second entry resolving to the same path must raise, not overwrite.
+
+    Belt and braces behind `naming.assign_output_stems`: if a collision ever
+    does reach the writer, losing a photo to it would leave no trace -- the
+    run would report both files converted.
+    """
+    entry = {
+        "store_name": "Clouds01.fpx",
+        "preferred_name": "Clouds01.fpx",
+        "albums": ["Album"],
+        "sha256": "a" * 64,
+    }
+    common = {
+        "entry": entry,
+        "output_root": tmp_path / "out",
+        "source_root": FIXTURES,
+        "dry_run": True,
+        "claimed": set(),
+    }
+    writer.write_single_entry_dual_output(fpx_path=FIXTURES / "Clouds01.fpx", **common)
+    with pytest.raises(writer.WriterError, match="collision"):
+        writer.write_single_entry_dual_output(fpx_path=FIXTURES / "Clouds01.fpx", **common)

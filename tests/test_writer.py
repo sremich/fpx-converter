@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from fpx_converter import config, writer
+from fpx_converter import config, naming, writer
 
 
 class TestNamingAndPrefixes:
@@ -145,3 +145,65 @@ class TestMtimeComputationAndGuards:
                 output_root=target_inside,
                 source_root=source_root,
             )
+
+
+class TestOutputNameCollisions:
+    """Two distinct photos must never resolve to one output file.
+
+    The date prefix does not separate them -- files in one album usually
+    share it -- so the stem is the only thing keeping them apart.
+    """
+
+    def test_same_name_in_same_album_gets_distinct_stems(self) -> None:
+        sha_a = "a" * 64
+        sha_b = "b" * 64
+        stems = naming.assign_output_stems(
+            [
+                (sha_a, "Holiday Trip 2001", "DCP00247.fpx"),
+                (sha_b, "Holiday Trip 2001", "DCP00247.fpx"),
+            ]
+        )
+        assert stems[sha_a] != stems[sha_b]
+        assert len(set(stems.values())) == 2
+
+    def test_same_name_in_different_albums_keeps_both_bare(self) -> None:
+        # Different album folders already separate them, so neither name
+        # needs disfiguring with a hash.
+        sha_a, sha_b = "a" * 64, "b" * 64
+        stems = naming.assign_output_stems(
+            [
+                (sha_a, "Album One", "Picnic.fpx"),
+                (sha_b, "Album Two", "Picnic.fpx"),
+            ]
+        )
+        assert stems[sha_a] == "Picnic"
+        assert stems[sha_b] == "Picnic"
+
+    def test_assignment_is_stable_across_input_order(self) -> None:
+        # A resumed run must assign the same names as the run it resumes.
+        sha_a, sha_b = "a" * 64, "b" * 64
+        pairs = [
+            (sha_a, "Album", "Same.fpx"),
+            (sha_b, "Album", "Same.fpx"),
+        ]
+        assert naming.assign_output_stems(pairs) == naming.assign_output_stems(pairs[::-1])
+
+    def test_source_named_like_the_fallback_does_not_steal_it(self) -> None:
+        # A file literally named `Same_aaaaaaaa.fpx` claims the disambiguated
+        # name first; the next claimant must keep going rather than collide.
+        sha_a, sha_b, sha_c = "a" * 64, "b" * 64, "c" * 64
+        stems = naming.assign_output_stems(
+            [
+                (sha_a, "Album", "Same.fpx"),
+                (sha_b, "Album", "Same.fpx"),
+                (sha_c, "Album", f"Same_{sha_b[:8]}.fpx"),
+            ]
+        )
+        assert len(set(stems.values())) == 3
+
+    def test_distinct_relpaths_for_colliding_entries(self) -> None:
+        derived = {"timestamps": {"datetime_original_exif": "2001:07:04 00:00:00"}}
+        entry = {"albums": ["Album"], "preferred_name": "DCP00247.fpx"}
+        first = writer.build_output_relpath(entry, derived, "tif", "DCP00247")
+        second = writer.build_output_relpath(entry, derived, "tif", "DCP00247_bbbbbbbb")
+        assert first != second
