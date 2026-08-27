@@ -14,6 +14,8 @@ from typing import Any
 import pyexiv2
 from PIL import Image
 
+from . import outputs
+
 # TIFF compression tag 259 constants: 8 = Adobe Deflate, 32946 = PKZIP Deflate
 DEFLATE_COMPRESSION_TAGS = {8, 32946}
 
@@ -62,115 +64,143 @@ def _declared_sizes(
     return declared, crop  # type: ignore[return-value]
 
 
+def _check_image_file(
+    path: Path,
+    spec: outputs.OutputSpec,
+    declared: tuple[int, int] | None,
+    crop_box: tuple[int, int, int, int] | None,
+    errors: list[str],
+) -> tuple[int, int] | None:
+    """Format-specific header checks for one output. Returns its pixel size."""
+    with Image.open(path) as img:
+        size = img.size
+
+        if spec.fmt == "tiff":
+            comp_tag = img.tag_v2.get(259) if hasattr(img, "tag_v2") else None
+            if comp_tag not in DEFLATE_COMPRESSION_TAGS and img.info.get("compression") not in (
+                "tiff_adobe_deflate",
+                "tiff_deflate",
+            ):
+                errors.append(
+                    f"{path.name}: TIFF compression is not Deflate: "
+                    f"tag_259={comp_tag}, info={img.info}"
+                )
+        else:
+            # An unreadable sampling table is an error, not a pass. This check
+            # used to sit behind `if img.layer:`, so a JPEG whose factors
+            # could not be read validated clean -- and a 4:2:0 file would have
+            # been indistinguishable from a 4:4:4 one.
+            layer = getattr(img, "layer", None)
+            if not layer:
+                errors.append(
+                    f"{path.name}: JPEG chroma subsampling could not be verified: "
+                    "Pillow reported no component sampling table"
+                )
+            else:
+                sampling = [(comp[1], comp[2]) for comp in layer]
+                if any(sf != (1, 1) for sf in sampling):
+                    errors.append(
+                        f"{path.name}: JPEG chroma subsampling is not 4:4:4: {sampling}"
+                    )
+
+    want = spec.expected_size(declared, crop_box)
+    if want is not None and size != tuple(want):
+        errors.append(f"{path.name} ({spec.label}) is {size}, expected {tuple(want)}")
+    if (
+        spec.framing == "cropped"
+        and crop_box is not None
+        and declared is not None
+        and size == tuple(declared)
+    ):
+        errors.append(
+            f"{path.name}: a crop {crop_box} is declared but the output is still "
+            f"the full frame {size}"
+        )
+    return size
+
+
+def validate_outputs(
+    targets: list[tuple[Path, outputs.OutputSpec]],
+    expected_derived: dict[str, Any],
+) -> ValidationResult:
+    """Validate every written output against the metadata that describes it.
+
+    Sizes are checked against `expected_derived` -- the metadata read from the
+    `.fpx`, computed independently of the decode that produced these files.
+    Deriving the expectation from the decoded object instead would make the
+    check unfalsifiable: if a crop silently failed to apply, that object would
+    report the full frame, the expectation would match the output, and the
+    validation would pass.
+
+    See `_declared_sizes` for the limit of that independence: this proves the
+    crop was applied, not that the box was right.
+    """
+    errors: list[str] = []
+    missing = [str(path) for path, _ in targets if not path.is_file()]
+    if missing:
+        return ValidationResult(ok=False, errors=[f"output file missing: {m}" for m in missing])
+
+    declared, crop_box = _declared_sizes(expected_derived)
+    try:
+        for path, spec in targets:
+            _check_image_file(path, spec, declared, crop_box, errors)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Image header validation failed: {exc}")
+
+    # Tags, read back with a different tool than the one that wrote them.
+    for path, _spec in targets:
+        fmt = path.suffix.upper()
+        try:
+            with pyexiv2.Image(str(path)) as meta:
+                _validate_exif_tags(meta.read_exif(), expected_derived, fmt, errors)
+                _validate_xmp_tags(meta.read_xmp(), expected_derived, fmt, errors)
+                _validate_iptc_tags(meta.read_iptc(), expected_derived, fmt, errors)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{fmt} pyexiv2 readback failed on {path.name}: {exc}")
+
+    return ValidationResult(ok=len(errors) == 0, errors=errors)
+
+
 def validate_dual_output(
     tif_path: Path,
     jpg_path: Path,
     expected_derived: dict[str, Any],
     expected_jpeg_size: tuple[int, int] | None = None,
 ) -> ValidationResult:
-    """Validate the TIFF and JPEG against each other and against the metadata.
+    """The default pair -- a full-frame Deflate TIFF and a cropped q95 JPEG.
 
-    Both sizes are checked against `expected_derived` -- the metadata read
-    from the `.fpx`, which is computed independently of the decode that
-    produced these files. The TIFF must equal the declared image size; the
-    JPEG must equal the crop box when one is declared, and the declared size
-    otherwise.
+    Kept because it names the shipped output shape, which is still what
+    `convert` writes when nothing else is asked for. `validate_outputs` is the
+    general form and takes whatever set was actually requested.
 
-    Deriving the expectation from the decoded object instead would make the
-    check unfalsifiable: if the crop silently failed to apply, that object
-    would report the full frame, the expectation would match the output, and
-    the validation would pass. `expected_jpeg_size` is therefore accepted
-    only as an override for callers that have no metadata to hand.
-
-    See `_declared_sizes` for the limit of that independence: this proves the
-    crop was applied, not that the box was right.
+    `expected_jpeg_size` overrides the JPEG expectation for callers with no
+    metadata to hand. It is an override for a reason: derive the expectation
+    from the decoded object and the check stops being able to fail.
     """
-    errors: list[str] = []
+    targets = [
+        (tif_path, outputs.OutputSpec("archive", "tiff", "full")),
+        (jpg_path, outputs.OutputSpec("sharing", "jpeg", "cropped")),
+    ]
+    if expected_jpeg_size is None:
+        return validate_outputs(targets, expected_derived)
 
-    if not tif_path.is_file():
-        return ValidationResult(ok=False, errors=[f"TIFF file missing: {tif_path}"])
+    result = validate_outputs(targets[:1], expected_derived)
+    errors = list(result.errors)
     if not jpg_path.is_file():
-        return ValidationResult(ok=False, errors=[f"JPEG file missing: {jpg_path}"])
-
-    # 1. Image dimensions & compression checks via Pillow
+        errors.append(f"output file missing: {jpg_path}")
+        return ValidationResult(ok=False, errors=errors)
+    with Image.open(jpg_path) as jpg_img:
+        jpg_size = jpg_img.size
+    if jpg_size != tuple(expected_jpeg_size):
+        errors.append(f"{jpg_path.name} is {jpg_size}, expected {tuple(expected_jpeg_size)}")
+    fmt = jpg_path.suffix.upper()
     try:
-        with Image.open(tif_path) as tif_img:
-            tif_size = tif_img.size
-            comp_tag = tif_img.tag_v2.get(259) if hasattr(tif_img, "tag_v2") else None
-            if comp_tag not in DEFLATE_COMPRESSION_TAGS and tif_img.info.get("compression") not in (
-                "tiff_adobe_deflate",
-                "tiff_deflate",
-            ):
-                errors.append(
-                    f"TIFF compression is not Deflate: tag_259={comp_tag}, info={tif_img.info}"
-                )
-
-        with Image.open(jpg_path) as jpg_img:
-            jpg_size = jpg_img.size
-            # Verify 4:4:4 chroma subsampling (all components sampling (1, 1)).
-            #
-            # An unreadable sampling table is an error, not a pass. This
-            # check used to sit behind `if jpg_img.layer:`, so a JPEG whose
-            # factors could not be read validated clean -- and a 4:2:0 file
-            # would have been indistinguishable from a 4:4:4 one.
-            layer = getattr(jpg_img, "layer", None)
-            if not layer:
-                errors.append(
-                    "JPEG chroma subsampling could not be verified: Pillow reported "
-                    "no component sampling table for this file"
-                )
-            else:
-                # layer format is list of (component_id, h_samp, v_samp, quant_table)
-                sampling_factors = [(comp[1], comp[2]) for comp in layer]
-                if any(sf != (1, 1) for sf in sampling_factors):
-                    errors.append(
-                        f"JPEG chroma subsampling is not 4:4:4: sampling={sampling_factors}"
-                    )
-
-        declared, crop_box = _declared_sizes(expected_derived)
-
-        if declared is not None and tif_size != declared:
-            errors.append(f"TIFF is {tif_size}, but the file declares {declared}")
-
-        want_jpeg = expected_jpeg_size
-        if want_jpeg is None:
-            if crop_box is not None:
-                want_jpeg = (crop_box[2] - crop_box[0], crop_box[3] - crop_box[1])
-            else:
-                want_jpeg = declared
-
-        if want_jpeg is not None:
-            if jpg_size != tuple(want_jpeg):
-                errors.append(
-                    f"JPEG is {jpg_size}, expected {tuple(want_jpeg)} (TIFF is {tif_size})"
-                )
-            if crop_box is not None and jpg_size == tif_size:
-                errors.append(
-                    f"a crop {crop_box} is declared but the JPEG is still the full "
-                    f"frame {jpg_size}"
-                )
-        elif tif_size != jpg_size:
-            errors.append(f"Dimensions mismatch: TIFF {tif_size} vs JPEG {jpg_size}")
-
+        with pyexiv2.Image(str(jpg_path)) as meta:
+            _validate_exif_tags(meta.read_exif(), expected_derived, fmt, errors)
+            _validate_xmp_tags(meta.read_xmp(), expected_derived, fmt, errors)
+            _validate_iptc_tags(meta.read_iptc(), expected_derived, fmt, errors)
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"Image header validation failed: {exc}")
-
-    # 2. Tag validation via pyexiv2 on both TIFF and JPEG
-    for img_path in (tif_path, jpg_path):
-        fmt = img_path.suffix.upper()
-        try:
-            with pyexiv2.Image(str(img_path)) as meta:
-                exif = meta.read_exif()
-                xmp = meta.read_xmp()
-                iptc = meta.read_iptc()
-
-                _validate_exif_tags(exif, expected_derived, fmt, errors)
-                _validate_xmp_tags(xmp, expected_derived, fmt, errors)
-                _validate_iptc_tags(iptc, expected_derived, fmt, errors)
-
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{fmt} pyexiv2 readback failed on {img_path.name}: {exc}")
-
+        errors.append(f"{fmt} pyexiv2 readback failed on {jpg_path.name}: {exc}")
     return ValidationResult(ok=len(errors) == 0, errors=errors)
 
 

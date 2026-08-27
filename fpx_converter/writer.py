@@ -20,7 +20,7 @@ from typing import Any
 
 from PIL import ImageCms
 
-from . import config, decoder, layout, metadata, naming, validator
+from . import config, decoder, layout, metadata, naming, outputs, validator
 
 #: ExifTool is located from `FPX_EXIFTOOL` or from PATH -- never from a
 #: hardcoded absolute path. The previous fallback pointed at one developer's
@@ -57,6 +57,11 @@ class OutputItemResult:
     #: the owner has to be able to review a crop somebody framed in 2002
     #: without opening 687 sidecars.
     crop_applied: tuple[int, int, int, int] | None = None
+    #: Every image written for this entry, with the spec that produced it.
+    #: `tif_path`/`jpg_path` name the first archive and sharing outputs and
+    #: stay for the default pair; this is what a non-default `--*-format` or
+    #: `--*-framing` run actually produced.
+    written: list[tuple[Path, outputs.OutputSpec]] = field(default_factory=list)
 
 
 @functools.lru_cache(maxsize=1)
@@ -270,6 +275,31 @@ def compute_mtime_epoch(derived: dict[str, Any]) -> float | None:
     return None
 
 
+def save_output_images(
+    decoded: decoder.DecodedImage,
+    targets: list[tuple[Path, outputs.OutputSpec]],
+) -> None:
+    """Write one file per requested output.
+
+    Format and framing come from the spec, not from which tree the file lands
+    in -- the two used to be welded together, so a full-frame JPEG could not
+    be asked for at all.
+
+    The ICC profile is not decoration. Every output is sRGB by construction --
+    the decoder converts PhotoYCC on the way through -- but an untagged file
+    is interpreted as whatever the viewer assumes, and "assume sRGB" is a
+    convention rather than a guarantee. An archival file should say what its
+    numbers mean.
+    """
+    icc = srgb_icc_profile()
+    for path, spec in targets:
+        image = spec.image_from(decoded)
+        if spec.fmt == "tiff":
+            image.save(path, format="TIFF", compression="tiff_deflate", icc_profile=icc)
+        else:
+            image.save(path, format="JPEG", quality=95, subsampling=0, icc_profile=icc)
+
+
 def save_dual_images(
     decoded: decoder.DecodedImage,
     tif_path: Path,
@@ -296,11 +326,8 @@ def save_dual_images(
     crop inline made "the JPEG is actually cropped" untestable at tier 1 --
     which is where it was.
     """
-    icc = srgb_icc_profile()
-    decoded.image.save(tif_path, format="TIFF", compression="tiff_deflate", icc_profile=icc)
-    decoded.cropped_image().save(
-        jpg_path, format="JPEG", quality=95, subsampling=0, icc_profile=icc
-    )
+    paths = (tif_path, jpg_path)
+    save_output_images(decoded, list(zip(paths, outputs.DEFAULT_SPECS, strict=True)))
 
 
 def write_single_entry_dual_output(
@@ -313,6 +340,7 @@ def write_single_entry_dual_output(
     dry_run: bool = False,
     stem: str | None = None,
     claimed: set[Path] | None = None,
+    specs: tuple[outputs.OutputSpec, ...] = outputs.DEFAULT_SPECS,
 ) -> OutputItemResult:
     """Convert a single .fpx entry to dual output (TIFF and JPEG) with sidecar and tags.
 
@@ -330,18 +358,29 @@ def write_single_entry_dual_output(
     derived = meta.derived
 
     # 2. Compute relative and absolute file paths
-    tif_rel = build_output_relpath(entry, derived, "tif", stem)
-    jpg_rel = build_output_relpath(entry, derived, "jpg", stem)
     fpx_rel = build_output_relpath(entry, derived, "fpx", stem)
     sidecar_rel = build_output_relpath(entry, derived, "fpx.json", stem)
 
     archive_dir = output_root / "archive"
-    sharing_dir = output_root / "sharing"
 
-    tif_path = archive_dir / tif_rel
-    jpg_path = sharing_dir / jpg_rel
+    targets: list[tuple[Path, outputs.OutputSpec]] = [
+        (output_root / spec.tree / build_output_relpath(entry, derived, spec.ext, stem), spec)
+        for spec in specs
+    ]
     fpx_copy_path = archive_dir / fpx_rel
     sidecar_path = archive_dir / sidecar_rel
+
+    # The `.fpx` and its sidecar live beside the archive image; where no
+    # archive output was asked for they still go to `archive/`, because the
+    # source copy is not one of the derivatives and is not optional.
+    def _first(tree: str) -> Path:
+        for path, spec in targets:
+            if spec.tree == tree:
+                return path
+        return archive_dir / build_output_relpath(entry, derived, "tif", stem)
+
+    tif_path = _first("archive")
+    jpg_path = _first("sharing")
 
     _date_pfx, is_undated = format_date_prefix(derived.get("timestamps", {}))
     date_source = derived.get("timestamps", {}).get("date_source", "none")
@@ -356,21 +395,22 @@ def write_single_entry_dual_output(
     # because the failure it guards against is silent, and losing a photo to
     # a name clash is not a failure this archive can notice later.
     if claimed is not None:
-        for path in (tif_path, jpg_path, fpx_copy_path, sidecar_path):
+        for path in [p for p, _ in targets] + [fpx_copy_path, sidecar_path]:
             if path in claimed:
                 raise WriterError(
                     f"output path collision: {path} was already written by another "
                     f"entry in this run (this entry is {entry.get('sha256', '?')[:8]}). "
                     f"Refusing to overwrite it."
                 )
-        claimed.update({tif_path, jpg_path, fpx_copy_path, sidecar_path})
+        claimed.update({p for p, _ in targets} | {fpx_copy_path, sidecar_path})
 
     if not dry_run:
-        tif_path.parent.mkdir(parents=True, exist_ok=True)
-        jpg_path.parent.mkdir(parents=True, exist_ok=True)
+        for path, _spec in targets:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        fpx_copy_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 3. Save Deflate TIFF and q95 4:4:4 JPEG, both tagged sRGB.
-        save_dual_images(decoded, tif_path, jpg_path)
+        # 3. Save every requested output, all tagged sRGB.
+        save_output_images(decoded, targets)
 
         # 4. Copy original .fpx and emit .fpx.json sidecar into archive/
         shutil.copy2(fpx_path, fpx_copy_path)
@@ -383,7 +423,8 @@ def write_single_entry_dual_output(
         # 5. Embed metadata tags via ExifTool
         tool_bin = resolve_exiftool_path(exiftool_path)
         if tool_bin:
-            exiftool_cmd = [tool_bin] + build_exiftool_args(derived, [tif_path, jpg_path])
+            image_paths = [path for path, _ in targets]
+            exiftool_cmd = [tool_bin] + build_exiftool_args(derived, image_paths)
             proc = subprocess.run(exiftool_cmd, capture_output=True, text=True)
             if proc.returncode != 0:
                 errors.append(f"ExifTool failed ({proc.returncode}): {proc.stderr.strip()}")
@@ -393,7 +434,7 @@ def write_single_entry_dual_output(
         # 6. Apply filesystem modified time (mtime) to all 4 files
         mtime_epoch = compute_mtime_epoch(derived)
         if mtime_epoch is not None:
-            for p in (tif_path, jpg_path, fpx_copy_path, sidecar_path):
+            for p in [path for path, _ in targets] + [fpx_copy_path, sidecar_path]:
                 if p.is_file():
                     try:
                         os.utime(p, (mtime_epoch, mtime_epoch))
@@ -405,7 +446,7 @@ def write_single_entry_dual_output(
         # object's size would compare the output against the very thing that
         # produced it; the validator derives its expectation from the
         # metadata instead, so a crop that failed to apply actually fails.
-        val_res = validator.validate_dual_output(tif_path, jpg_path, derived)
+        val_res = validator.validate_outputs(targets, derived)
         if not val_res.ok:
             errors.extend(val_res.errors)
 
@@ -423,4 +464,5 @@ def write_single_entry_dual_output(
         warnings=warnings,
         transform_status=decoded.transform_status,
         crop_applied=decoded.crop_applied,
+        written=targets,
     )

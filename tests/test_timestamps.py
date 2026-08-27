@@ -277,3 +277,71 @@ class TestGroundTruthGate:
         assert report.failed_albums == 1
         assert report.undated_albums == 1
         assert not report.ok  # has 1 failed album
+
+
+class TestCoarseAlbumOverride:
+    """`FPX_COARSE_ALBUMS`: a folder name that looks day-precise and is not.
+
+    A holiday name resolves to a calendar day, but a folder named for one may
+    hold the season around it -- the eve, the day after, the week either side.
+    Nothing in the file says which, and only the person who made the folder
+    knows. Where they say it is coarse, the name is demoted to its year.
+
+    Invented album names throughout; `test_environment.py` enforces that.
+    """
+
+    @staticmethod
+    def _with_coarse(monkeypatch, *albums: str) -> None:
+        monkeypatch.setattr(
+            timestamps, "_coarse_albums", lambda: frozenset(a.lower() for a in albums)
+        )
+
+    def test_a_declared_coarse_holiday_stops_naming_a_day(self, monkeypatch) -> None:
+        self._with_coarse(monkeypatch, "christmas 1994")
+        result = timestamps.parse_folder_date("Christmas 1994")
+        assert result.parsed
+        assert result.precision == "year"
+        assert result.defensible_date is None, "a declared-coarse album still claimed a day"
+
+    def test_it_still_sorts_and_files_under_its_year(self, monkeypatch) -> None:
+        """Demotion takes away the claim, not the album.
+
+        The folder is still evidence of *a* year -- it just is not evidence of
+        a day. Losing the year too would move the photos out of the year
+        folder they belong in.
+        """
+        self._with_coarse(monkeypatch, "christmas 1994")
+        result = timestamps.parse_folder_date("Christmas 1994")
+        assert result.year == 1994
+        assert result.range_start == datetime.date(1994, 1, 1)
+
+    def test_matching_ignores_case_and_surrounding_space(self, monkeypatch) -> None:
+        self._with_coarse(monkeypatch, "christmas 1994")
+        assert timestamps.parse_folder_date("  CHRISTMAS 1994 ").precision == "year"
+
+    def test_an_album_not_listed_is_untouched(self, monkeypatch) -> None:
+        self._with_coarse(monkeypatch, "christmas 1994")
+        other = timestamps.parse_folder_date("Christmas 1995")
+        assert other.precision == "day"
+        assert other.defensible_date is not None
+
+    def test_the_demotion_can_only_take_a_claim_away(self, monkeypatch) -> None:
+        """One-way, deliberately.
+
+        Listing an album must never make its date *more* precise than the
+        parser found it -- that would be the fabrication this whole mechanism
+        exists to prevent, arriving through the door meant to stop it.
+        """
+        self._with_coarse(monkeypatch, "summer 1994", "1994")
+        season = timestamps.parse_folder_date("Summer 1994")
+        assert season.defensible_date is None
+        assert season.precision == "year"
+
+        bare_year = timestamps.parse_folder_date("1994")
+        assert bare_year.defensible_date is None
+
+    def test_an_unparseable_name_is_not_invented_into_a_year(self, monkeypatch) -> None:
+        self._with_coarse(monkeypatch, "no date here")
+        result = timestamps.parse_folder_date("No Date Here")
+        assert not result.parsed
+        assert result.year is None

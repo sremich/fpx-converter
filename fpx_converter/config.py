@@ -134,19 +134,48 @@ def extra_non_descriptive_albums(env_path: Path | None = None) -> frozenset[str]
     Refused loudly rather than ignored: a name that silently fails to register
     files a pile of photos under a folder nobody meant to keep.
     """
-    raw = load_env(env_path).get("FPX_NON_DESCRIPTIVE_ALBUMS", "").strip()
+    return _env_album_list("FPX_NON_DESCRIPTIVE_ALBUMS", env_path)
+
+
+def _env_album_list(key: str, env_path: Path | None) -> frozenset[str]:
+    """A JSON list of album names from `.env`, lowercased. Empty if unset.
+
+    Album names are personal content, so archive-specific lists live in `.env`
+    and never in the source tree. Malformed values are refused loudly rather
+    than ignored: a name that silently fails to register changes where photos
+    are filed or what date they claim, and neither failure announces itself.
+    """
+    raw = load_env(env_path).get(key, "").strip()
     if not raw:
         return frozenset()
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ConfigError(f"FPX_NON_DESCRIPTIVE_ALBUMS is not valid JSON: {exc}") from exc
+        raise ConfigError(f"{key} is not valid JSON: {exc}") from exc
     if not isinstance(parsed, list) or not all(isinstance(v, str) for v in parsed):
         raise ConfigError(
-            "FPX_NON_DESCRIPTIVE_ALBUMS must be a JSON list of strings, "
+            f"{key} must be a JSON list of strings, "
             f'e.g. ["Untitled Folder"] -- got {parsed!r}'
         )
     return frozenset(v.strip().lower() for v in parsed if v.strip())
+
+
+def coarse_albums(env_path: Path | None = None) -> frozenset[str]:
+    """Albums whose folder name must NOT be read as naming a single day.
+
+        FPX_COARSE_ALBUMS=["christmas 1994", "summer trip"]
+
+    A folder name can look day-precise and not be. A holiday name resolves to
+    a calendar day, but the folder may hold the whole season around it -- the
+    eve, the day after, the week. Only the person who made the folder knows,
+    and where they say it is coarse, the name is demoted to its year: the
+    album still sorts and files under that year, and nothing is written to
+    `DateTimeOriginal`.
+
+    The demotion goes one way. This can take a claim away; it can never add
+    one.
+    """
+    return _env_album_list("FPX_COARSE_ALBUMS", env_path)
 
 
 def timezone_settings(env_path: Path | None = None) -> tuple[str, dict[str, str]]:

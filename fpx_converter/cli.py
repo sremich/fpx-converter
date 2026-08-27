@@ -17,7 +17,7 @@ import datetime
 import sys
 from pathlib import Path
 
-from . import __version__, config, layout, naming, scan
+from . import __version__, config, layout, naming, outputs, scan
 from . import ingest as ingest_mod
 from . import manifest as manifest_mod
 from . import metadata as metadata_mod
@@ -317,8 +317,22 @@ def cmd_convert(args: argparse.Namespace) -> int:
     all_entries = manifest.get("entries", [])
     entries = all_entries[: args.limit] if args.limit and args.limit > 0 else all_entries
 
+    try:
+        specs = outputs.build_specs(
+            archive=not args.no_archive,
+            sharing=not args.no_sharing,
+            archive_format=args.archive_format,
+            archive_framing=args.archive_framing,
+            sharing_format=args.sharing_format,
+            sharing_framing=args.sharing_framing,
+        )
+    except outputs.OutputSpecError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+
     verb = "Would convert" if args.dry_run else "Converting"
     print(f"{verb} {len(entries)} files -> {dest}")
+    print(f"  outputs: {', '.join(spec.label for spec in specs)}")
 
     converted = 0
     dated_count = 0
@@ -360,6 +374,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
                 dry_run=args.dry_run,
                 stem=stems.get(entry["sha256"]),
                 claimed=claimed,
+                specs=specs,
             )
             if res.warnings:
                 warnings.extend((store_name, w) for w in res.warnings)
@@ -487,6 +502,40 @@ def build_parser() -> argparse.ArgumentParser:
     p_conv.add_argument("--dest", help="output root directory (defaults to output/)")
     p_conv.add_argument("--limit", type=int, help="limit number of files to convert")
     p_conv.add_argument("--dry-run", action="store_true")
+
+    # Format and framing are independent axes. They used to be welded to the
+    # tree -- archive meant full-frame TIFF and sharing meant cropped JPEG --
+    # so a full-frame JPEG could not be asked for at all. Defaults are the
+    # shipped behaviour, so an existing command line is unchanged.
+    fmt_choices = tuple(outputs.FORMATS)
+    p_conv.add_argument(
+        "--archive-format", choices=fmt_choices, default="tiff",
+        help="file format for the archive tree (default: tiff, Deflate and lossless)",
+    )
+    p_conv.add_argument(
+        "--archive-framing", choices=outputs.FRAMINGS, default="full",
+        help="which pixels the archive copy keeps (default: full, every captured pixel)",
+    )
+    p_conv.add_argument(
+        "--sharing-format", choices=fmt_choices, default="jpeg",
+        help="file format for the sharing tree (default: jpeg, q95 4:4:4)",
+    )
+    p_conv.add_argument(
+        "--sharing-framing", choices=outputs.FRAMINGS, default="cropped",
+        help=(
+            "which pixels the sharing copy keeps (default: cropped, the composition "
+            "framed at the time); 'full' gives the largest uncropped image in an "
+            "everyday format"
+        ),
+    )
+    p_conv.add_argument(
+        "--no-archive", action="store_true", help="do not write the archive tree"
+    )
+    p_conv.add_argument(
+        "--no-sharing", action="store_true",
+        help="do not write the sharing tree; with the defaults this leaves only the "
+             "full-frame lossless TIFF",
+    )
     p_conv.set_defaults(func=cmd_convert)
 
     return parser

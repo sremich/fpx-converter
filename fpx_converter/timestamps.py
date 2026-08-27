@@ -24,9 +24,12 @@ from __future__ import annotations
 
 import calendar
 import datetime
+import functools
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from . import config
 
 # =============================================================================
 # Timezone & Formatting Helpers
@@ -300,12 +303,51 @@ class FolderDateResult:
         return self.start_date if self.parsed else None
 
 
+@functools.lru_cache(maxsize=1)
+def _coarse_albums() -> frozenset[str]:
+    """Albums the owner has said are coarser than their name looks."""
+    try:
+        return config.coarse_albums()
+    except config.ConfigError:
+        raise
+    except Exception:  # noqa: BLE001
+        # No `.env` at all is the normal case for a fresh checkout.
+        return frozenset()
+
+
 def parse_folder_date(folder_name: str) -> FolderDateResult:
     """Extract dates or date ranges encoded in an album folder name.
 
     Handles explicit holidays (4th of July, Easter, Christmas, etc.), month+year,
     season+year, 2-year ranges (e.g. `2001-02`), and single years.
+
+    A name listed in `FPX_COARSE_ALBUMS` is demoted to its year afterwards.
+    A holiday name resolves to a calendar day, but a folder named for one may
+    hold the season around it -- the eve, the day after, the week -- and only
+    the person who made the folder knows which. Demotion keeps the album
+    filing and sorting under that year while taking away the day-precise
+    claim, so nothing reaches `DateTimeOriginal`.
     """
+    result = _parse_folder_name(folder_name)
+    if not result.parsed or result.year is None:
+        return result
+    if folder_name.strip().lower() not in _coarse_albums():
+        return result
+    if result.precision == "year":
+        return result
+    return FolderDateResult(
+        parsed=True,
+        date_kind="year",
+        year=result.year,
+        start_date=datetime.date(result.year, 1, 1),
+        end_date=datetime.date(result.year, 12, 31),
+        display_label=str(result.year),
+        description=f"{result.description} (declared coarse; demoted to the year)".strip(),
+    )
+
+
+def _parse_folder_name(folder_name: str) -> FolderDateResult:
+    """The parser itself. `parse_folder_date` is the entry point."""
     raw = folder_name.strip()
     lower = raw.lower()
 
