@@ -35,7 +35,7 @@ C:\venvs\fpx\Scripts\python.exe -m ruff check .
 # test (tiers 1 and 2)
 C:\venvs\fpx\Scripts\python.exe -m pytest
 
-# run (0.5.0)
+# run (0.6.0)
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan        # walk source, write manifest
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter ingest      # copy one file per hash
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify      # re-hash the store
@@ -43,6 +43,7 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter metadata    # dump .fpx.json si
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter check-dates # album ground-truth report
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter thumbnail   # extract embedded DIBs
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert     # batch run: TIFF + JPEG + audit
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter gallery     # QA page over a finished run
 ```
 
 `check-dates` reports by default and only fails under `--strict`; on this
@@ -133,9 +134,15 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
       `conversion.log`, `audit_report.json`, `run-state.json`; never aborts
       on one bad file. Output format and framing decoupled for independent
       control. 36 new person-free archive fixtures for CI PhotoYCC coverage.
-- [ ] **0.6.0 — QA gallery.** `report/index.html`, thumbnails free from the
+- [x] **0.6.0 — QA gallery.** `report/index.html`, thumbnails free from the
       embedded DIBs, filters by album and audit status, **plus the per-group
-      date-entry affordance the dating strategy requires**.
+      date-entry affordance the dating strategy requires** — the gallery
+      renders the JSON for a person to save as `album-dates.json`, `convert`
+      reads it back, and that round trip is the only route by which a
+      defensible capture date enters this archive. Shipped together with 0.5.0 as one combined **0.6.0
+      pre-release on 2026-08-27**: both milestones were built and audited as
+      a single unit, so the intermediate state was never separately
+      released.
 - [ ] **1.0.0 — Full dataset run** plus tier-4 eyeball verification.
 - [ ] **1.1.0 — Desktop app.** A GUI so somebody who does not use a
       terminal can run this: pick a source folder, pick a destination, watch

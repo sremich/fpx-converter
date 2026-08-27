@@ -6,9 +6,34 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
-## [Unreleased]
+## [0.6.0] — 2026-08-27
 
 ### Added
+- **QA gallery (milestone 0.6.0).** `fpx-converter gallery` builds
+  `report/index.html` from a completed run: every converted photograph as a
+  thumbnail, filterable by album and by audit status, failures outlined. One
+  self-contained file with no server, no build step and no external asset --
+  thumbnails are inlined as data URIs, because it has to open by
+  double-clicking it in five years' time on a machine with none of this
+  installed. Thumbnails come from the embedded DIBs rather than from the
+  outputs, which costs no decode and keeps the page able to disagree with
+  what was written.
+- **Album dates a person supplies.** The other half of the dating strategy,
+  and the only route by which a capture date enters this archive from outside
+  the files. The gallery shows every album holding an undated photograph and
+  offers a date box; what is typed comes back out as `album-dates.json`,
+  which `convert` reads on the next run (`--album-dates`) and writes to
+  `DateTimeOriginal` with `date_source: owner-supplied`, ranked above the
+  folder name and far above the import stamp. Somebody who was there is
+  better evidence than a folder name, and better than a stamp that misses
+  the event by up to 223 days. A single day or nothing: a month or a year is
+  refused at parse time rather than rounded to its first day, which is the
+  fabrication this project already paid for once.
+- **`FPX_COARSE_ALBUMS`.** Demotes an album whose folder name looks
+  day-precise to its year. A holiday name resolves to a calendar day, but a
+  folder named for one may hold the whole season around it, and only the
+  person who made the folder knows which. Deliberately one-way: it can take a
+  date claim away, never add one.
 - **Batch engine (milestone 0.5.0).** `convert` now runs the whole corpus
   unattended, survives any file corruption, and resumes from mid-run after a
   kill or crash. A run that stops at file 300 of 687 due to one corrupt tile
@@ -61,11 +86,6 @@ commit, then tag.
   drift.
 - `tests/fixtures/README.md`: what each fixture covers, what the set does
   **not** cover, and the screening rule.
-- **`FPX_COARSE_ALBUMS` environment variable.** Demotes an album whose folder
-  name looks day-precise (e.g. a holiday name that could be mistaken for a
-  date) to its bare year, so nothing reaches `DateTimeOriginal`. The demotion
-  goes one way — it can remove a claim, never add one — and does not affect
-  sorting or filing, only the date written to EXIF.
 
 ### Changed
 - **The output tree follows the source folder names, not the dates.** A
@@ -85,6 +105,16 @@ commit, then tag.
   `--manifest` and `--dest` continue to enforce source-outside containment.
 
 ### Fixed
+- **The QA gallery ignored `--dest` when choosing where to write.** The
+  default output path was computed from the repository root, so pointing
+  `gallery` at a particular run put its page in a fixed `report/` beside the
+  source tree instead of beside the run it describes. Two runs overwrote each
+  other's page, and the page you opened could be describing a different run —
+  which is the one thing a review artifact must never do. Found by running
+  the command over the full corpus rather than over a fixture; every existing
+  test built the page's inputs by hand and so had no opinion about the
+  wiring. `tests/test_cli_gallery.py` now drives the real command, and four
+  of its six tests fail against the old path.
 - **A file is filed under the most descriptive album it belongs to, not the
   first one listed.** Most files belong to both an event folder and the flat
   dump they were also copied into, and the first-listed rule picked the dump.
@@ -94,7 +124,7 @@ commit, then tag.
   `DateTimeOriginal` go from 70 to 122.
 - **A year glued onto a word is now parsed.** The folder-date patterns
   required a word boundary before the year, which a name like
-  `holidays2001-02` does not have, so 72 files lost the year their folder
+  `holidays2001-02` does not have, so 24 files lost the year their folder
   named. A digit in front still blocks the match, keeping camera-generated
   names like `DCP01999` out.
 

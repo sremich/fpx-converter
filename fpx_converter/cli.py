@@ -659,7 +659,11 @@ def cmd_gallery(args: argparse.Namespace) -> int:
         print("The audit report lists no files.", file=sys.stderr)
         return 1
 
-    default_out = config.REPO_ROOT / "report" / gallery.REPORT_FILENAME
+    # Beside the run it describes, not in a fixed repo-root directory: two
+    # runs would otherwise overwrite each other's page, and a page that
+    # describes a different run than the one you opened it for is worse than
+    # no page at all.
+    default_out = dest / "report" / gallery.REPORT_FILENAME
     out_path = Path(args.out) if args.out else default_out
     gallery.write_gallery(
         gallery.render_html(items, report=report, existing_dates=existing), out_path
@@ -819,7 +823,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_gal.add_argument("--store", help="path to the ingested .fpx store directory")
     p_gal.add_argument("--sidecars", help="directory of .fpx.json sidecars, for dates")
     p_gal.add_argument("--album-dates", help="JSON file of dates you already supplied")
-    p_gal.add_argument("--out", help="where to write the page (defaults to report/index.html)")
+    p_gal.add_argument(
+        "--out", help="where to write the page (defaults to <dest>/report/index.html)"
+    )
     p_gal.add_argument(
         "--no-thumbnails",
         action="store_true",

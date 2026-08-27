@@ -65,3 +65,9 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Harness-managed sub-agent worktrees. Transient, and never part of the
+# repository -- but they must be ignored explicitly, because the leakage
+# guards list untracked files and would otherwise scan a whole second
+# checkout.
+.claude/worktrees/

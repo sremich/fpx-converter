@@ -894,8 +894,9 @@ since 0.2.0 and neither of which any tier caught:
   they lost the day-precise capture date their real album gave for free.
   Files carrying `DateTimeOriginal` go from 70 to 122 with the fix.
 * The folder-date patterns required a word boundary before the year, which
-  a name with the year glued onto a word does not have. 72 files lost the
-  year their own folder named. The fix is `(?<!\d)` instead of `\b`, so a
+  a name with the year glued onto a word does not have. 24 files lost the
+  year their own folder named -- counted against the manifest, and the same
+  24 whether you count distinct SHA-256 files or source paths. The fix is `(?<!\d)` instead of `\b`, so a
   digit in front still blocks the match and camera-generated names stay
   out.
 
@@ -955,3 +956,101 @@ byte-level guard checks album names and filenames, not every string a
 property set can hold — so this class of content is outside what any
 automated check will ever report, and the only control on it is somebody
 looking. It was looked at.
+
+## 2026-08-27 — Output format and framing are independent axes
+
+**Decision.** `archive/` and `sharing/` are trees with default jobs, not
+formats. Format (`tiff` / `jpeg`) and framing (`full` / `cropped`) are
+separate settings on each tree, so a cropped TIFF and a full-frame JPEG are
+both first-class outputs.
+
+**Why.** The first implementation hardcoded the pairing — TIFF meant full
+frame, JPEG meant cropped — because that is what the two trees are *for*.
+Stevie asked for them separated: somebody who wants a lossless copy of the
+composition a person framed, or a shareable copy of the whole captured
+sensor, was previously told no by an accident of implementation rather than
+by a reason.
+
+**Consequence.** `outputs.OutputSpec` carries `(tree, fmt, framing)` and owns
+`image_from()` and `expected_size()`, so the writer and the validator derive
+the expectation from the same object rather than from two copies of the same
+`if`. Asking for neither tree is refused rather than silently producing an
+empty run. The `.fpx` copy and the sidecar are written regardless of
+`--no-archive`: they are not derivatives, they are the thing being preserved.
+
+## 2026-08-27 — A file is "done" only while every one of its outputs exists
+
+**Decision.** Resume keys on the source SHA-256, but the recorded state is
+not trusted on its own: `RunState.is_done` re-checks that every path the
+record names is still on disk, and the record names the images *and* the
+`.fpx` copy *and* the sidecar.
+
+**Why.** The first version checked only the images. Deleting a sidecar and
+re-running restored nothing, reported `failed 0`, and left an incomplete
+archive that looked finished. Over an irreplaceable corpus, the failure mode
+of a resume is not "does redundant work" — it is "reports success over a
+hole".
+
+**Consequence.** Resume costs one `stat()` per recorded path, which is
+nothing next to a decode. A changed set of output specs discards the state
+entirely: different specs mean different files, so it is not the same run.
+
+## 2026-08-27 — `audit_report.json` says whether the run was the whole corpus
+
+**Decision.** The report carries `manifest_entries`, `selected`, `attempted`,
+`not_attempted` and a `complete` flag, not just a total.
+
+**Why.** `unexplained_failures: 0` is the number the 1.0.0 gate reads, and
+with a single total it was produced identically by a finished 687-file run
+and by `convert --limit 3`. A gate that cannot tell those apart is not a
+gate. `complete` is false under a `--limit`, under an interrupt, and whenever
+fewer entries were attempted than the manifest holds.
+
+## 2026-08-27 — The QA gallery is one file, with the thumbnails inside it
+
+**Decision.** `report/index.html` is entirely self-contained: thumbnails
+inlined as data URIs, CSS and JavaScript inline, no server, no build step, no
+external asset of any kind.
+
+**Why.** The page has to open by double-clicking it years from now, on a
+machine with none of this installed, possibly by somebody who has never used
+a terminal. Anything that needs `python -m http.server` first is a page that
+will not be opened. The size cost is a 240px q72 JPEG per photograph.
+
+**Consequence.** Thumbnails come from the embedded DIBs rather than from the
+converted outputs. That costs no decode, and it keeps the page able to
+*disagree* with what was written — a thumbnail is the one view of the file
+that did not come from the code under review.
+
+## 2026-08-27 — An owner-supplied date outranks everything, and is a day or nothing
+
+**Decision.** `album-dates.json` maps an album to a single `YYYY-MM-DD`. It
+ranks above the folder name and far above the import stamp
+(`date_source: owner-supplied`). A month, a year, a season or a range is
+refused at parse time rather than rounded to a first day.
+
+**Why.** This is the other half of the dating strategy, and the only route by
+which a capture date enters this archive from outside the files. Somebody who
+was there is better evidence than a folder name. The refusal is the rule this
+project already paid for once: 151 files were given a fabricated capture
+moment precise to the second by taking the start of a range. EXIF has no way
+to say "sometime in 2001", so writing `DateTimeOriginal` means naming a day —
+and if nobody can name one, the right output is no tag.
+
+**Consequence.** The gallery lists every album holding an undated photograph
+— *any* undated file, not all of them, since an album where two files carry
+scan times still needs the other forty dated — and offers a date box. What is
+typed is written back out as `album-dates.json` for the next `convert`.
+
+## 2026-08-27 — `FPX_COARSE_ALBUMS` demotes; it can never promote
+
+**Decision.** An album listed in `FPX_COARSE_ALBUMS` has its folder date
+demoted to the year, however day-precise the name looks.
+
+**Why.** A holiday name resolves to a calendar day, and a folder named for
+one may hold the whole season around it. Only the person who made the folder
+knows which, and the tool cannot tell from the name.
+
+**Consequence.** The setting is deliberately one-way: it can take a date
+claim away, never add one. Adding one is what `album-dates.json` is for, and
+that route requires a person to type a specific day.
