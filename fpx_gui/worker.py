@@ -14,6 +14,7 @@ either way and `audit_report.json` is what says what happened.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
@@ -31,9 +32,15 @@ class PipelineWorker(QObject):
     #: `runner.CANCELLED` or `runner.HARD_STOPPED` for a Cancel.
     done = Signal(int, str)
 
-    def __init__(self, steps: list[tuple[str, list[str]]], parent: QObject | None = None):
+    def __init__(
+        self,
+        steps: list[tuple[str, list[str]]],
+        parent: QObject | None = None,
+        stop_file: Path | None = None,
+    ):
         super().__init__(parent)
         self._steps = steps
+        self._stop_file = stop_file
         self._thread: threading.Thread | None = None
         self._process: runner.CliProcess | None = None
         self._cancel_status = ""
@@ -54,7 +61,7 @@ class PipelineWorker(QObject):
             self._cancelling = True
             process = self._process
         if process is not None:
-            status = process.cancel()
+            status = process.cancel(stop_file=self._stop_file)
             if status != runner.NOT_RUNNING:
                 self._cancel_status = status
 

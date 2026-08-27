@@ -393,6 +393,18 @@ def cmd_convert(args: argparse.Namespace) -> int:
     # run -- saw a header, an hour of silence, and a summary.
     echo = _echo_line if args.progress else None
 
+    # `--stop-file` is the portable way to ask a run to stop and still get a
+    # report. Ctrl+C and Ctrl+Break are the direct ones and are better where
+    # they work -- they land immediately -- but a parent process cannot always
+    # deliver a console signal to a child on Windows, and a caller that cannot
+    # stop a run politely is a caller that has to kill it. Killing it is the
+    # one ending that leaves no audit report at all.
+    stop_file = Path(args.stop_file) if args.stop_file else None
+    if stop_file is not None:
+        # A marker left behind by an earlier run would cancel this one before
+        # it converted anything, which would look exactly like a crash.
+        stop_file.unlink(missing_ok=True)
+
     with batch.ConversionLog(dest / batch.LOG_FILENAME, echo=echo) as log:
         labels = ", ".join(s.label for s in specs)
         log.write(f"=== run start: {len(entries)} entries, outputs {labels}")
@@ -402,6 +414,14 @@ def cmd_convert(args: argparse.Namespace) -> int:
         # opposite of what an interruptible batch engine is for.
         try:
             for index, entry in enumerate(entries, start=1):
+                if stop_file is not None and stop_file.exists():
+                    # Checked between files, so the stop lands on a boundary
+                    # rather than in the middle of a write. Raised rather than
+                    # broken out of, so it takes the same road an interrupt
+                    # takes and the report is written the same way.
+                    log.write("STOP requested")
+                    stop_file.unlink(missing_ok=True)
+                    raise KeyboardInterrupt
                 record = _handle_entry(
                     entry=entry,
                     index=index,
@@ -821,6 +841,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-sharing", action="store_true",
         help="do not write the sharing tree; with the defaults this leaves only the "
              "full-frame lossless TIFF",
+    )
+    p_conv.add_argument(
+        "--stop-file",
+        metavar="PATH",
+        help="stop cleanly at the next file boundary if PATH appears, still "
+             "writing the audit report (a caller that cannot deliver Ctrl+C to "
+             "this process can create the file instead of killing it)",
     )
     p_conv.add_argument(
         "--progress",

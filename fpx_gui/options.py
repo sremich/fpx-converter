@@ -32,6 +32,9 @@ REPORT_PAGE = Path("report") / "index.html"
 #: Where `ingest` puts one `.fpx` per distinct hash. Only the review page
 #: needs it, so only the review page pays for it -- see `review_pipeline`.
 STORE_DIR = Path("source-files")
+#: The marker the Cancel button creates. See `runner.CliProcess.cancel` for
+#: why a file exists alongside a console signal.
+STOP_FILENAME = "stop-requested"
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,10 @@ class ConvertOptions:
     @property
     def store(self) -> Path:
         return self.dest / STORE_DIR
+
+    @property
+    def stop_file(self) -> Path:
+        return self.dest / STOP_FILENAME
 
     def specs(self) -> tuple[outputs.OutputSpec, ...]:
         """The outputs this run would write. Raises `OutputSpecError`."""
@@ -132,6 +139,7 @@ def convert_args(options: ConvertOptions) -> list[str]:
         "--manifest", str(options.manifest),
         "--dest", str(options.dest),
         "--progress",
+        "--stop-file", str(options.stop_file),
     ]
     if not options.resume:
         args.append("--no-resume")

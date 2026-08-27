@@ -1,0 +1,27 @@
+# Desktop front end. Everything the CLI runs on, plus the GUI toolkit.
+#
+# Separate from requirements.txt on purpose: the conversion pipeline is what
+# runs over an irreplaceable archive, and it must not acquire a dependency on
+# a GUI toolkit to do it. `pip install -r requirements.txt` still installs a
+# working converter with no Qt anywhere near it.
+#
+# Pinned exactly, like everything else here. Every pin below publishes a cp314
+# win_amd64 wheel (verified 2026-08-27).
+-r requirements.txt
+# pytest-qt needs a test runner, and this project pins the one it uses rather
+# than letting a transitive dependency choose it.
+-r requirements-dev.txt
+
+# The toolkit. PySide6 is a metapackage over PySide6-Essentials and
+# PySide6-Addons; the .spec excludes the modules the window does not use, so
+# the packaged exe does not carry WebEngine, 3D, Multimedia and the rest.
+PySide6==6.11.2
+
+# Widget-test plumbing: a managed QApplication per session and widget cleanup.
+# Only tests/test_gui_window.py needs it, and that file skips cleanly when it
+# is absent -- which is what CI does today, since CI installs
+# requirements-dev.txt alone.
+pytest-qt==4.5.0
+
+# Builds the single-file Windows executable. See packaging/build.md.
+pyinstaller==6.22.2

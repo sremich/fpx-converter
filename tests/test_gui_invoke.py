@@ -7,7 +7,10 @@ one function that takes the answer as an argument.
 
 from __future__ import annotations
 
-from fpx_gui import invoke
+import os
+from pathlib import Path
+
+from fpx_gui import invoke, runner
 
 
 class TestCliCommand:
@@ -30,6 +33,58 @@ class TestCliCommand:
         argv = invoke.cli_command(["scan"])
         assert argv[0]
         assert argv[-1] == "scan"
+
+
+class TestHowTheChildIsCreated:
+    """The flags decide whether Cancel can stop a run or only kill it."""
+
+    def test_a_console_is_inherited_rather_than_replaced(self) -> None:
+        """With a console, `CREATE_NO_WINDOW` is wrong and not merely useless.
+
+        It gives the child a **new** console, which stops it sharing ours --
+        and `GenerateConsoleCtrlEvent` can only reach a process through a
+        shared console. That is measured behaviour: it turned Cancel from
+        "stop and write the report" into "kill" until it was found.
+        """
+        flags = runner.creation_flags(console=True)
+        assert flags & runner.CREATE_NEW_PROCESS_GROUP
+        assert not flags & runner.CREATE_NO_WINDOW
+
+    def test_without_a_console_the_child_is_given_a_hidden_one(self) -> None:
+        flags = runner.creation_flags(console=False)
+        assert flags & runner.CREATE_NEW_PROCESS_GROUP
+        assert flags & runner.CREATE_NO_WINDOW
+
+    def test_the_group_flag_is_never_dropped(self) -> None:
+        """It is what makes one child signallable without signalling the rest."""
+        for console in (True, False):
+            assert runner.creation_flags(console=console) & runner.CREATE_NEW_PROCESS_GROUP
+
+    def test_the_console_question_is_answered_by_process_list_not_by_window(self) -> None:
+        """`GetConsoleWindow` returns 0 inside a pseudo-console.
+
+        Windows Terminal and VS Code both host sessions that way, so the usual
+        idiom reports "no console" while a real one is attached -- and the
+        wrong branch is taken on the most ordinary developer machine there is.
+        """
+        source = Path(runner.__file__).read_text(encoding="utf-8")
+        assert "GetConsoleProcessList" in source
+        assert isinstance(runner.has_console(), bool)
+
+
+class TestTheChildEnvironment:
+    def test_the_child_is_unbuffered_so_progress_arrives_as_it_happens(self) -> None:
+        env = runner.child_environment({})
+        assert env["PYTHONUNBUFFERED"] == "1"
+        assert env["PYTHONIOENCODING"] == "utf-8"
+
+    def test_the_package_is_findable_whatever_the_working_directory(self) -> None:
+        env = runner.child_environment({})
+        assert (Path(env["PYTHONPATH"].split(os.pathsep)[0]) / "fpx_converter").is_dir()
+
+    def test_an_existing_pythonpath_is_kept(self) -> None:
+        env = runner.child_environment({"PYTHONPATH": "C:/somewhere/else"})
+        assert env["PYTHONPATH"].endswith("C:/somewhere/else")
 
 
 class TestSentinel:

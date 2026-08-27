@@ -156,6 +156,18 @@ class TestOutputCombinations:
         assert "--progress" in args
         assert build_parser().parse_args(args).progress is True
 
+    def test_a_stop_file_is_always_offered(self, folders) -> None:
+        """Cancel's only guarantee on a machine where a console signal cannot
+        be delivered. Without it, cancelling means killing, and killing means
+        no audit report."""
+        source, dest = folders
+        chosen = ConvertOptions(source=source, dest=dest)
+        args = options_mod.convert_args(chosen)
+        assert "--stop-file" in args
+        parsed = build_parser().parse_args(args)
+        assert Path(parsed.stop_file) == chosen.stop_file
+        assert chosen.stop_file.parent == dest
+
 
 class TestTheReadOnlySourceRule:
     def test_a_destination_inside_the_source_is_refused(self, folders) -> None:

@@ -162,6 +162,70 @@ class TestTheReadOnlyRuleEndToEnd:
         assert not (FIXTURES / "converted").exists()
 
 
+class TestCancellingARealRun:
+    """The guarantee: Cancel stops it **and** the audit report still lands.
+
+    Anything else and a cancelled run is indistinguishable from one that was
+    killed, which is indistinguishable from one that finished badly. This
+    starts a real conversion, cancels it partway, and insists on the report.
+    """
+
+    def test_a_cancelled_run_still_writes_its_audit_report(
+        self, tmp_path: Path
+    ) -> None:
+        import time
+
+        dest = tmp_path / "cancelled"
+        chosen = ConvertOptions(source=FIXTURES, dest=dest)
+        options_mod.validate(chosen)
+        assert runner.run_cli(options_mod.scan_args(chosen)) == 0
+
+        lines: list[str] = []
+        process = runner.CliProcess(
+            options_mod.convert_args(chosen), on_line=lines.append
+        )
+        process.start()
+
+        # Let a couple of photos through, so the cancel lands mid-run rather
+        # than before anything has happened.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if sum(1 for line in lines if "OK   [" in line) >= 2:
+                break
+            time.sleep(0.1)
+
+        status = process.cancel(grace=60.0, stop_file=chosen.stop_file)
+        process.wait(timeout=30)
+
+        assert status == runner.CANCELLED, (
+            "the run had to be killed; a killed run leaves no audit report"
+        )
+        result = summary.load_summary(dest / batch.REPORT_FILENAME)
+        assert result.interrupted is True
+        assert result.complete is False
+        assert result.converted > 0, "it stopped before converting anything"
+        assert result.converted < 40, "it was not actually cancelled"
+        assert result.severity == summary.ERROR
+
+    def test_the_stop_marker_does_not_survive_to_poison_the_next_run(
+        self, tmp_path: Path
+    ) -> None:
+        """A leftover marker would cancel the following run before it began."""
+        dest = tmp_path / "stale"
+        dest.mkdir(parents=True)
+        chosen = ConvertOptions(source=FIXTURES, dest=dest)
+        chosen.stop_file.write_text("stop\n", encoding="utf-8")
+
+        assert runner.run_cli(options_mod.scan_args(chosen)) == 0
+        args = [*options_mod.convert_args(chosen), "--limit", "2"]
+        assert runner.run_cli(args) == 0
+
+        result = summary.load_summary(dest / batch.REPORT_FILENAME)
+        assert result.interrupted is False
+        assert result.converted == 2
+        assert not chosen.stop_file.exists()
+
+
 class TestTheCliIsReachedTheWayThePackagedAppWouldReachIt:
     def test_the_unfrozen_invocation_runs_the_real_cli(self, tmp_path: Path) -> None:
         lines: list[str] = []

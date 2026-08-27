@@ -373,7 +373,8 @@ class MainWindow(QMainWindow):
         self._run(options_mod.review_pipeline(options))
 
     def _run(self, steps: list[tuple[str, list[str]]]) -> None:
-        worker = PipelineWorker(steps, parent=self)
+        stop_file = self._last_options.stop_file if self._last_options else None
+        worker = PipelineWorker(steps, parent=self, stop_file=stop_file)
         worker.line.connect(self._on_line)
         worker.step.connect(self._on_step)
         worker.done.connect(self._on_done)

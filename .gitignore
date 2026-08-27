@@ -52,7 +52,10 @@ __pycache__/
 node_modules/
 dist/
 build/
+# PyInstaller writes a .spec beside whatever it is told to build. The one in
+# packaging/ is hand-written and is the build definition, not output.
 *.spec
+!/packaging/*.spec
 *.tsbuildinfo
 
 # --- Scratch ---

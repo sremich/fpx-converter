@@ -26,6 +26,7 @@ without a report must never look like one that finished.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import subprocess
@@ -41,13 +42,60 @@ from .invoke import cli_command, is_frozen
 
 #: Signal the child without touching anything else on the console.
 CREATE_NEW_PROCESS_GROUP = 0x00000200
-#: A console for the child, never shown. Without a console there is nothing
-#: for `GenerateConsoleCtrlEvent` to deliver to; with a visible one, a black
-#: window flashes up in front of the application.
+#: A console for the child that is never shown. Used **only** when this
+#: process has no console of its own -- see `creation_flags`.
 CREATE_NO_WINDOW = 0x08000000
 CTRL_BREAK_EVENT = 1
 #: `AttachConsole` failing this way means "you already have one".
 _ERROR_ACCESS_DENIED = 5
+
+
+def has_console() -> bool:
+    """Does this process have a console attached?
+
+    True under a terminal, false for the packaged windowed exe. The answer
+    decides how the child is created, and getting it wrong makes Cancel a
+    kill -- see `creation_flags`.
+
+    Asked with `GetConsoleProcessList` and **not** with `GetConsoleWindow`,
+    which is the usual idiom and is wrong here. A modern terminal hosts its
+    sessions on a pseudo-console, which has no window: `GetConsoleWindow`
+    returns 0 inside Windows Terminal and VS Code while a perfectly real
+    console is attached. Measured, not guessed -- that reading is what made a
+    Cancel from a terminal fall through to killing the run.
+    """
+    if not sys.platform.startswith("win"):  # pragma: no cover - project is Windows
+        return False
+    buffer = (ctypes.c_uint * 1)()
+    # Returns 0 with no console attached, and otherwise the number of
+    # processes sharing it -- which may exceed the buffer, and still answers
+    # the only question being asked.
+    return ctypes.windll.kernel32.GetConsoleProcessList(buffer, 1) > 0  # type: ignore[attr-defined]
+
+
+def creation_flags(console: bool | None = None) -> int:
+    """How to create the child, which is not the same question in both cases.
+
+    `CREATE_NEW_PROCESS_GROUP` is always wanted: it is what allows this one
+    child to be signalled rather than everything sharing a console.
+
+    `CREATE_NO_WINDOW` is wanted only when there is no console to inherit.
+    It does not merely hide a window -- it gives the child a **new** console
+    of its own. From a terminal that is actively wrong: the child stops
+    sharing ours, `GenerateConsoleCtrlEvent` can no longer reach it, and
+    Cancel degrades from "stop and write the report" to "kill". That is
+    exactly what it did until this was measured.
+
+    So: with a console, inherit it. Without one, make the child a hidden one
+    so there is something for the signal to travel through at all, and reach
+    it with `AttachConsole`.
+    """
+    if not sys.platform.startswith("win"):  # pragma: no cover - project is Windows
+        return 0
+    attached = has_console() if console is None else console
+    return CREATE_NEW_PROCESS_GROUP if attached else (
+        CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    )
 
 #: How the run ended. Returned by `cancel`, and the difference matters.
 CANCELLED = "cancelled"
@@ -80,6 +128,36 @@ def _send_ctrl_break(pid: int) -> bool:
         if attached:
             kernel32.FreeConsole()
             kernel32.SetConsoleCtrlHandler(None, False)
+
+
+def _kill_tree(process: subprocess.Popen[str]) -> None:
+    """Kill the child and anything it started. The last resort, and a whole tree.
+
+    Killing only the process we launched is not enough once this is frozen. A
+    PyInstaller one-file exe is a bootloader that unpacks itself and runs the
+    real program as a *child*: `terminate()` on the one we hold would leave a
+    conversion running with nothing watching it, still writing into the
+    destination folder, invisible to the next run's resume check.
+
+    `taskkill /T` takes the tree. `terminate()` is the fallback for a machine
+    where it is unavailable -- better a possible orphan than a Cancel button
+    that does nothing at all.
+    """
+    if sys.platform.startswith("win"):
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True,
+                timeout=15,
+                check=False,
+                creationflags=CREATE_NO_WINDOW,
+            )
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:  # pragma: no cover - kill of last resort
+            process.kill()
 
 
 def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -136,9 +214,6 @@ class CliProcess:
         return self._process.returncode if self._process else None
 
     def start(self) -> None:
-        creationflags = 0
-        if sys.platform.startswith("win"):
-            creationflags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
         self._process = subprocess.Popen(  # noqa: S603 - argv is built, never a shell string
             self.argv,
             stdout=subprocess.PIPE,
@@ -149,7 +224,7 @@ class CliProcess:
             errors="replace",
             bufsize=1,
             env=child_environment(),
-            creationflags=creationflags,
+            creationflags=creation_flags(),
         )
         self._reader = threading.Thread(target=self._pump, daemon=True)
         self._reader.start()
@@ -177,32 +252,54 @@ class CliProcess:
             self._reader.join(timeout=5.0)
         return code
 
-    def cancel(self, grace: float = GRACE_SECONDS) -> str:
-        """Stop the run, preferring the way that still writes a report.
+    def cancel(self, grace: float = GRACE_SECONDS, stop_file: Path | None = None) -> str:
+        """Stop the run, using every way that still leaves a report behind.
 
-        Returns `CANCELLED` when the child stopped on its own after the
-        signal -- which is the case where `audit_report.json` exists and the
-        state file is up to date -- and `HARD_STOPPED` when it had to be
-        killed, which means neither is guaranteed. The caller is expected to
-        say which one happened.
+        **Two mechanisms, because one of them cannot be relied on.**
+        `CTRL_BREAK_EVENT` is the better of the pair where it works: it lands
+        at once, wherever the run has got to. But it can only travel through a
+        console that this process and the child share, and a windowed
+        application has none. Measured, on this project: from a console-less
+        parent, `AttachConsole` against the child fails with
+        `ERROR_INVALID_HANDLE` whether that child was created with
+        `CREATE_NO_WINDOW` or with `CREATE_NEW_CONSOLE`. From a terminal the
+        signal works and was watched working. From the packaged exe it may
+        not -- and "may not" is not good enough for the guarantee that a
+        cancelled run keeps its audit report.
+
+        So the stop file goes down first. `convert --stop-file` looks for it
+        between photos and stops on a boundary: no console, no signal, no
+        privileges. It costs at most the photo in flight, and it always works.
+
+        Returns `CANCELLED` when the child stopped by itself, which is the
+        case where `audit_report.json` exists, and `HARD_STOPPED` when it had
+        to be killed, which is the case where it does not. The caller is
+        expected to say which one happened.
         """
         if self._process is None or self._process.poll() is not None:
             self.cancel_status = NOT_RUNNING
             return NOT_RUNNING
 
-        if _send_ctrl_break(self._process.pid):
-            deadline = time.monotonic() + grace
-            while time.monotonic() < deadline:
-                if self._process.poll() is not None:
-                    self.cancel_status = CANCELLED
-                    return CANCELLED
-                time.sleep(0.1)
+        if stop_file is not None:
+            try:
+                stop_file.parent.mkdir(parents=True, exist_ok=True)
+                stop_file.write_text("stop\n", encoding="utf-8")
+            except OSError:  # pragma: no cover - the signal is still to come
+                pass
 
-        self._process.terminate()
-        try:
-            self._process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:  # pragma: no cover - kill of last resort
-            self._process.kill()
+        _send_ctrl_break(self._process.pid)
+
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if self._process.poll() is not None:
+                self.cancel_status = CANCELLED
+                return CANCELLED
+            time.sleep(0.1)
+
+        _kill_tree(self._process)
+        if stop_file is not None:
+            # Not left behind to cancel the run somebody starts next.
+            stop_file.unlink(missing_ok=True)
         self.cancel_status = HARD_STOPPED
         return HARD_STOPPED
 
