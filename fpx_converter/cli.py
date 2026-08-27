@@ -13,7 +13,6 @@ Commands (the version lives in `VERSION`; `--version` prints it):
 from __future__ import annotations
 
 import argparse
-import contextlib
 import datetime
 import json
 import sys
@@ -314,20 +313,49 @@ def cmd_thumbnail(args: argparse.Namespace) -> int:
     return 0
 
 
-def _remove_stop_file(path: Path) -> None:
+def _remove_stop_file(path: Path, log: batch.ConversionLog | None = None) -> None:
     """Delete the stop marker, and never let that end the run.
 
     `unlink` raises `PermissionError` on Windows for a file an indexer or a
     virus scanner has open for a moment, and for a path that turns out to be a
     directory. Both were able to escape the loop from the one code path whose
     entire purpose is making sure the audit report still gets written.
+
+    Suppressed but not silent: a failure that nothing mentions is how the
+    first version of this wedged a destination with no way to find out why.
     """
-    with contextlib.suppress(OSError):
+    try:
         path.unlink(missing_ok=True)
+    except OSError as exc:
+        if log is not None:
+            log.write(
+                f"NOTE could not remove the stop marker at {path} ({exc}). "
+                "It will be ignored by later runs, which only honour a marker "
+                "newer than the run itself, but it is worth deleting by hand."
+            )
+
+
+def _stop_requested(path: Path, since: float) -> bool:
+    """Has somebody asked *this* run to stop?
+
+    Not "does a marker exist" -- "was one left since this run began". Asking
+    the first question meant a marker written moments after the child started,
+    but before it finished loading the manifest, was deleted by the run it was
+    meant to stop; and a marker that could not be deleted stopped every future
+    run for ever. Both disappear once the marker has to be newer than the run.
+    """
+    try:
+        return path.stat().st_mtime >= since
+    except OSError:
+        return False
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
     """Convert the manifest, resuming what is done and never stopping on one file."""
+    # Stamped first, before the manifest load and the stem assignment over
+    # every entry, because a Cancel arriving during that work is still a
+    # Cancel of this run. `_stop_requested` compares against it.
+    run_started = time.time()
     manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
     if not manifest_path.is_file():
         print(f"No manifest at {manifest_path} - run `scan` first.", file=sys.stderr)
@@ -420,9 +448,10 @@ def cmd_convert(args: argparse.Namespace) -> int:
         # run would report success. `verify_unchanged` cannot catch it -- it
         # belongs to `scan`, which ran earlier.
         stop_file = config.ensure_outside_source(stop_file, source_root, "stop file")
-        # A marker left behind by an earlier run would cancel this one before
-        # it converted anything, which would look exactly like a crash.
-        _remove_stop_file(stop_file)
+        # Deliberately not deleted here. A marker left by an earlier run is
+        # older than `run_started` and is ignored, so there is nothing to
+        # clean up -- and nothing to race against a Cancel that arrives while
+        # this run is still starting up.
 
     with batch.ConversionLog(dest / batch.LOG_FILENAME, echo=echo) as log:
         labels = ", ".join(s.label for s in specs)
@@ -433,13 +462,13 @@ def cmd_convert(args: argparse.Namespace) -> int:
         # opposite of what an interruptible batch engine is for.
         try:
             for index, entry in enumerate(entries, start=1):
-                if stop_file is not None and stop_file.exists():
+                if stop_file is not None and _stop_requested(stop_file, run_started):
                     # Checked between files, so the stop lands on a boundary
                     # rather than in the middle of a write. Raised rather than
                     # broken out of, so it takes the same road an interrupt
                     # takes and the report is written the same way.
                     log.write("STOP requested")
-                    _remove_stop_file(stop_file)
+                    _remove_stop_file(stop_file, log)
                     raise KeyboardInterrupt
                 record = _handle_entry(
                     entry=entry,

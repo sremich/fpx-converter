@@ -95,16 +95,42 @@ class TestTheGuard:
             == 0
         )
 
-    def test_the_refusal_is_the_shared_one(self, tmp_path: Path) -> None:
-        """It must be a call to the project's guard, not a second copy of it.
+    def test_the_refusal_is_the_shared_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It must be a *call* to the project's guard, not a second copy.
 
         Two implementations of one invariant is how they drift apart, and this
-        is the invariant that has no second chance.
+        is the invariant that has no second chance. The first version of this
+        test called `ensure_outside_source` itself and asserted it raised --
+        which proves the guard works and says nothing at all about whether
+        `convert` uses it. It would have passed against a hand-rolled copy in
+        `cli.py`, which is precisely what it claims to rule out.
+
+        A call-through spy instead: the real function still runs, and the test
+        can see that it was the one asked.
         """
         source = tmp_path / "archive"
         source.mkdir()
-        with pytest.raises(config.SourceWriteRefused):
-            config.ensure_outside_source(source / "x", source, "stop file")
+        marker = source / "stop"
+
+        calls: list[tuple[Path, Path, str]] = []
+        real = config.ensure_outside_source
+
+        def spy(target: Path, source_root: Path, what: str) -> Path:
+            calls.append((Path(target), Path(source_root), what))
+            return real(target, source_root, what)
+
+        monkeypatch.setattr(config, "ensure_outside_source", spy)
+        manifest = _manifest_naming(source, tmp_path / "m.json")
+        main(
+            ["convert", "--manifest", str(manifest),
+             "--dest", str(tmp_path / "out"), "--stop-file", str(marker)]
+        )
+
+        assert any(target == marker for target, _root, _what in calls), (
+            "the stop file was never passed to config.ensure_outside_source"
+        )
 
 
 class TestRemovingTheMarker:

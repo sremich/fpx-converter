@@ -104,3 +104,55 @@ def test_a_working_echo_still_gets_every_line(tmp_path: Path) -> None:
             log.write(f"line {i}")
     assert len(seen) == 4
     assert all(line.startswith("20") for line in seen), "the echo lost its timestamp"
+
+def test_a_keyboard_interrupt_from_the_echo_still_gets_through(
+    tmp_path: Path,
+) -> None:
+    """The guard must not swallow the interrupt that writes the report.
+
+    `except Exception` lets `KeyboardInterrupt` past, because it is a
+    `BaseException` -- but nothing pinned that, and this guard sits directly on
+    the path that saves state and writes `audit_report.json`. A later
+    "let us be safe and catch everything" would break the interrupt silently,
+    and the symptom would be a Ctrl-C that produces no report: the exact bug
+    this project has already fixed twice.
+    """
+
+    def echo(_line: str) -> None:
+        raise KeyboardInterrupt
+
+    with (
+        pytest.raises(KeyboardInterrupt),
+        batch.ConversionLog(tmp_path / "conversion.log", echo=echo) as log,
+    ):
+        log.write("OK   [1/5] something")
+
+    # And the line was written and flushed before the echo ran, so the trail
+    # keeps what it had.
+    assert "OK   [1/5]" in (tmp_path / "conversion.log").read_text(encoding="utf-8")
+
+
+def test_a_per_line_failure_does_not_cost_the_rest_of_the_run(
+    tmp_path: Path,
+) -> None:
+    """A filename the console cannot encode is not a dead reader.
+
+    Dropping the echo for good on a `UnicodeEncodeError` would cost a terminal
+    user the progress display for every remaining file, over one odd filename
+    -- the "it looks hung" ending the progress flag exists to prevent. Only
+    `OSError` -- a closed pipe, a full disk, a closed handle -- is terminal.
+    """
+    seen: list[str] = []
+
+    def echo(line: str) -> None:
+        seen.append(line)
+        if len(seen) == 2:
+            raise UnicodeEncodeError("cp1252", "x", 0, 1, "no")
+
+    with batch.ConversionLog(tmp_path / "conversion.log", echo=echo) as log:
+        for i in range(6):
+            log.write(f"line {i}")
+
+    assert len(seen) == 6, (
+        f"the echo stopped after a per-line failure; it saw {len(seen)} of 6"
+    )

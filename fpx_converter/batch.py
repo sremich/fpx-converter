@@ -265,16 +265,24 @@ class ConversionLog:
         if self._echo is not None:
             try:
                 self._echo(line)
-            except Exception:
+            except OSError:
                 # A dead reader costs the trail, never the run. These writes
                 # sit outside the per-file `except` that makes one bad file a
                 # line in the report, so an exception here escaped the loop
                 # entirely and no `audit_report.json` was written -- over a
                 # 687-file archive, for a closed pipe. Dropped permanently
-                # rather than retried: the reader is not coming back, and
-                # raising once per file for the rest of the run is worse than
-                # silence.
+                # because the reader is not coming back: a closed pipe, a full
+                # disk and a closed handle are all `OSError` and none of them
+                # heal.
                 self._echo = None
+            except Exception:
+                # Everything else costs one line and no more. The example is a
+                # filename the console's code page cannot encode: that is a
+                # property of the one line, not of the reader, and dropping
+                # the echo for good would cost a terminal user the progress
+                # display for every remaining file -- the "it looks hung"
+                # ending this exists to avoid.
+                pass
 
     def close(self) -> None:
         self._handle.close()

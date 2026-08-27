@@ -6,6 +6,73 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [1.1.0] — 2026-08-27
+
+### Added
+- **A desktop app, shipped as one standalone Windows executable.** Download
+  `fpx-converter.exe` from the release and run it — no Python, no `pip`, no
+  terminal. Two folder pickers, per-tree format and framing menus, Convert and
+  Cancel, a progress bar that follows the real per-file trail, a log pane, and
+  a plain-language summary at the end read back from `audit_report.json`.
+  ExifTool remains the one prerequisite that is not bundled.
+- **It wraps the CLI; it never reimplements it.** Every conversion the window
+  starts is `fpx_converter` running as a child process with the arguments a
+  person would have typed. Nothing in `fpx_gui` decodes a pixel, writes a tag
+  or decides where a file lands, and the read-only rule reaches it as a *call*
+  to `config.ensure_outside_source` rather than a second implementation.
+  Replace that call with a local copy of the same check and exactly two tests
+  fail — a number measured by mutation rather than asserted.
+- **`convert --progress`.** Mirrors each per-file log line onto stdout. The
+  trail had only ever gone to `conversion.log`, so anything watching a
+  687-file run — a front end, or a person — saw a header, eleven minutes of
+  silence, and a summary. Opt-in, so no existing command line changes what it
+  prints.
+- **`convert --stop-file PATH`.** Stops a run at the next photo boundary and
+  still writes the audit report. A marker is honoured only if it is newer than
+  the run itself, so one left behind cannot cancel a later run, and one that
+  cannot be deleted cannot wedge a destination.
+- **`batch.interrupt_on_break()`.** Maps Ctrl+Break onto `KeyboardInterrupt`,
+  installed by the entry points. Everything the batch engine does to survive an
+  interruption hangs off that exception, and on Windows only `CTRL_C_EVENT`
+  raises it by default.
+- **CI builds the executable and exercises it.** The release workflow builds
+  the exe, checks it carries `VERSION`, and **converts two fixtures through
+  it** before the release is created — a `--version` call cannot see a missing
+  `pyexiv2` binary or Pillow plugin, and a real conversion can. A second CI
+  job installs `requirements-gui.txt` so the widget tests run somewhere
+  instead of skipping in every job.
+
+### Fixed
+- **`--stop-file` could delete a file inside the read-only source archive.**
+  It was the only path argument `convert` accepts that did not go through
+  `ensure_outside_source`, and both its uses are deletes. A stop file inside
+  the archive destroyed that photograph while the run reported success, and
+  `scan`'s `verify_unchanged` could not catch it because that check belongs to
+  an earlier command. Found in audit, before any release carried it.
+- **A failing progress callback killed the run and lost the audit report.**
+  Those log writes sit outside the per-file `except` that turns one bad file
+  into a line in the report, so a closed pipe escaped the loop entirely.
+  Reachable by killing the window from Task Manager mid-run. A dead reader now
+  costs the trail and never the run — and only a terminal failure (`OSError`)
+  drops the echo for good, because one filename a console cannot encode should
+  not cost the progress display for the remaining 686.
+- **The window could report a previous run's audit report as this run's
+  success**, announcing a clean finish to the audience least able to check.
+- **Cancel froze the window for up to the full grace period.** A window that
+  stops repainting reads as a crash, and the remedy people reach for is Task
+  Manager — which is the one ending that leaves no audit report. The freeze
+  was therefore a direct cause of the outcome the cancellation design exists
+  to prevent.
+- **A cancel that outlasted its timeout was reported as a clean finish.** The
+  timeout was five seconds shorter than the operation's own worst case, so the
+  one ending it existed to classify was the one it could time out on. It is
+  now derived from that worst case rather than guessed at.
+
+### Changed
+- The release workflow builds the executable **before** creating the release.
+  It used to run after, so a failed build left a published release whose whole
+  point was missing — and the same version cannot be re-tagged to fix that.
+
 ## [1.0.0] — 2026-08-27
 
 ### Verified

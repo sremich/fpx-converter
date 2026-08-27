@@ -106,6 +106,14 @@ NOT_RUNNING = "not-running"
 #: write the report; short enough that a person who pressed Cancel believes it.
 GRACE_SECONDS = 20.0
 
+#: How long `taskkill /F /T` is given to take down the process tree.
+#: Named so the worker can add these up rather than guess at a total; a
+#: guessed total was five seconds short, and the case it fell short on was
+#: the hard kill it existed to report.
+TREE_KILL_TIMEOUT = 15.0
+#: The last-resort `terminate()` wait, after the tree kill did not work.
+TERMINATE_TIMEOUT = 5.0
+
 
 def _send_ctrl_break(pid: int) -> bool:
     """Ask the process group led by `pid` to stop. Windows only."""
@@ -148,14 +156,14 @@ def _kill_tree(process: subprocess.Popen[str]) -> None:
             subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
                 ["taskkill", "/F", "/T", "/PID", str(process.pid)],
                 capture_output=True,
-                timeout=15,
+                timeout=TREE_KILL_TIMEOUT,
                 check=False,
                 creationflags=CREATE_NO_WINDOW,
             )
     if process.poll() is None:
         process.terminate()
         try:
-            process.wait(timeout=5.0)
+            process.wait(timeout=TERMINATE_TIMEOUT)
         except subprocess.TimeoutExpired:  # pragma: no cover - kill of last resort
             process.kill()
 

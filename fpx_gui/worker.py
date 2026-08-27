@@ -20,6 +20,17 @@ from PySide6.QtCore import QObject, Signal
 
 from . import runner
 
+#: How long to wait for a cancel to finish deciding how the run ended.
+#: Derived from `CliProcess.cancel`'s own worst case rather than guessed at:
+#: the grace period, then the process-tree kill, then the last-resort wait.
+#: It was `GRACE_SECONDS + 15`, which is five seconds *shorter* than that
+#: worst case -- so the one case it exists to classify, a hard kill, was the
+#: one it could time out on, and a killed run was then reported down the
+#: normal-finish path.
+CANCEL_SETTLE_TIMEOUT = (
+    runner.GRACE_SECONDS + runner.TREE_KILL_TIMEOUT + runner.TERMINATE_TIMEOUT + 5.0
+)
+
 
 class PipelineWorker(QObject):
     """A sequence of `(label, cli_args)` steps, run one after another."""
@@ -73,18 +84,21 @@ class PipelineWorker(QObject):
         Safe to call when nothing is running: `CliProcess.cancel` says so and
         the flag stops any step that has not started yet.
         """
+        # One critical section, not two: reading `_cancel_thread` and storing
+        # a new one under separate acquisitions let two callers both see None
+        # and both start a thread.
         with self._lock:
-            already = self._cancel_thread
             self._cancelling = True
-        if already is None:
-            thread = threading.Thread(target=self._do_cancel, daemon=True)
-            with self._lock:
-                self._cancel_thread = thread
+            started_here = self._cancel_thread is None
+            if started_here:
+                self._cancel_thread = threading.Thread(
+                    target=self._do_cancel, daemon=True
+                )
+            thread = self._cancel_thread
+        if started_here:
             thread.start()
-        else:
-            thread = already
         if wait:
-            thread.join(timeout=runner.GRACE_SECONDS + 15.0)
+            thread.join(timeout=CANCEL_SETTLE_TIMEOUT)
 
     def _do_cancel(self) -> None:
         """The blocking half, off the Qt thread."""
@@ -122,10 +136,18 @@ class PipelineWorker(QObject):
                 break
         with self._lock:
             cancelling = self._cancelling
+        status = self._cancel_status
         if cancelling:
             # The child usually dies before `cancel` has finished classifying
             # how it died. Reporting first would lose the difference between a
             # run that stopped politely -- report written -- and one that had
             # to be killed.
-            self._cancel_settled.wait(timeout=runner.GRACE_SECONDS + 15.0)
-        self.done.emit(code, self._cancel_status)
+            settled = self._cancel_settled.wait(timeout=CANCEL_SETTLE_TIMEOUT)
+            status = self._cancel_status
+            if not settled and not status:
+                # It outlasted even the worst case we can account for, so we
+                # do not know that it stopped politely -- and the ending that
+                # must never be assumed is the quiet one. Reported as a hard
+                # stop, which says out loud that there may be no audit report.
+                status = runner.HARD_STOPPED
+        self.done.emit(code, status)

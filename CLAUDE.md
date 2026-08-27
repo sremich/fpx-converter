@@ -44,12 +44,19 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter check-dates # album ground-trut
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter thumbnail   # extract embedded DIBs
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert     # batch run: TIFF + JPEG + audit
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter gallery     # QA page over a finished run
+
+# desktop front end (1.1.0) -- needs requirements-gui.txt, or use the exe
+C:\venvs\fpxgui\Scripts\python.exe -m fpx_gui
 ```
 
 `check-dates` reports by default and only fails under `--strict`; on this
 corpus the import stamp misses 7 of 9 dated albums, which is *why* it is not
 trusted as a capture date, so a failing gate is the expected state rather
-than a regression. `convert` takes `--limit`, `--dry-run`, and `--no-resume`;
+than a regression. `convert` takes `--limit`, `--dry-run`, `--no-resume`, `--progress` (mirror
+the per-file log lines onto stdout) and `--stop-file PATH` (stop politely at
+the next photo boundary and still write the audit report — the marker is only
+honoured if it is newer than the run, so a stale one cannot wedge a
+destination);
 format and framing are independent: `--archive-format`, `--archive-framing`,
 `--sharing-format`, `--sharing-framing`, `--no-archive`, `--no-sharing`.
 
@@ -68,8 +75,8 @@ not in `requirements.txt`. Do not try to fetch it from a URL — see
 
 | Tier | What it is | Gates |
 |------|-----------|-------|
-| 1. Unit | Property-set parser against hand-built byte fixtures; tile-table parsing; JPEG table + tile reassembly; timestamp and offset logic; naming scheme; collision handling; batch engine; resume state; output control. No real photos, no ExifTool, no source archive. | Every push (CI) |
-| 2. e2e | Full pipeline on 40 committed person-free FPX fixtures (both colour spaces, six sizes, one crop, one camera name) → TIFF + JPEG → independent read-back of every tag; chroma oracle and four mutation tests (wrong neutral, swapped channels, desaturated, double-converted) | Any change to the decoder, metadata engine, output writer, or batch engine |
+| 1. Unit | Property-set parser against hand-built byte fixtures; tile-table parsing; JPEG table + tile reassembly; timestamp and offset logic; naming scheme; collision handling; batch engine; resume state; output control. Also the desktop front end's Qt-free half — argument building, log parsing, the summary, the cancellation worker against a fake child process, and the two tests that fail if the window stops calling `ensure_outside_source`. No real photos, no ExifTool, no source archive. | Every push (CI) |
+| 2. e2e | Desktop front end driving a real conversion through a real child process, including a cancellation that must still leave an audit report. Full pipeline on 40 committed person-free FPX fixtures (both colour spaces, six sizes, one crop, one camera name) → TIFF + JPEG → independent read-back of every tag; chroma oracle and four mutation tests (wrong neutral, swapped channels, desaturated, double-converted) | Any change to the decoder, metadata engine, output writer, or batch engine |
 | 3. Sample batch | `scripts/tier3_sample.py` — 50 real files spanning every album, every declared size, both colour spaces and all four transform outcomes: convert, pyexiv2 read-back, pixel stats, both thumbnail oracles, album ground-truth date check. Exits non-zero on any of them and prints its own sample composition | Before merging any branch that touches decode, metadata, or batch logic |
 | 4. Full dataset | Unattended batch run over all files via the batch engine; audit report shows zero unexplained failures; 2 PhotoYCC files eyeballed in a real photo app for colour correctness | The batch half **passed at 1.0.0** (687/687, `complete: true`). The eyeball half is outstanding and is a strong recommendation, not a release gate — that was Stevie's call, taken knowingly |
 
@@ -153,15 +160,20 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
       automated gate, so it is a recommendation rather than a gate. It is
       still worth doing — `output/full-1.0.0/report/index.html` is the way
       in, and the 2 PhotoYCC files are the ones that matter.
-- [ ] **1.1.0 — Desktop app.** A GUI so somebody who does not use a
+- [x] **1.1.0 — Desktop app.** A GUI so somebody who does not use a
       terminal can run this: pick a source folder, pick a destination, watch
       progress, read the audit result. It **wraps the CLI rather than
       reimplementing it** — the conversion logic has one home and one set of
       tests, and the GUI is a front end over the same commands. Ships as a
       single Windows executable alongside it. Folded together with the
-      PyInstaller work below, because they are the same packaging problem;
-      re-verify 3.14 wheel support first, then add the build-and-attach job
-      to `release.yml`.
+      PyInstaller work, because they are the same packaging problem.
+      **Shipped 2026-08-27.** PySide6 6.11.2 (a `cp310-abi3` wheel, so it
+      runs on 3.14) and PyInstaller 6.22.2; the release workflow builds the
+      exe, converts two fixtures *through it*, and only then creates the
+      release — a `--version` call cannot see a missing `pyexiv2` binary, and
+      a build that fails must not leave a published release with nothing in
+      it. Cancellation needed two mechanisms rather than one; see
+      `DECISIONS.md`.
 
 Two wants from the original requirements changed after the milestone-0
 inventory measured the corpus: the **audio-extraction want is CLOSED** (zero
@@ -255,8 +267,9 @@ archive, so they are rules, not preferences.
   with the arguments a person would have typed. Nothing in `fpx_gui` decodes a
   pixel, writes a tag, or decides where a file lands, and the read-only rule
   reaches it as a *call* to `config.ensure_outside_source` rather than a
-  second implementation of it. Two tier-2 tests fail if that call stops
-  happening, and they were verified by mutation rather than trusted.
+  second implementation of it. Exactly two tier-1 tests fail when that call is
+  replaced by a local copy of the same check — one at `fpx_gui/options.py`,
+  one at the window — and that count is measured by mutation, not asserted.
 - **Keep every path short.** Windows long-path support is disabled on the
   dev machine; deep paths corrupt installs and writes.
 

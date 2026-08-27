@@ -13,6 +13,7 @@ install of `requirements-dev.txt` alone.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -210,11 +211,28 @@ class TestCancellingARealRun:
     def test_the_stop_marker_does_not_survive_to_poison_the_next_run(
         self, tmp_path: Path
     ) -> None:
-        """A leftover marker would cancel the following run before it began."""
+        """A leftover marker must not cancel the following run.
+
+        This used to be arranged by deleting the marker at startup, and
+        this test asserted the deletion. That mechanism was wrong twice
+        over: the delete happened only after the manifest load and the
+        stem assignment, so a Cancel arriving during that window was
+        swallowed by the very run it was meant to stop; and a marker that
+        could not be deleted -- a directory, an antivirus lock -- stopped
+        every future run into that destination, for ever and silently.
+
+        A marker is now honoured only if it is newer than the run, so a
+        stale one is ignored rather than removed. The property this test
+        cares about is unchanged and is what it now asserts. Whether the
+        marker is still on disk afterwards is not a fault either way, so
+        it is no longer asserted.
+        """
         dest = tmp_path / "stale"
         dest.mkdir(parents=True)
         chosen = ConvertOptions(source=FIXTURES, dest=dest)
         chosen.stop_file.write_text("stop\n", encoding="utf-8")
+        # Unambiguously older than the run that is about to start.
+        os.utime(chosen.stop_file, (0, 0))
 
         assert runner.run_cli(options_mod.scan_args(chosen)) == 0
         args = [*options_mod.convert_args(chosen), "--limit", "2"]
@@ -223,7 +241,30 @@ class TestCancellingARealRun:
         result = summary.load_summary(dest / batch.REPORT_FILENAME)
         assert result.interrupted is False
         assert result.converted == 2
-        assert not chosen.stop_file.exists()
+
+    def test_an_undeletable_marker_does_not_wedge_the_destination(
+        self, tmp_path: Path
+    ) -> None:
+        """The second half of the same finding.
+
+        A marker that cannot be removed -- here a directory, which
+        `unlink` refuses on Windows -- used to stop every run into that
+        destination for ever, while the window cheerfully advised pressing
+        Convert again.
+        """
+        dest = tmp_path / "wedged"
+        dest.mkdir(parents=True)
+        chosen = ConvertOptions(source=FIXTURES, dest=dest)
+        chosen.stop_file.mkdir(parents=True)
+        os.utime(chosen.stop_file, (0, 0))
+
+        assert runner.run_cli(options_mod.scan_args(chosen)) == 0
+        args = [*options_mod.convert_args(chosen), "--limit", "2"]
+        assert runner.run_cli(args) == 0
+
+        result = summary.load_summary(dest / batch.REPORT_FILENAME)
+        assert result.interrupted is False, "an undeletable marker wedged the run"
+        assert result.converted == 2
 
 
 class TestTheCliIsReachedTheWayThePackagedAppWouldReachIt:

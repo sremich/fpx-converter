@@ -6,9 +6,13 @@ name: Release
 # hand.
 #
 # This project publishes NO container image. The scaffold's GHCR build/push
-# job was removed at milestone 0 rather than left as a dead stub -- the only
-# artifact this project will ever attach is the [later] PyInstaller exe, and
-# that job gets added when the exe exists, not before.
+# job was removed at milestone 0 rather than left as a dead stub. The one
+# artifact it does attach is the PyInstaller exe, added at 1.1.0 when the exe
+# existed.
+#
+# Order matters: verify -> package -> release. The exe is built and actually
+# exercised before the release is created, so a failed build means no release
+# rather than a published release with nothing in it.
 
 on:
   push:
@@ -69,10 +73,17 @@ jobs:
         run: python -m pytest
 
   release:
-    needs: verify
+    # `package` too: the release is created only once there is an executable
+    # to put in it.
+    needs: [verify, package]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: fpx-converter-exe
+          path: dist
 
       - name: Create GitHub release (pre-release while 0.x)
         env:
@@ -83,7 +94,8 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
-            $PRERELEASE
+            $PRERELEASE \
+            dist/fpx-converter.exe
           echo "Release created. REMINDER: tick the /release skill's checklist."
 
   # The exe is the whole point of 1.1.0: somebody who does not use a terminal
@@ -92,7 +104,11 @@ jobs:
   # to attach it to. Windows-only by nature -- PyInstaller does not
   # cross-compile.
   package:
-    needs: [verify, release]
+    # Before `release`, deliberately. This job used to run after it, so a
+    # failed build left a published release with no executable in it -- and
+    # the same version cannot be re-tagged to fix that. If the exe cannot be
+    # built, no release should exist at all.
+    needs: verify
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,7 +162,10 @@ jobs:
             --dest smoke/out --limit 2
           test -f smoke/out/audit_report.json
 
-      - name: Attach the executable to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${env:GITHUB_REF_NAME}" dist/fpx-converter.exe --clobber
+      - name: Hand the executable to the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpx-converter-exe
+          path: dist/fpx-converter.exe
+          if-no-files-found: error
+          retention-days: 1

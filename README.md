@@ -12,11 +12,17 @@ the family timeline.
 
 ## Status
 
-**Version 0.6.0 (pre-release).** The full conversion pipeline with QA gallery is built
-and tested on 40 committed person-free fixtures. Source ingestion, metadata extraction,
-pixel decoding, dual-output generation, unattended batch processing with resume-by-hash,
-and an HTML review page with per-album date input all work. Full-dataset verification (tier 4)
-is the remaining gate for 1.0.0.
+**Version 1.0.0 released.** The whole archive converted in one unattended pass: 687 source
+files to archival TIFF and shareable JPEG with full metadata, 0 failed, 0 with warnings,
+`complete: true` and `unexplained_failures: 0`. Version 1.1.0 adds a graphical interface so
+somebody who does not use a terminal can run a conversion.
+
+**What has not been done:** the tier-4 *eyeball* pass — a person opening the converted
+photographs in a real photo app and checking colour, orientation and date by eye. It was a
+release gate until 1.0.0 and is now a strong recommendation instead, which was a deliberate
+decision rather than an oversight. It still matters: the two PhotoYCC files in this archive
+once shipped solidly green with 42% of their pixels clipped to zero, past every automated
+check the project had. A 96-pixel thumbnail oracle is evidence, not sight.
 
 What exists:
 - **The `fpx_converter` package** with eight commands:
@@ -110,6 +116,72 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter gallery
 # Open the gallery page, fill in missing dates, save as album-dates.json, re-run convert
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert
 ```
+
+## Using the desktop application
+
+If you don't use a terminal, the desktop app `fpx-converter.exe` handles conversion
+entirely from a window.
+
+### Get the app
+
+Download `fpx-converter.exe` from the latest GitHub release. One file, nothing to
+install — just run it. No Python installation needed.
+
+### Install ExifTool (one prerequisite)
+
+ExifTool is the only tool not bundled:
+
+```powershell
+winget install --id OliverBetz.ExifTool
+```
+
+**What happens if you skip this:** The conversion still runs and still writes the images.
+Every file is recorded as failed in the audit report because metadata could not be embedded,
+and the run exits non-zero.
+
+### Pick a source and destination folder
+
+- **Source folder:** holds your `.fpx` photos. It is only ever read from — nothing is
+  written, moved, renamed, or deleted there.
+- **Destination folder:** where the converted photos go. If you pick a folder inside the
+  source folder, you will be refused and shown why.
+
+### Convert
+
+Pick what to write:
+- **Archive copy:** the one to keep. Lossless TIFF, every pixel the camera captured.
+- **Shareable copy:** the one to send. JPEG, cropped as it was framed in the original
+  software (if it was cropped).
+
+Each format is independent; you can write TIFF without JPEG or vice versa. The window
+offers independent cropping choices for each — "Whole photo" or "Cropped as framed."
+
+Press **Convert**. You will see:
+- A progress bar (once the total count is known)
+- A running log of what the converter is doing
+- At the end, a summary: how many converted, whether anything failed, and details of any
+  problems
+
+### Cancel is safe
+
+If you press **Cancel**, the converter stops after the photo it is working on and finishes
+writing the audit report. Nothing is lost. Press **Convert** again and it picks up where
+it stopped — resume is on by default.
+
+In rare cases where the converter does not respond to the stop request, it will be killed;
+you will be told so, and nothing was written for this run. The photos already converted are
+still good and untouched.
+
+### Review and supply dates
+
+After conversion, press **Open review page**. A browser opens showing every converted photo
+as a thumbnail. Where capture dates are missing, the page lists albums with a date-entry
+box beside each one. Type the dates you know (YYYY-MM-DD format, for example `2001-07-04`),
+then save the page's JSON data as `album-dates.json` in the destination folder.
+
+Run **Convert** again. It will read the dates you supplied and write them to
+`DateTimeOriginal` for every photo in those albums. Resume is on, so nothing re-converts;
+only the metadata updates.
 
 ## Install and test
 
@@ -325,7 +397,7 @@ This is expected and must not be reported as a fault by the audit.
 
 The approved plan for building the converter, ticked as milestones ship.
 This survives context loss; conversation memory doesn't. Current status:
-0.6.0 shipped; 1.0.0–1.1.0 not yet built.
+0.6.0, 1.0.0, and 1.1.0 shipped.
 
 - [x] **0.1.0** — Scaffold + ingestion. Read-only source walk, hash
       cascade, `manifest.json`, copy `.fpx` into `source-files/`.
@@ -350,9 +422,10 @@ This survives context loss; conversation memory doesn't. Current status:
       thumbnails from embedded DIBs, filters by album and audit status,
       per-album date-entry interface yielding `album-dates.json` which `convert`
       reads and writes to `DateTimeOriginal`.
-- [ ] **1.0.0** — Full dataset run (tier-4 unattended batch conversion) plus
-      tier-4 eyeball verification for colour correctness on the PhotoYCC files.
-- [ ] **1.1.0** — Desktop app (later). A GUI wrapping the CLI. Ships as a
+- [x] **1.0.0** — Full dataset run: the whole archive in one unattended pass,
+      687 converted, 0 failed, `complete: true`. The tier-4 eyeball half is
+      outstanding and is now a recommendation rather than a gate.
+- [x] **1.1.0** — Desktop app. A GUI wrapping the CLI. Ships as a
       single Windows executable alongside it. Folded with PyInstaller
       packaging work.
 
@@ -426,8 +499,10 @@ can review them if needed.
 - Push a `vX.Y.Z` tag to trigger CI. CI verifies tag == VERSION, lints,
   tests, and creates the GitHub release — automatically a pre-release
   while 0.x.
-- Releases stay pre-releases until **tier-4 full-dataset verification
-  passes at 1.0.0**.
+- Releases were pre-releases through 0.x. From 1.0.0 they are full releases.
+  The tier-4 eyeball pass is **not** a gate — it was one until 1.0.0, and the
+  rule was removed deliberately rather than left standing while releases
+  stepped over it
 - This project publishes **no container image** and talks to **no
   external system**.
 
