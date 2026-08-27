@@ -15,9 +15,9 @@ four transform outcomes (untouched / crop / rotation / rotation+crop), then:
   output is visible without opening a file
 * runs the embedded-thumbnail oracle over the cropped files (geometry only --
   it is greyscale, so it says nothing about colour)
-* correlates each output against its thumbnail **per channel**, which does
-  answer the colour question, and which caught both PhotoYCC files being
-  converted twice
+* compares each output's **chroma** against its thumbnail (`R-G`, `B-G`),
+  which is the colour check -- correlating the channels separately is not,
+  because Pearson correlation is invariant under a per-channel affine map
 * runs the album ground-truth date check
 
 Reads the source archive. Writes only under `--dest`, which must be outside it.
@@ -91,13 +91,28 @@ def pixel_stats(image) -> tuple[float, float, float]:
 #:   scale         0.754 .. 1.179            0.47/1.32  0.0         unchanged
 #:   offset        -17.1 .. +9.7             -39 .. +42 unchanged   -50 .. -53
 #:
+#: The scale range is deliberately tighter than "outside the baseline": at
+#: (0.45, 2.2) a decode at half saturation tripped 1% of files and one at
+#: double tripped 2%, which is not a gate. (0.65, 1.45) still clears all 687.
+#:
 #: All three are needed. Correlation catches a swap, scale catches a lost or
 #: exaggerated chroma, and offset catches a wrong neutral point -- which is
 #: half of the bug this release exists to fix and which the other two cannot
 #: see, because a constant shift leaves both unchanged.
 CHROMA_MIN_CORRELATION = 0.5
-CHROMA_SCALE_RANGE = (0.45, 2.2)
+CHROMA_SCALE_RANGE = (0.65, 1.45)
 CHROMA_MAX_OFFSET = 30.0
+
+#: Known blind spot, measured rather than assumed. Chroma is `R-G` and `B-G`,
+#: so an error confined to the **green** channel moves both signals together
+#: and largely cancels: a green gain of x1.10 trips no gate on any of the 687
+#: files, while a comparable red gain trips 39% of them. A green-only fault is
+#: therefore tier 4's to catch, not this script's.
+#:
+#: The scale gate's lower bound is also anchored on four files whose decode is
+#: ~20% darker than their own thumbnail for reasons nobody has explained yet
+#: -- two PhotoYCC and two NIF_RGB. Re-derive these numbers once tier 4 has
+#: settled that, rather than treating the current spread as the truth.
 
 
 def _chroma(image) -> tuple[np.ndarray, np.ndarray]:

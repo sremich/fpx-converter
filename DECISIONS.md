@@ -785,8 +785,28 @@ different fault and none catches all three:
 | scale | 0.754 – 1.179 | 0.47 / 1.32 | 0.0 | unchanged |
 | offset | −17.1 – +9.7 | −39 – +42 | unchanged | −50 – −53 |
 
-Gates sit outside the observed baseline in every case, and all four faults
-were re-injected into the decoder and confirmed to fail the run.
+All faults were re-injected into the decoder and confirmed to fail the run.
+
+**"Outside the baseline" is not the same as "a gate".** The first calibration
+put the scale range at (0.45, 2.2), which does sit outside the observed
+0.754–1.179 — and a decode at *half saturation* then tripped it on 1% of the
+687 files, one at double saturation on 2%. A gate that fires on 1% of a corpus
+does not fire. Tightened to (0.65, 1.45), which still clears every one of the
+687, and both now fail.
+
+**Known blind spot, measured rather than assumed.** Chroma is `R-G` and `B-G`,
+so an error confined to the **green** channel moves both signals together and
+largely cancels. A green gain of ×1.10 trips no gate on any of the 687 files;
+a comparable red gain trips 39% of them. A green-only fault belongs to tier 4,
+and nothing before it will catch one.
+
+**And the lower bound rests on something unexplained.** The four files that set
+it — two PhotoYCC and two NIF_RGB — decode about 20% darker than their own
+embedded thumbnails, and nobody knows why yet. Since the same gap occurs on
+NIF_RGB files, whose decode is a plain JPEG read and cannot have a wrong colour
+transform, it is not evidence against the PhotoYCC work. It is also not
+resolved. Re-derive these numbers after tier 4 rather than treating the current
+spread as the truth.
 
 Two smaller lessons in the same defect:
 

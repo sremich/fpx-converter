@@ -140,7 +140,7 @@ commit, then tag.
     pyexiv2 readback, and CLI convert tests for the initial dual-output
     engine (182 → 197), plus further tests added alongside the audit fixes
     above and the crop-application work below. The suite now stands at
-    **286 tests**, all of which run in CI (locally, one skips: the guard
+    **287 tests**, all of which run in CI (locally, one skips: the guard
     that fails when `FPX_REQUIRE_EXIFTOOL` is set without ExifTool present).
   - Tier 3 is now a committed script (`scripts/tier3_sample.py`) rather than
     a run performed by hand, and it exits non-zero on any failure. Run
@@ -153,9 +153,10 @@ commit, then tag.
     on any file the filename marks undated. Crop geometry: 9 of 9 cropped
     files in the sample improved against the greyscale thumbnail oracle, and
     70 of 70 across the whole corpus (mean +0.56, min +0.18, worst post-crop
-    correlation 0.981). Colour: worst per-channel correlation with the
-    embedded thumbnail 0.860, no image clipped further than its own
-    thumbnail, none near-flat.
+    correlation 0.981). Colour: worst chroma correlation with the
+    embedded thumbnail 0.739 and worst chroma offset +5.3, against gates of
+    0.5 and 30; no image clipped further than its own thumbnail, none
+    near-flat.
 - **Pixel decoder engine (milestone 0.3.0).**
   - Pure-Python FlashPix multi-resolution tile decoder (`fpx_converter.decoder`)
     bypassing Pillow's crash-prone `FpxImagePlugin`.

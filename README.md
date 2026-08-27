@@ -27,7 +27,7 @@ What exists:
   - `check-dates` (ground-truth date comparison; supports `--strict` flag)
   - `thumbnail` (extract embedded DIB thumbnails as PNG)
   - `convert` (generate Deflate TIFF + quality-95 4:4:4 JPEG with metadata)
-- **286 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
+- **287 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
   over four committed Kodak stock fixtures and hand-built property-set bytes.
 - **CI passing on Windows** (python 3.14, `windows-latest`; ExifTool installed).
 
@@ -120,7 +120,7 @@ The tier-1 gates:
 # Lint
 C:\venvs\fpx\Scripts\python.exe -m ruff check .
 
-# Unit and e2e tests (tier 1 + tier 2: 286 tests, no real photos, no source archive)
+# Unit and e2e tests (tier 1 + tier 2: 287 tests, no real photos, no source archive)
 # Note: some tier-2 tests require ExifTool for metadata round-trip validation
 C:\venvs\fpx\Scripts\python.exe -m pytest
 ```

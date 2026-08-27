@@ -390,14 +390,29 @@ class TestCropGeometry:
         assert 0 <= top < bottom <= 864
 
     def test_missing_result_aspect_refuses_rather_than_guessing(self) -> None:
-        # Guessing the aspect would silently crop to the wrong shape.
-        assert decoder.source_crop_box(self._matrix(0.8, 0.1, 0.1), None, 1152, 864) is None
-        assert decoder.source_crop_box(self._matrix(0.8, 0.1, 0.1), 0.0, 1152, 864) is None
+        # Guessing the aspect would silently crop to the wrong shape. Assert
+        # on the *reason*, not just the absent box: `source_crop_box` throws
+        # the reason away, so a test written against it cannot tell "no crop"
+        # from "cannot tell" -- which is the distinction this whole layer
+        # exists to make, and it would pass again if the collapse came back.
+        for aspect in (None, 0.0):
+            box, reason = decoder.resolve_crop_box(self._matrix(0.8, 0.1, 0.1), aspect, 1152, 864)
+            assert box is None
+            assert "ResultAspectRatio" in reason
 
     def test_a_box_falling_outside_the_frame_is_refused(self) -> None:
         # A box outside the image means the matrix was misread. Refusing
         # surfaces that; clamping would hide it behind a plausible crop.
-        assert decoder.source_crop_box(self._matrix(0.9, 0.9, 0.9), 1.333, 1152, 864) is None
+        box, reason = decoder.resolve_crop_box(self._matrix(0.9, 0.9, 0.9), 1.333, 1152, 864)
+        assert box is None
+        assert "outside" in reason
+
+    def test_a_genuine_full_frame_gives_no_reason_at_all(self) -> None:
+        # The other half of the contract: an empty reason means "there really
+        # is no crop here", and nothing else may return one.
+        box, reason = decoder.resolve_crop_box(self._matrix(1.0, 0.0, 0.0), 4 / 3, 1152, 864)
+        assert box is None
+        assert reason == ""
 
     def test_crop_matrix_is_classified_as_a_crop_not_unsupported(self) -> None:
         status, note = decoder.classify_orientation_matrix(self._matrix(0.745, 0.0, 0.252))
@@ -600,7 +615,9 @@ class TestOutputGeometry:
         # cuts a pixel off the JPEG for no visible reason and moves the file
         # into the crop bucket in the audit.
         matrix = [1.0, 0, 0, 0.0, 0, 1.0, 0, 0.0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
-        assert decoder.source_crop_box(matrix, 320 / 139 - 0.0056, 320, 139) is None
+        box, reason = decoder.resolve_crop_box(matrix, 320 / 139 - 0.0056, 320, 139)
+        assert box is None
+        assert reason == "", "rounding is not a failure to resolve; it is no crop"
         # But a real crop at the same scale still resolves.
         assert decoder.source_crop_box(matrix, 1.0, 320, 139) is not None
 

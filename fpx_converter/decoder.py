@@ -344,8 +344,23 @@ def output_geometry(
         # still narrow the viewport, and that is a crop. Resolving it against
         # the identity matrix is the honest reading; ignoring the term
         # because the matrix was absent is how a crop goes missing.
-        if not result_aspect or width <= 0 or height <= 0:
+        #
+        # Unreachable on this corpus: all 687 files carry both a matrix and an
+        # aspect. So the anchoring here -- that a narrower aspect crops from
+        # the origin, i.e. the left edge -- is a reading of the spec and not a
+        # measurement, and no real file has ever confirmed it. If one ever
+        # takes this branch, check it before trusting the `sharing/` JPEG.
+        # `archive/` keeps the full frame either way, so a wrong anchor
+        # misframes a derivative rather than losing anything.
+        if result_aspect is None:
+            # Nothing to resolve and nothing claimed: a file with neither a
+            # matrix nor an aspect really has no transform.
             return OutputGeometry(status=TRANSFORM_ABSENT, tiff_size=(width, height))
+        # Everything else goes through `resolve_crop_box`, including a zero
+        # aspect and an unknown declared size. Both are "cannot tell", and the
+        # matrix-present path below already reports them as such -- reporting
+        # the same condition two different ways depending on whether a matrix
+        # happened to be stored is the same collapse in a smaller place.
         box, reason = resolve_crop_box(IDENTITY_MATRIX, result_aspect, width, height)
         if reason:
             return OutputGeometry(
