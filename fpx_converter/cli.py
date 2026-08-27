@@ -15,9 +15,11 @@ from __future__ import annotations
 import argparse
 import datetime
 import sys
+import time
 from pathlib import Path
+from typing import Any
 
-from . import __version__, config, layout, naming, outputs, scan
+from . import __version__, batch, config, decoder, layout, naming, outputs, scan
 from . import ingest as ingest_mod
 from . import manifest as manifest_mod
 from . import metadata as metadata_mod
@@ -300,22 +302,18 @@ def cmd_thumbnail(args: argparse.Namespace) -> int:
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
+    """Convert the manifest, resuming what is done and never stopping on one file."""
     manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
     if not manifest_path.is_file():
-        print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
+        print(f"No manifest at {manifest_path} - run `scan` first.", file=sys.stderr)
         return 1
 
     manifest = manifest_mod.load(manifest_path)
     source_root = Path(manifest["source_root"])
     store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
 
-    output_base = (
-        Path(args.dest) if args.dest else (config.REPO_ROOT / "output")
-    )
+    output_base = Path(args.dest) if args.dest else (config.REPO_ROOT / "output")
     dest = config.ensure_outside_source(output_base, source_root, "conversion destination")
-
-    all_entries = manifest.get("entries", [])
-    entries = all_entries[: args.limit] if args.limit and args.limit > 0 else all_entries
 
     try:
         specs = outputs.build_specs(
@@ -330,89 +328,210 @@ def cmd_convert(args: argparse.Namespace) -> int:
         print(f"{exc}", file=sys.stderr)
         return 1
 
-    verb = "Would convert" if args.dry_run else "Converting"
-    print(f"{verb} {len(entries)} files -> {dest}")
-    print(f"  outputs: {', '.join(spec.label for spec in specs)}")
-
-    converted = 0
-    dated_count = 0
-    undated_count = 0
-    failures: list[tuple[str, str]] = []
-    warnings: list[tuple[str, str]] = []
-    cropped: list[tuple[str, tuple[int, int, int, int]]] = []
+    all_entries = manifest.get("entries", [])
+    entries = all_entries[: args.limit] if args.limit and args.limit > 0 else all_entries
 
     # Names are resolved from the WHOLE manifest, not from the slice being
-    # converted. `--limit` must not change where a file lands: if it did,
-    # a limited run and a full run would disagree about which of two
-    # same-named photos keeps the bare stem, and the same photo would exist
-    # at two paths. Assign over everything, then slice.
+    # converted. `--limit` must not change where a file lands: if it did, a
+    # limited run and a full run would disagree about which of two same-named
+    # photos keeps the bare stem, and the same photo would exist at two paths.
     stems = naming.assign_output_stems(
         [
             (e["sha256"], layout.stem_scope(e), e.get("preferred_name", e["store_name"]))
             for e in all_entries
         ]
     )
-    claimed: set[Path] = set()
 
-    for entry in entries:
-        store_name = entry["store_name"]
-        fpx_path = store_dir / store_name
-        if not fpx_path.is_file():
-            alt = source_root / entry["preferred_relpath"]
-            if alt.is_file():
-                fpx_path = alt
-            else:
-                failures.append((store_name, "source file not found"))
+    verb = "Would convert" if args.dry_run else "Converting"
+    print(f"{verb} {len(entries)} files -> {dest}")
+    print(f"  outputs: {', '.join(spec.label for spec in specs)}")
+
+    if args.dry_run:
+        return _convert_dry_run(entries, store_dir, source_root, specs)
+
+    dest.mkdir(parents=True, exist_ok=True)
+    state = batch.RunState(dest / batch.STATE_FILENAME, specs)
+    if args.no_resume:
+        state.done.clear()
+
+    records: list[batch.FileRecord] = []
+    claimed: set[Path] = set()
+    started, t0 = batch.now_iso(), time.time()
+    interrupted = False
+
+    with batch.ConversionLog(dest / batch.LOG_FILENAME) as log:
+        labels = ", ".join(s.label for s in specs)
+        log.write(f"=== run start: {len(entries)} entries, outputs {labels}")
+        for index, entry in enumerate(entries, start=1):
+            sha = entry["sha256"]
+            store_name = entry["store_name"]
+            album = layout.choose_album(entry)
+
+            if state.is_done(sha, dest):
+                stored = state.recall(sha)
+                records.append(
+                    batch.record_from_json(stored)
+                    if stored
+                    else batch.FileRecord(
+                        sha256=sha, store_name=store_name, album=album, status="resumed"
+                    )
+                )
                 continue
 
-        try:
-            res = writer_mod.write_single_entry_dual_output(
-                fpx_path=fpx_path,
-                entry=entry,
-                output_root=dest,
-                source_root=source_root,
-                dry_run=args.dry_run,
-                stem=stems.get(entry["sha256"]),
-                claimed=claimed,
-                specs=specs,
-            )
-            if res.warnings:
-                warnings.extend((store_name, w) for w in res.warnings)
-            if res.crop_applied is not None:
-                cropped.append((store_name, res.crop_applied))
-            if res.validation_ok:
-                converted += 1
-                if res.is_undated:
-                    undated_count += 1
-                else:
-                    dated_count += 1
-            else:
-                failures.append((store_name, "; ".join(res.errors)))
-        except Exception as exc:  # noqa: BLE001
-            failures.append((store_name, str(exc)))
+            try:
+                record = _convert_one(
+                    entry=entry,
+                    store_dir=store_dir,
+                    source_root=source_root,
+                    dest=dest,
+                    stem=stems.get(sha),
+                    claimed=claimed,
+                    specs=specs,
+                    album=album,
+                )
+            except KeyboardInterrupt:
+                interrupted = True
+                log.write("INTERRUPTED by the operator")
+                break
+            except Exception as exc:  # noqa: BLE001
+                # The whole point of the engine: one bad file is a line in the
+                # report, not the end of the run over an irreplaceable archive.
+                record = batch.FileRecord(
+                    sha256=sha,
+                    store_name=store_name,
+                    album=album,
+                    status="failed",
+                    errors=[f"{type(exc).__name__}: {exc}"],
+                )
 
-    print(
-        f"  converted {converted} files ({dated_count} dated, {undated_count} undated)"
+            records.append(record)
+            if record.status == "converted":
+                state.mark(sha, record)
+                state.save()
+                log.write(
+                    f"OK   [{index}/{len(entries)}] {store_name} -> "
+                    f"{len(record.outputs)} files in {record.seconds:.1f}s"
+                )
+            else:
+                log.write(
+                    f"FAIL [{index}/{len(entries)}] {store_name}: "
+                    f"{'; '.join(record.errors)}"
+                )
+            for warning in record.warnings:
+                log.write(f"WARN {store_name}: {warning}")
+
+        report = batch.build_audit_report(
+            records,
+            specs=specs,
+            output_root=dest,
+            started=started,
+            elapsed=batch.elapsed_since(t0),
+            total_entries=len(entries),
+            interrupted=interrupted,
+        )
+        batch.write_audit_report(report, dest / batch.REPORT_FILENAME)
+        log.write(f"=== run end: {report['counts']}")
+
+    print(batch.summarise(report))
+    print(f"  report: {dest / batch.REPORT_FILENAME}")
+    if report["failures"]:
+        for failure in report["failures"][:20]:
+            joined = "; ".join(failure["errors"])
+            print(f"  FAILED {failure['store_name']}: {joined}", file=sys.stderr)
+        if len(report["failures"]) > 20:
+            print(
+                f"  ... and {len(report['failures']) - 20} more, see the report",
+                file=sys.stderr,
+            )
+        return 2
+    return 1 if interrupted else 0
+
+
+def _resolve_fpx_path(
+    entry: dict[str, Any], store_dir: Path, source_root: Path
+) -> Path | None:
+    path = store_dir / entry["store_name"]
+    if path.is_file():
+        return path
+    alt = source_root / entry["preferred_relpath"]
+    return alt if alt.is_file() else None
+
+
+def _convert_one(
+    *,
+    entry: dict[str, Any],
+    store_dir: Path,
+    source_root: Path,
+    dest: Path,
+    stem: str | None,
+    claimed: set[Path],
+    specs: tuple[outputs.OutputSpec, ...],
+    album: str,
+) -> batch.FileRecord:
+    sha, store_name = entry["sha256"], entry["store_name"]
+    fpx_path = _resolve_fpx_path(entry, store_dir, source_root)
+    if fpx_path is None:
+        return batch.FileRecord(
+            sha256=sha,
+            store_name=store_name,
+            album=album,
+            status="failed",
+            errors=["source file not found"],
+        )
+
+    started = time.time()
+    res = writer_mod.write_single_entry_dual_output(
+        fpx_path=fpx_path,
+        entry=entry,
+        output_root=dest,
+        source_root=source_root,
+        stem=stem,
+        claimed=claimed,
+        specs=specs,
     )
-    if cropped:
-        # The two outputs differ for these, and which pixels the JPEG kept is
-        # an owner decision somebody made in 2002 that nobody has reviewed
-        # since. Naming them is the only way to review them before the QA
-        # gallery exists; the archival TIFF and the `.fpx` keep the full
-        # frame regardless, so nothing here is one-way.
-        print(f"  {len(cropped)} files where the shareable JPEG is cropped:")
-        for name, box in cropped:
-            left, top, right, bottom = box
-            print(f"    {name}: {right - left}x{bottom - top} at ({left}, {top})")
-    if warnings:
-        # Not failures -- the pixels are the source pixels -- but a discarded
-        # crop is a difference from the original that has to be visible.
-        print(f"  {len(warnings)} files with an unapplied viewing transform:")
-        for name, why in warnings:
-            print(f"    {name}: {why}")
-    if failures:
-        for name, why in failures:
-            print(f"  FAILED {name}: {why}", file=sys.stderr)
+    relpaths = [str(path.relative_to(dest)) for path, _ in res.written]
+
+    pixel_sha = None
+    if res.validation_ok and res.written:
+        try:
+            pixel_sha = batch.pixel_digest(decoder.decode_fpx(fpx_path).image)
+        except Exception:  # noqa: BLE001
+            # Only used to explain expected duplicates in the report. Failing
+            # to compute it must not fail a conversion that already validated.
+            pixel_sha = None
+
+    return batch.FileRecord(
+        sha256=sha,
+        store_name=store_name,
+        album=album,
+        status="converted" if res.validation_ok else "failed",
+        date_source=res.date_source,
+        is_undated=res.is_undated,
+        transform_status=res.transform_status,
+        crop_applied=res.crop_applied,
+        outputs=relpaths,
+        pixel_sha256=pixel_sha,
+        errors=res.errors,
+        warnings=res.warnings,
+        seconds=time.time() - started,
+    )
+
+
+def _convert_dry_run(
+    entries: list[dict[str, Any]],
+    store_dir: Path,
+    source_root: Path,
+    specs: tuple[outputs.OutputSpec, ...],
+) -> int:
+    """Walk without writing, and say what is missing before a real run finds out."""
+    missing = 0
+    for entry in entries:
+        if _resolve_fpx_path(entry, store_dir, source_root) is None:
+            missing += 1
+            print(f"  missing source: {entry['store_name']}", file=sys.stderr)
+    print(f"  {len(entries)} entries, {len(entries) * len(specs)} images would be written")
+    if missing:
+        print(f"  {missing} source files could not be found", file=sys.stderr)
         return 2
     return 0
 
@@ -502,6 +621,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_conv.add_argument("--dest", help="output root directory (defaults to output/)")
     p_conv.add_argument("--limit", type=int, help="limit number of files to convert")
     p_conv.add_argument("--dry-run", action="store_true")
+    p_conv.add_argument(
+        "--no-resume", action="store_true",
+        help="convert every entry again, ignoring what a previous run recorded "
+             "(resume is on by default: a killed run costs the file in flight, "
+             "not the batch)",
+    )
 
     # Format and framing are independent axes. They used to be welded to the
     # tree -- archive meant full-frame TIFF and sharing meant cropped JPEG --

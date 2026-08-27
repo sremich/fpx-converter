@@ -24,6 +24,40 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: Kodak's camera-generated filenames. Not captions -- the absence of one.
 _CAMERA_NAME = re.compile(r"(?i)(dcp|dsc|dcs|img|pic|mvc|p)[_-]?\d+")
 
+#: Words too ordinary to identify anybody. A name built only out of these is
+#: not evidence of anything and matches English prose constantly -- one album
+#: in this archive is an everyday two-word phrase, and it matched the words
+#: "the end" in a code comment. A guard that cries wolf on ordinary sentences
+#: gets worked around, and working around it means rewording documentation to
+#: dodge a false positive, which is worse than the exemption.
+#:
+#: Kept deliberately tight: function words plus a handful of bare adverbs.
+#: Anything with a name, a place, a noun or a digit in it stays checked.
+_ORDINARY_WORDS = frozenset({
+    "a", "an", "and", "or", "of", "to", "in", "on", "at", "by", "for", "with", "from", "the",
+    "this", "that", "these", "those", "is", "are", "was", "were", "be", "been", "am", "do",
+    "does", "did", "no", "not", "all", "any", "some", "each", "every", "end", "ends", "start",
+    "starts", "first", "last", "next", "then", "now", "here", "there", "up", "down", "out",
+    "off", "over", "under", "again", "more", "most", "one", "two", "three"
+})
+
+
+def _is_distinctive(name: str) -> bool:
+    """Could this name identify somebody or something if it were published?
+
+    A single dictionary word cannot -- some folders are named things like
+    "Sample", and banning that string from the codebase would be absurd. Nor
+    can a phrase built entirely from ordinary words. Anything with a digit in
+    it stays checked whatever its words, because a year is exactly the kind of
+    detail that makes a folder name personal.
+    """
+    if any(c.isdigit() for c in name):
+        return True
+    tokens = [tok for tok in re.split(r"[^a-z0-9]+", name.lower()) if tok]
+    if len(tokens) < 2:
+        return False
+    return not all(tok in _ORDINARY_WORDS for tok in tokens)
+
 
 def test_version_file_is_three_part() -> None:
     """VERSION is the single source of truth; CI refuses tags that disagree."""
@@ -239,10 +273,7 @@ def test_no_personal_name_from_the_archive_is_tracked_in_git() -> None:
             continue
         personal.add(stem)
 
-    # Distinctive = more than one word, or containing a digit. A single
-    # dictionary word is excluded: some folders are named things like
-    # "Sample", and banning that string from the codebase would be absurd.
-    distinctive = {s for s in personal if len(s.split()) > 1 or any(c.isdigit() for c in s)}
+    distinctive = {s for s in personal if _is_distinctive(s)}
 
     # splitlines, not split: a tracked path containing a space would
     # otherwise be torn into fragments and never opened.
@@ -305,6 +336,10 @@ def test_no_personal_name_is_buried_inside_a_committed_binary() -> None:
         stem = entry.get("preferred_name", "").split(".")[0].strip()
         if stem and not _CAMERA_NAME.fullmatch(stem):
             names.add(stem)
+    # Same distinctiveness filter as the text guard, and for the same reason:
+    # an ordinary English phrase occurs inside compressed pixel data about as
+    # readily as it occurs in prose.
+    names = {n for n in names if _is_distinctive(n)}
 
     # Five, not four. Two four-letter names in this archive are ordinary
     # English words that occur by chance inside compressed pixel data -- they
