@@ -34,6 +34,16 @@ def _human_mb(n: int) -> str:
     return f"{n / 1_048_576:.1f} MB"
 
 
+def _echo_line(line: str) -> None:
+    """One conversion-log line onto stdout, flushed.
+
+    Flushed on purpose: stdout to a pipe is block-buffered, so a reader
+    watching a long run would otherwise get the whole trail at the end,
+    which is the opposite of progress.
+    """
+    print(line, flush=True)
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     source_root = (
         Path(args.source).resolve() if args.source else config.Settings.load().source_root
@@ -377,7 +387,13 @@ def cmd_convert(args: argparse.Namespace) -> int:
     started, t0 = batch.now_iso(), time.time()
     interrupted = False
 
-    with batch.ConversionLog(dest / batch.LOG_FILENAME) as log:
+    # `--progress` mirrors the per-file log lines onto stdout. Nothing else
+    # does: the trail has always gone to `conversion.log` alone, so anything
+    # watching the process -- the desktop front end, a terminal on a long
+    # run -- saw a header, an hour of silence, and a summary.
+    echo = _echo_line if args.progress else None
+
+    with batch.ConversionLog(dest / batch.LOG_FILENAME, echo=echo) as log:
         labels = ", ".join(s.label for s in specs)
         log.write(f"=== run start: {len(entries)} entries, outputs {labels}")
         # The whole loop, not just the conversion. The handler used to wrap
@@ -805,6 +821,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-sharing", action="store_true",
         help="do not write the sharing tree; with the defaults this leaves only the "
              "full-frame lossless TIFF",
+    )
+    p_conv.add_argument(
+        "--progress",
+        action="store_true",
+        help="also print each per-file log line to stdout, so a long run can be "
+             "watched (the desktop front end reads this to drive its progress bar)",
     )
     p_conv.add_argument(
         "--album-dates",

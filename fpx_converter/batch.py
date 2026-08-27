@@ -26,8 +26,10 @@ import datetime
 import hashlib
 import json
 import platform
+import signal
 import time
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,42 @@ REPORT_FILENAME = "audit_report.json"
 def now_iso() -> str:
     """Local wall-clock, matching how this project stores every other time."""
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _raise_keyboard_interrupt(signum: int, frame: object) -> None:  # noqa: ARG001
+    raise KeyboardInterrupt
+
+
+def interrupt_on_break() -> bool:
+    """Make Ctrl+Break behave like Ctrl+C. Returns whether it took effect.
+
+    Everything this engine does to survive an interruption hangs off
+    `KeyboardInterrupt`: the run stops, the state is saved, and
+    `audit_report.json` is still written. On Windows only `CTRL_C_EVENT`
+    arrives that way by default; `CTRL_BREAK_EVENT` takes the OS default and
+    kills the process where it stands, leaving no report behind.
+
+    That matters beyond a terminal. A parent process that wants to cancel a
+    child **cannot** use `CTRL_C_EVENT`: a child created with
+    `CREATE_NEW_PROCESS_GROUP` -- the only way to signal one child without
+    signalling the whole console -- has Ctrl+C disabled by Windows.
+    `CTRL_BREAK_EVENT` is the one signal that can reach it, so this is what
+    makes a cancelled run distinguishable from a killed one.
+
+    Installed by the entry points, not at import: `signal.signal` only works
+    on the main thread, and a library that mutated global signal handlers on
+    import would do it inside every caller's process too.
+    """
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is None:  # not Windows
+        return False
+    try:
+        signal.signal(sigbreak, _raise_keyboard_interrupt)
+    except (OSError, ValueError):
+        # Not the main thread, or a platform that refuses the handler. A run
+        # that cannot be cancelled politely is still a run worth having.
+        return False
+    return True
 
 
 @dataclass
@@ -203,16 +241,25 @@ class RunState:
 
 
 class ConversionLog:
-    """Append-only, flushed per line, so a kill -9 keeps what it had."""
+    """Append-only, flushed per line, so a kill -9 keeps what it had.
 
-    def __init__(self, path: Path) -> None:
+    `echo` optionally receives each finished line as well, which is how
+    `convert --progress` puts the per-file trail on stdout. The file is
+    written either way: the echo is a second audience, never a substitute.
+    """
+
+    def __init__(self, path: Path, echo: Callable[[str], None] | None = None) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open("a", encoding="utf-8")
+        self._echo = echo
 
     def write(self, message: str) -> None:
-        self._handle.write(f"{now_iso()} {message}\n")
+        line = f"{now_iso()} {message}"
+        self._handle.write(f"{line}\n")
         self._handle.flush()
+        if self._echo is not None:
+            self._echo(line)
 
     def close(self) -> None:
         self._handle.close()
