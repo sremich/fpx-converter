@@ -71,7 +71,7 @@ not in `requirements.txt`. Do not try to fetch it from a URL — see
 | 1. Unit | Property-set parser against hand-built byte fixtures; tile-table parsing; JPEG table + tile reassembly; timestamp and offset logic; naming scheme; collision handling; batch engine; resume state; output control. No real photos, no ExifTool, no source archive. | Every push (CI) |
 | 2. e2e | Full pipeline on 40 committed person-free FPX fixtures (both colour spaces, six sizes, one crop, one camera name) → TIFF + JPEG → independent read-back of every tag; chroma oracle and four mutation tests (wrong neutral, swapped channels, desaturated, double-converted) | Any change to the decoder, metadata engine, output writer, or batch engine |
 | 3. Sample batch | `scripts/tier3_sample.py` — 50 real files spanning every album, every declared size, both colour spaces and all four transform outcomes: convert, pyexiv2 read-back, pixel stats, both thumbnail oracles, album ground-truth date check. Exits non-zero on any of them and prints its own sample composition | Before merging any branch that touches decode, metadata, or batch logic |
-| 4. Full dataset | Unattended batch run over all files via the batch engine; audit report shows zero unexplained failures; 2 PhotoYCC files eyeballed in a real photo app for colour correctness | **1.0.0.** Until it passes, every release stays a pre-release |
+| 4. Full dataset | Unattended batch run over all files via the batch engine; audit report shows zero unexplained failures; 2 PhotoYCC files eyeballed in a real photo app for colour correctness | The batch half **passed at 1.0.0** (687/687, `complete: true`). The eyeball half is outstanding and is a strong recommendation, not a release gate — that was Stevie's call, taken knowingly |
 
 Verify before claiming: tier 1 always; the matching higher tier when its
 trigger applies. **"It decoded" is not "it decoded correctly"** — colour and
@@ -143,7 +143,16 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
       pre-release on 2026-08-27**: both milestones were built and audited as
       a single unit, so the intermediate state was never separately
       released.
-- [ ] **1.0.0 — Full dataset run** plus tier-4 eyeball verification.
+- [x] **1.0.0 — Full dataset run.** The whole archive in one unattended
+      pass: 687 converted, 0 failed, 0 with warnings, `complete: true`,
+      `unexplained_failures: 0`, 641 s. Every predicted number matched — 70
+      cropped outputs, 609/56/22 transforms, 617/68/2 date sources — and the
+      "roughly 146 pixel-identical pairs" estimate was replaced by the
+      measurement, 251 files in 120 groups. **Shipped 2026-08-27.** The
+      tier-4 eyeball half is outstanding: Stevie chose to ship on the
+      automated gate, so it is a recommendation rather than a gate. It is
+      still worth doing — `output/full-1.0.0/report/index.html` is the way
+      in, and the 2 PhotoYCC files are the ones that matter.
 - [ ] **1.1.0 — Desktop app.** A GUI so somebody who does not use a
       terminal can run this: pick a source folder, pick a destination, watch
       progress, read the audit result. It **wraps the CLI rather than
@@ -327,8 +336,10 @@ hand; if CI fails, no partial release exists — fix and re-tag. Increments:
 +0.0.1 bugfix / +0.1.0 minor / +1.0.0 major, always three-part X.Y.Z.
 
 This project publishes **no container image**. There is no compose pin to
-bump — that scaffold step does not apply here. Releases stay pre-releases
-until tier 4 passes at 1.0.0.
+bump — that scaffold step does not apply here. Releases were pre-releases
+through 0.x; from 1.0.0 they are full releases. The tier-4 eyeball pass is
+**not** a release gate — it was one until 1.0.0, and rather than keep a rule
+the releases were stepping over, the rule was removed deliberately.
 
 ## House conventions
 

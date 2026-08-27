@@ -6,6 +6,39 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [1.0.0] — 2026-08-27
+
+### Verified
+- **The whole archive converted, unattended, clean.** 687 distinct files
+  (1,265 including duplicates) in 641 seconds: 687 converted, 0 failed, 0 with
+  warnings, `complete: true`, `unexplained_failures: 0`. This is the run the
+  1.0.0 gate was written for, and it is the first time the tool has been asked
+  to do the whole job in one go.
+- Every number the milestone-0 inventory predicted came out right, which is
+  the part worth trusting rather than the zero:
+  - **70 cropped outputs** — the 56 axis-aligned crops plus the 14 that ride
+    along with a rotation, exactly as `DECISIONS.md` says.
+  - **transforms 609 identity / 56 crop / 22 rotate-90-ccw**, summing to 687.
+  - **date sources 617 import-stamp / 68 folder / 2 embedded-scan-date.** No
+    `DateTimeOriginal` was invented: the 617 carry a digitised date only.
+  - **251 files in 120 pixel-identical groups**, reported as expected rather
+    than as faults — the measured figure, replacing the estimate of "roughly
+    146 pairs" that had been carried since milestone 0.
+- Tier 3 re-run against the released commit: 64 pairs, 0 validator violations,
+  worst chroma correlation 0.739 against a 0.5 gate, worst chroma offset +5.3
+  against 30.0, 9 of 9 cropped files improved on the geometry oracle.
+
+### Changed
+- **Releases are no longer gated on the tier-4 eyeball pass.** The rule said
+  every release stays a pre-release until two PhotoYCC files have been looked
+  at by a person in a real photo app. That pass has not happened, and this
+  release ships anyway by the owner's decision — so the claim comes out of the
+  documentation rather than being left standing while releases go past it. The
+  eyeball check is still the right thing to do and is still described in the
+  testing tiers; it is a recommendation now, not a gate. **A 96-pixel
+  thumbnail oracle is evidence, not sight**, and nothing automated in this
+  project can see colour the way a person can.
+
 ## [0.6.0] — 2026-08-27
 
 ### Added
