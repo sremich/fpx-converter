@@ -11,7 +11,15 @@ dynamic = ["version"]
 version = { file = ["VERSION"] }
 
 [tool.setuptools]
-packages = ["fpx_converter"]
+# The desktop front end is a package of its own beside the converter, not a
+# module inside it: `fpx_converter` must stay installable and runnable with no
+# GUI toolkit anywhere near it. PySide6 is in requirements-gui.txt only.
+packages = ["fpx_converter", "fpx_gui"]
+
+[tool.setuptools.package-data]
+# The stylesheet is read through importlib.resources, so it has to travel with
+# the package rather than being found next to a source file.
+fpx_gui = ["*.qss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
