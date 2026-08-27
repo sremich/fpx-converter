@@ -52,6 +52,12 @@ def _convert(manifest: Path, dest: Path, *extra: str) -> int:
     )
 
 
+#: The `.fpx` copy and the raw-property sidecar are opt-in. Tests that are
+#: about those files ask for them explicitly, which also proves the flags do
+#: what they say.
+EXTRAS = ("--source-copy", "--sidecar")
+
+
 def _report(dest: Path) -> dict:
     return json.loads((dest / batch.REPORT_FILENAME).read_text(encoding="utf-8"))
 
@@ -147,20 +153,20 @@ class TestResume:
         not a derivative -- it is the thing being preserved.
         """
         manifest, dest = converted
-        _convert(manifest, dest)
+        _convert(manifest, dest, *EXTRAS)
         victim = next((dest / "archive").rglob("*.fpx.json"))
         victim.unlink()
-        _convert(manifest, dest)
+        _convert(manifest, dest, *EXTRAS)
         assert victim.is_file(), "a deleted sidecar was not restored by the resume"
 
     def test_a_deleted_fpx_copy_comes_back_too(
         self, converted: tuple[Path, Path]
     ) -> None:
         manifest, dest = converted
-        _convert(manifest, dest)
+        _convert(manifest, dest, *EXTRAS)
         victim = next((dest / "archive").rglob("*.fpx"))
         victim.unlink()
-        _convert(manifest, dest)
+        _convert(manifest, dest, *EXTRAS)
         assert victim.is_file(), "a deleted .fpx copy was not restored by the resume"
 
     def test_changing_the_output_shape_reconverts(
@@ -182,6 +188,20 @@ class TestOutputFlags:
         assert list((dest / "archive").rglob("*.tif"))
         assert list((dest / "sharing").rglob("*.jpg"))
 
+    def test_by_default_a_photograph_produces_only_its_images(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        """Asking for a photograph and getting four files is a surprise.
+
+        The `.fpx` copy and the `.fpx.json` sidecar were written on every
+        conversion. Both are still available, both are one flag away, and
+        neither happens unless asked for.
+        """
+        manifest, dest = converted
+        _convert(manifest, dest)
+        assert not list(dest.rglob("*.fpx")), "a source copy was written unasked"
+        assert not list(dest.rglob("*.fpx.json")), "a sidecar was written unasked"
+
     def test_no_sharing_leaves_only_the_lossless_full_frame(
         self, converted: tuple[Path, Path]
     ) -> None:
@@ -194,9 +214,16 @@ class TestOutputFlags:
     def test_the_source_copy_and_sidecar_survive_no_archive(
         self, converted: tuple[Path, Path]
     ) -> None:
-        """They are not derivatives and are not optional."""
+        """Asked for, they land even where no archive image was wanted.
+
+        They used to be written on every run whatever else was asked for, on
+        the reasoning that the source copy is not a derivative. It is opt-in
+        now -- the source archive is read-only and still there, so this is a
+        second copy of something that was never at risk -- but where somebody
+        does ask, `--no-archive` must not take it away.
+        """
         manifest, dest = converted
-        _convert(manifest, dest, "--no-archive")
+        _convert(manifest, dest, "--no-archive", *EXTRAS)
         assert not list((dest / "archive").rglob("*.tif"))
         assert list((dest / "archive").rglob("*.fpx.json"))
 
@@ -273,3 +300,75 @@ class TestFailures:
         )
         state = json.loads((dest / batch.STATE_FILENAME).read_text(encoding="utf-8"))
         assert state["done"] == {}
+
+
+class TestPatternsAndResume:
+    """A run that renames or refiles is not the same run.
+
+    Resuming across such a change would skip nothing and move nothing: the
+    files a previous run wrote are still there under their old names, the new
+    run writes its own beside them, and the tree ends up half in each shape
+    with nothing recording which is which. The output specs already invalidate
+    a resume for the same reason.
+    """
+
+    def test_a_changed_filename_pattern_converts_again_rather_than_resuming(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        manifest, dest = converted
+        _convert(manifest, dest)
+        assert _report(dest)["counts"]["converted"] == SAMPLE
+
+        _convert(manifest, dest, "--name-template", "{day}-{month}-{year}_{name}")
+        assert _report(dest)["counts"]["converted"] == SAMPLE
+        assert _report(dest)["counts"]["resumed"] == 0
+
+    def test_a_changed_folder_scheme_converts_again_rather_than_resuming(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        manifest, dest = converted
+        _convert(manifest, dest)
+        _convert(manifest, dest, "--folder-scheme", "flat")
+        assert _report(dest)["counts"]["converted"] == SAMPLE
+        assert _report(dest)["counts"]["resumed"] == 0
+
+    def test_two_custom_folder_patterns_are_two_different_runs(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        """The scheme name alone is not enough -- both runs are 'custom'."""
+        manifest, dest = converted
+        _convert(manifest, dest, "--folder-scheme", "custom", "--folder-template", "{year}")
+        _convert(manifest, dest, "--folder-scheme", "custom", "--folder-template", "{album}")
+        assert _report(dest)["counts"]["converted"] == SAMPLE
+
+    def test_the_same_patterns_twice_still_resumes(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        """The guard must key on the patterns, not on their presence."""
+        manifest, dest = converted
+        pattern = ("--name-template", "{name}_{year}")
+        _convert(manifest, dest, *pattern)
+        _convert(manifest, dest, *pattern)
+        assert _report(dest)["counts"]["converted"] == 0
+        assert _report(dest)["counts"]["resumed"] == SAMPLE
+
+    def test_a_pattern_that_would_lose_the_filenames_stops_before_writing(
+        self, converted: tuple[Path, Path], capsys
+    ) -> None:
+        manifest, dest = converted
+        assert _convert(manifest, dest, "--name-template", "{year}-{month}") == 1
+        assert "{name}" in capsys.readouterr().err
+        assert not list(dest.rglob("*.tif")), "files were written despite the refusal"
+
+    def test_a_folder_pattern_that_walks_upwards_stops_before_writing(
+        self, converted: tuple[Path, Path], capsys
+    ) -> None:
+        """It could put converted images anywhere on the disk, the read-only
+        source archive included."""
+        manifest, dest = converted
+        code = _convert(
+            manifest, dest, "--folder-scheme", "custom", "--folder-template", "../{album}"
+        )
+        assert code == 1
+        assert ".." in capsys.readouterr().err
+        assert not list(dest.rglob("*.tif"))

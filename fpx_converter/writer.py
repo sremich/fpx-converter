@@ -22,6 +22,7 @@ from PIL import ImageCms
 
 from . import album_dates as album_dates_mod
 from . import config, decoder, layout, metadata, naming, outputs, validator
+from . import name_template as name_template_mod
 
 #: ExifTool is located from `FPX_EXIFTOOL` or from PATH -- never from a
 #: hardcoded absolute path. The previous fallback pointed at one developer's
@@ -161,26 +162,41 @@ def build_output_relpath(
     derived: dict[str, Any],
     ext: str,
     stem: str | None = None,
+    name_template: str | None = None,
+    folder_scheme: str = layout.BY_ALBUM,
+    folder_template: str | None = None,
 ) -> Path:
-    """Construct the `<folder>/<YYYY-MM-DD_HHMMSS>_<originalname>.<ext>` relative path.
+    """Construct the `<folder>/<filename>.<ext>` relative path.
 
     `<folder>` comes from `layout.output_folder`: a descriptive source folder
     keeps its name, nested under the year if the name gives one, and a folder
     whose name says nothing is replaced by year-and-month.
 
+    `<filename>` comes from `name_template`, defaulting to what the tool has
+    always written: `{year}-{month}-{day}_{time}_{name}`. The template is
+    validated once before a run starts rather than per file -- see
+    `name_template.validate` -- so this assumes a template it can use.
+
     `stem` overrides the name taken from the manifest entry, and is how
     `naming.assign_output_stems` keeps two same-named photos in one album
     from resolving to the same file. Callers converting more than one entry
-    should always pass it.
+    should always pass it. Note that uniqueness comes from the stem and not
+    from the date, so a template with no date fields is no more likely to
+    collide than the shipped one.
     """
-    folder = layout.output_folder(entry, derived)
-    date_prefix, _is_undated = format_date_prefix(derived.get("timestamps", {}))
+    folder = layout.output_folder(entry, derived, folder_scheme, folder_template)
     base_stem = (
         stem
         if stem is not None
         else naming.strip_fpx_suffix(entry.get("preferred_name", "image.fpx"))
     )
-    return folder / f"{date_prefix}_{base_stem}.{ext}"
+    filename = name_template_mod.render(
+        name_template or name_template_mod.DEFAULT_TEMPLATE,
+        ts_dict=derived.get("timestamps", {}),
+        name=base_stem,
+        album=layout.choose_album(entry),
+    )
+    return folder / f"{filename}.{ext}"
 
 
 def build_exiftool_args(
@@ -348,6 +364,23 @@ def save_dual_images(
     save_output_images(decoded, list(zip(paths, outputs.DEFAULT_SPECS, strict=True)))
 
 
+def _no_console() -> dict[str, int]:
+    """Keep ExifTool from opening a console window of its own.
+
+    Invisible from a terminal, because the child simply shares the console
+    that is already there. From a *windowed* application there is no console
+    to share, so Windows creates one -- and a full run then flashes up 687
+    console windows, each one taking focus. `CREATE_NO_WINDOW` says run with
+    no console at all, which is what a metadata writer needs either way: its
+    output is captured, never read off the screen.
+
+    Not testable from pytest, which always has a console for the child to
+    share. Found by running the packaged application.
+    """
+    flag = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": flag} if flag else {}
+
+
 def write_single_entry_dual_output(
     fpx_path: Path,
     entry: dict[str, Any],
@@ -360,6 +393,11 @@ def write_single_entry_dual_output(
     claimed: set[Path] | None = None,
     specs: tuple[outputs.OutputSpec, ...] = outputs.DEFAULT_SPECS,
     album_dates: album_dates_mod.AlbumDates | None = None,
+    source_copy: bool = False,
+    sidecar: bool = False,
+    name_template: str | None = None,
+    folder_scheme: str = layout.BY_ALBUM,
+    folder_template: str | None = None,
 ) -> OutputItemResult:
     """Convert a single .fpx entry to dual output (TIFF and JPEG) with sidecar and tags.
 
@@ -379,26 +417,57 @@ def write_single_entry_dual_output(
     derived = meta.derived
 
     # 2. Compute relative and absolute file paths
-    fpx_rel = build_output_relpath(entry, derived, "fpx", stem)
-    sidecar_rel = build_output_relpath(entry, derived, "fpx.json", stem)
+    fpx_rel = build_output_relpath(
+        entry, derived, "fpx", stem, name_template, folder_scheme, folder_template
+    )
+    sidecar_rel = build_output_relpath(
+        entry, derived, "fpx.json", stem, name_template, folder_scheme, folder_template
+    )
 
     archive_dir = output_root / "archive"
 
     targets: list[tuple[Path, outputs.OutputSpec]] = [
-        (output_root / spec.tree / build_output_relpath(entry, derived, spec.ext, stem), spec)
+        (
+            output_root
+            / spec.tree
+            / build_output_relpath(
+                entry,
+                derived,
+                spec.ext,
+                stem,
+                name_template,
+                folder_scheme,
+                folder_template,
+            ),
+            spec,
+        )
         for spec in specs
     ]
     fpx_copy_path = archive_dir / fpx_rel
     sidecar_path = archive_dir / sidecar_rel
 
+    def _extras() -> list[Path]:
+        """The non-image files this run was asked for, in path order."""
+        wanted: list[Path] = []
+        if source_copy:
+            wanted.append(fpx_copy_path)
+        if sidecar:
+            wanted.append(sidecar_path)
+        return wanted
+
     # The `.fpx` and its sidecar live beside the archive image; where no
-    # archive output was asked for they still go to `archive/`, because the
-    # source copy is not one of the derivatives and is not optional.
+    # archive output was asked for they still go to `archive/`. Both are
+    # off by default: the source archive is read-only and still there, so the
+    # copy duplicates something that was never at risk, and the sidecar can be
+    # rebuilt from it with `metadata`. Asking for one image and getting four
+    # files is a surprise, and the default is what most runs will use.
     def _first(tree: str) -> Path:
         for path, spec in targets:
             if spec.tree == tree:
                 return path
-        return archive_dir / build_output_relpath(entry, derived, "tif", stem)
+        return archive_dir / build_output_relpath(
+            entry, derived, "tif", stem, name_template, folder_scheme, folder_template
+        )
 
     tif_path = _first("archive")
     jpg_path = _first("sharing")
@@ -418,14 +487,14 @@ def write_single_entry_dual_output(
     # because the failure it guards against is silent, and losing a photo to
     # a name clash is not a failure this archive can notice later.
     if claimed is not None:
-        for path in [p for p, _ in targets] + [fpx_copy_path, sidecar_path]:
+        for path in [p for p, _ in targets] + _extras():
             if path in claimed:
                 raise WriterError(
                     f"output path collision: {path} was already written by another "
                     f"entry in this run (this entry is {entry.get('sha256', '?')[:8]}). "
                     f"Refusing to overwrite it."
                 )
-        claimed.update({p for p, _ in targets} | {fpx_copy_path, sidecar_path})
+        claimed.update({p for p, _ in targets} | set(_extras()))
 
     # Windows long-path support is disabled on the dev machine, and the
     # output tree gained a year level plus a most-descriptive album name in
@@ -461,25 +530,32 @@ def write_single_entry_dual_output(
     if not dry_run:
         for path, _spec in targets:
             path.parent.mkdir(parents=True, exist_ok=True)
-        fpx_copy_path.parent.mkdir(parents=True, exist_ok=True)
-
         # 3. Save every requested output, all tagged sRGB.
         save_output_images(decoded, targets)
 
-        # 4. Copy original .fpx and emit .fpx.json sidecar into archive/
-        shutil.copy2(fpx_path, fpx_copy_path)
-        sidecar_dict = metadata.build_sidecar_dict(meta, entry)
-        sidecar_path.write_text(
-            json.dumps(sidecar_dict, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
+        # 4. Whichever extras were asked for. Both are off by default.
+        if source_copy or sidecar:
+            fpx_copy_path.parent.mkdir(parents=True, exist_ok=True)
+        if source_copy:
+            shutil.copy2(fpx_path, fpx_copy_path)
+        if sidecar:
+            sidecar_dict = metadata.build_sidecar_dict(meta, entry)
+            sidecar_path.write_text(
+                json.dumps(sidecar_dict, indent=2, ensure_ascii=True) + "\n",
+                encoding="utf-8",
+            )
 
         # 5. Embed metadata tags via ExifTool
         tool_bin = resolve_exiftool_path(exiftool_path)
         if tool_bin:
             image_paths = [path for path, _ in targets]
             exiftool_cmd = [tool_bin] + build_exiftool_args(derived, image_paths)
-            proc = subprocess.run(exiftool_cmd, capture_output=True, text=True)
+            proc = subprocess.run(
+                exiftool_cmd,
+                capture_output=True,
+                text=True,
+                **_no_console(),
+            )
             if proc.returncode != 0:
                 errors.append(f"ExifTool failed ({proc.returncode}): {proc.stderr.strip()}")
         else:
@@ -488,7 +564,7 @@ def write_single_entry_dual_output(
         # 6. Apply filesystem modified time (mtime) to all 4 files
         mtime_epoch = compute_mtime_epoch(derived)
         if mtime_epoch is not None:
-            for p in [path for path, _ in targets] + [fpx_copy_path, sidecar_path]:
+            for p in [path for path, _ in targets] + _extras():
                 if p.is_file():
                     try:
                         os.utime(p, (mtime_epoch, mtime_epoch))
@@ -520,5 +596,5 @@ def write_single_entry_dual_output(
         transform_status=decoded.transform_status,
         crop_applied=decoded.crop_applied,
         written=targets,
-        side_artifacts=[] if dry_run else [fpx_copy_path, sidecar_path],
+        side_artifacts=[] if dry_run else _extras(),
     )

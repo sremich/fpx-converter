@@ -246,8 +246,9 @@ The `convert` command produces three state/audit files alongside the output imag
   The 1.0.0 gate reads `unexplained_failures`. Roughly 146 pixel-identical output
   pairs are expected and listed as `"expected_duplicate"`, not flagged as failures.
 - **`run-state.json`**: internal resume state, keyed on source SHA-256. Persists
-  between sessions; discarded if the output specs (`--archive-format`, etc.)
-  change or if `--no-resume` is passed. A killed run costs only the file in
+  between sessions; discarded if the output specs (`--archive-format`, etc.),
+  the filename pattern or the folder arrangement change, or if `--no-resume`
+  is passed. A killed run costs only the file in
   flight, not the batch.
 
 ### The QA gallery and album-dates workflow
@@ -458,9 +459,9 @@ folder name looks day-precise (e.g. a holiday name that could be mistaken for
 a date) to its bare year only. One-way: it can remove a date claim, never add
 one.
 
-### Output tree layout: source folder names
+### Output tree layout: source folder names, by default
 
-The output directory structure follows the source archive's folder names, not
+The default output structure follows the source archive's folder names, not
 timestamps. A descriptive folder name keeps its name as the album, nested under
 the year if the folder name gives one (`2001/<that folder's name>/`), and sitting
 beside the year folders if it does not. Only a folder whose name says nothing —
@@ -471,14 +472,40 @@ is not trusted as a capture date.
 A file in multiple albums is filed under the most descriptive one, which usually
 gives it the best date evidence.
 
+`--folder-scheme` chooses a different shape: `year`, `year-month`, `flat`, or
+`custom` with a `--folder-template` such as `{year}/{album}`. Where only the year
+is known, `year-month` files directly under the year rather than inventing a
+January.
+
+### Filenames: a date prefix and the name somebody typed
+
+Each converted image is named `<YYYY-MM-DD_HHMMSS>_<original name>` by default,
+with every component the evidence does not support written as zeros —
+`2001-00-00_000000_Backyard.tif` for a photo dated only to its year. The prefix
+is a browsing affordance and may use a coarse folder date; EXIF
+`DateTimeOriginal` is a claim and may not.
+
+`--name-template` changes the pattern. The fields are `{year}` `{month}` `{day}`
+`{date}` `{time}` `{name}` `{album}`, and `{name}` is required: filenames are the
+only human-authored content in this kind of archive, so a pattern that drops
+them loses, for every file it renames, something no amount of re-reading the
+source can recover.
+
+Both patterns are checked once before a run starts, and a change to either
+invalidates a resume — a run that renames or refiles is not the same run.
+
 ### Crops: full frame in archive/, cropped JPEG in sharing/
 
 70 files carry a viewing transform that resolves to a crop — 56 axis-aligned
 crops and 14 files that combine a 90° rotation with a crop. The archival TIFF
 (`archive/<folder>/<name>.tif`) preserves the full frame the camera captured.
-The shareable JPEG (`sharing/<folder>/<name>.jpg`) applies the crop. Either way,
-the original `.fpx` file and the `.fpx.json` sidecar are copied alongside the
-TIFF for reference.
+The shareable JPEG (`sharing/<folder>/<name>.jpg`) applies the crop.
+
+A conversion writes only the images asked for. `--source-copy` puts a copy of
+the original `.fpx` beside the TIFF and `--sidecar` writes the `.fpx.json`
+raw-property dump; both are off by default, because your source folder is only
+ever read from and is still there, and the sidecar can be rebuilt at any time
+with `metadata`.
 
 The `convert` command names every file affected by a crop in its output, so you
 can review them if needed.

@@ -26,6 +26,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -39,11 +40,20 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QVBoxLayout,
     QWidget,
 )
 
-from fpx_converter import batch, config, outputs
+from fpx_converter import batch, config, name_template, outputs
+from fpx_converter import layout as layout_mod
+
+# The preview is built by calling the same function the conversion calls,
+# not by a second copy of the naming rules living in the window. That is
+# the read-only-source rule's shape applied to something smaller: a front
+# end that reimplemented this would drift, and a preview that lied about
+# where six hundred photographs were going would be worse than none.
+from fpx_converter import writer as writer_mod
 
 from . import options as options_mod
 from . import progress, runner, summary
@@ -106,6 +116,7 @@ class MainWindow(QMainWindow):
         outer.addLayout(self._build_header())
         outer.addWidget(self._build_folders_card())
         outer.addWidget(self._build_outputs_card())
+        outer.addWidget(self._build_naming_card())
         outer.addLayout(self._build_actions_row())
         outer.addWidget(self._build_progress())
         outer.addLayout(self._build_status())
@@ -196,12 +207,44 @@ class MainWindow(QMainWindow):
         return check, fmt, framing, grid
 
     def _build_outputs_card(self) -> QFrame:
+        """Three choices, one at a time, and the detail only where it is wanted.
+
+        This began as two checkboxes and four menus, which is the shape of the
+        CLI's flags rather than of anybody's intention. Somebody converting a
+        shoebox of photographs wants one of three things, and the two common
+        ones want no further questions at all.
+        """
         frame, layout = _card("What to write")
+
+        self.mode_group = QButtonGroup(self)
+        self.mode_buttons: dict[str, QRadioButton] = {}
+        for value, label, hint_text in options_mod.MODE_CHOICES:
+            button = QRadioButton(label)
+            button.setProperty("mode", value)
+            self.mode_group.addButton(button)
+            self.mode_buttons[value] = button
+            layout.addWidget(button)
+
+            hint = QLabel(hint_text)
+            hint.setObjectName("Hint")
+            hint.setWordWrap(True)
+            hint.setIndent(26)
+            layout.addWidget(hint)
+
+        self.mode_buttons[options_mod.ARCHIVE].setChecked(True)
+        self.mode_group.buttonToggled.connect(lambda *_: self._sync_enabled())
+
+        # Everything below appears only under Custom.
+        self.custom_box = QFrame()
+        self.custom_box.setObjectName("CustomBox")
+        custom = QVBoxLayout(self.custom_box)
+        custom.setContentsMargins(26, 4, 0, 0)
+        custom.setSpacing(6)
 
         self.archive_check, self.archive_format, self.archive_framing, archive_row = (
             self._tree_row(
                 "Archive copy",
-                "The one to keep. Lossless, every pixel the camera captured.",
+                "Lossless, every pixel the camera captured.",
                 "tiff",
                 "full",
             )
@@ -209,21 +252,181 @@ class MainWindow(QMainWindow):
         self.sharing_check, self.sharing_format, self.sharing_framing, sharing_row = (
             self._tree_row(
                 "Shareable copy",
-                "The one to send people. Opens anywhere, cropped as it was framed.",
+                "Opens anywhere, cropped as it was framed.",
                 "jpeg",
                 "cropped",
             )
         )
-        layout.addLayout(archive_row)
-        layout.addLayout(sharing_row)
+        custom.addLayout(archive_row)
+        custom.addLayout(sharing_row)
 
-        self.start_over = QCheckBox("Start over (ignore what a previous run did)")
-        self.start_over.setToolTip(
-            "Off by default. A stopped run picks up where it left off; tick this "
-            "to convert everything again from the beginning."
+        # The extra files, each its own option. They used to be written on
+        # every conversion, so asking for one photograph produced four files.
+        self.source_copy_check = QCheckBox("Also keep a copy of the original .fpx")
+        self.source_copy_check.setToolTip(
+            "Off by default. Your source folder is only ever read from and is "
+            "still there, so this is a second copy of something that was never "
+            "at risk."
         )
-        layout.addWidget(self.start_over)
+        self.sidecar_check = QCheckBox("Also write the raw properties as .fpx.json")
+        self.sidecar_check.setToolTip(
+            "Off by default. Everything the file holds, as JSON. It can be "
+            "rebuilt from the original at any time."
+        )
+        custom.addWidget(self.source_copy_check)
+        custom.addWidget(self.sidecar_check)
+
+        layout.addWidget(self.custom_box)
+        self.custom_box.setVisible(False)
         return frame
+
+    def _build_naming_card(self) -> QFrame:
+        """Where the files go and what they are called.
+
+        Both apply to all three modes above: naming is a separate question
+        from choosing an archive copy over a shareable one.
+
+        The preview shows two photographs, not one, and the second is the
+        point. There is no capture date anywhere in this kind of archive, so
+        most files can only be filed by their album -- a person needs to see
+        what that looks like *before* they run six hundred of them.
+        """
+        frame, layout = _card("Where they go, and what they are called")
+
+        # -- folders ------------------------------------------------------
+        layout.addWidget(_field_label("Folders"))
+        self.folder_scheme = QComboBox()
+        for value, label, _hint in layout_mod.FOLDER_SCHEMES:
+            self.folder_scheme.addItem(label, value)
+        self.folder_scheme.setCurrentIndex(
+            [v for v, _, _ in layout_mod.FOLDER_SCHEMES].index(layout_mod.BY_ALBUM)
+        )
+        self.folder_scheme.currentIndexChanged.connect(lambda *_: self._sync_enabled())
+        layout.addWidget(self.folder_scheme)
+
+        self.folder_hint = QLabel()
+        self.folder_hint.setObjectName("Hint")
+        self.folder_hint.setWordWrap(True)
+        layout.addWidget(self.folder_hint)
+
+        self.folder_template_edit = QLineEdit(layout_mod.DEFAULT_FOLDER_TEMPLATE)
+        self.folder_template_edit.setToolTip(
+            "One folder level per /. Folders can use "
+            + ", ".join("{" + f + "}" for f in layout_mod.FOLDER_FIELDS)
+            + " — for example {year}/{album}. The finer fields belong in the "
+            "filename, below."
+        )
+        self.folder_template_edit.textChanged.connect(lambda *_: self._sync_enabled())
+        layout.addWidget(self.folder_template_edit)
+
+        # -- filenames ----------------------------------------------------
+        layout.addWidget(_field_label("Filenames"))
+        self.name_template_edit = QLineEdit(name_template.DEFAULT_TEMPLATE)
+        self.name_template_edit.setToolTip(
+            "Fields: "
+            + " ".join("{" + n + "}" for n, _ in name_template.FIELDS)
+            + ". {name} is required."
+        )
+        self.name_template_edit.textChanged.connect(lambda *_: self._sync_enabled())
+
+        reset = QPushButton("Reset")
+        reset.setObjectName("Secondary")
+        reset.clicked.connect(self._reset_patterns)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(self.name_template_edit, stretch=1)
+        row.addWidget(reset)
+        layout.addLayout(row)
+
+        fields = QLabel(
+            "Fields: "
+            + "  ".join("{" + n + "}" for n, _ in name_template.FIELDS)
+            + " — {name} is the filename from your archive, and it has to stay: "
+            "those names are the only thing here a person wrote."
+        )
+        fields.setObjectName("Hint")
+        fields.setWordWrap(True)
+        layout.addWidget(fields)
+
+        self.name_preview = QLabel()
+        self.name_preview.setObjectName("Hint")
+        self.name_preview.setWordWrap(True)
+        layout.addWidget(self.name_preview)
+
+        self._sync_preview()
+        return frame
+
+    def _reset_patterns(self) -> None:
+        """Both patterns back to what the tool does on its own."""
+        self.name_template_edit.setText(name_template.DEFAULT_TEMPLATE)
+        self.folder_template_edit.setText(layout_mod.DEFAULT_FOLDER_TEMPLATE)
+        self.folder_scheme.setCurrentIndex(
+            [v for v, _, _ in layout_mod.FOLDER_SCHEMES].index(layout_mod.BY_ALBUM)
+        )
+
+    def _folder_scheme(self) -> str:
+        return self.folder_scheme.currentData()
+
+    #: The two photographs the preview is built from. The first is the lucky
+    #: case -- an album that named a day. The second is the common one.
+    _PREVIEW_DATED = (
+        {"albums": ["Summer 2002"], "preferred_name": "Backyard.fpx"},
+        {
+            "timestamps": {
+                "datetime_original_exif": "2002:07:04 14:32:10",
+                "sort_datetime": "2002-07-04T14:32:10",
+            }
+        },
+    )
+    _PREVIEW_UNDATED = (
+        {"albums": ["Pictures"], "preferred_name": "DCP00247.fpx"},
+        {"timestamps": {}},
+    )
+
+    def _preview_path(self, entry: dict, derived: dict) -> str:
+        rel = writer_mod.build_output_relpath(
+            entry,
+            derived,
+            "jpg",
+            None,
+            self.name_template_edit.text(),
+            self._folder_scheme(),
+            self.folder_template_edit.text(),
+        )
+        return rel.as_posix()
+
+    def _sync_preview(self) -> str:
+        """Update the preview. Returns the error text, or "" when it is valid."""
+        scheme = self._folder_scheme()
+        for value, _label, hint in layout_mod.FOLDER_SCHEMES:
+            if value == scheme:
+                self.folder_hint.setText(hint)
+                break
+
+        try:
+            name_template.validate(self.name_template_edit.text())
+            if scheme == layout_mod.CUSTOM:
+                layout_mod.validate_folder_template(self.folder_template_edit.text())
+        except name_template.TemplateError as exc:
+            self.name_preview.setText(str(exc))
+            self.name_preview.setProperty("severity", "bad")
+            self.name_preview.style().polish(self.name_preview)
+            return str(exc)
+
+        dated = self._preview_path(*self._PREVIEW_DATED)
+        undated = self._preview_path(*self._PREVIEW_UNDATED)
+        self.name_preview.setText(
+            "\n".join(
+                [
+                    f"A photo whose album named the day:  {dated}",
+                    f"One with nothing to date it — most of them:  {undated}",
+                ]
+            )
+        )
+        self.name_preview.setProperty("severity", "")
+        self.name_preview.style().polish(self.name_preview)
+        return ""
 
     def _build_actions_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -284,18 +487,30 @@ class MainWindow(QMainWindow):
 
     # -- state -----------------------------------------------------------
 
+    def _mode(self) -> str:
+        """Which of the three is selected."""
+        for value, button in self.mode_buttons.items():
+            if button.isChecked():
+                return value
+        return options_mod.ARCHIVE
+
     def current_options(self) -> options_mod.ConvertOptions:
         """Everything the window has configured, as the CLI would receive it."""
         return options_mod.ConvertOptions(
             source=Path(self.source_edit.text().strip()),
             dest=Path(self.dest_edit.text().strip()),
+            mode=self._mode(),
             archive=self.archive_check.isChecked(),
             sharing=self.sharing_check.isChecked(),
+            source_copy=self.source_copy_check.isChecked(),
+            sidecar=self.sidecar_check.isChecked(),
+            name_template=self.name_template_edit.text(),
+            folder_scheme=self._folder_scheme(),
+            folder_template=self.folder_template_edit.text(),
             archive_format=self.archive_format.currentData(),
             archive_framing=self.archive_framing.currentData(),
             sharing_format=self.sharing_format.currentData(),
             sharing_framing=self.sharing_framing.currentData(),
-            resume=not self.start_over.isChecked(),
         )
 
     def _running(self) -> bool:
@@ -304,13 +519,30 @@ class MainWindow(QMainWindow):
     def _sync_enabled(self) -> None:
         idle = not self._running()
         has_folders = bool(self.source_edit.text().strip() and self.dest_edit.text().strip())
-        wants_output = self.archive_check.isChecked() or self.sharing_check.isChecked()
-        self.convert_button.setEnabled(idle and has_folders and wants_output)
+        custom = self._mode() == options_mod.CUSTOM
+        self.custom_box.setVisible(custom)
+        wants_output = (not custom) or (
+            self.archive_check.isChecked() or self.sharing_check.isChecked()
+        )
+        # A pattern that would lose the archive's filenames, or produce one no
+        # filesystem will take, stops the run here rather than after it has
+        # renamed half a tree.
+        # The folder pattern is only a question under 'Custom'.
+        self.folder_template_edit.setVisible(
+            self._folder_scheme() == layout_mod.CUSTOM
+        )
+        self.folder_template_edit.setEnabled(idle)
+        name_ok = not self._sync_preview()
+        self.convert_button.setEnabled(idle and has_folders and wants_output and name_ok)
         self.cancel_button.setEnabled(not idle)
         self.review_button.setEnabled(idle and has_folders)
         for widget in (
-            self.source_edit, self.dest_edit, self.start_over,
+            self.source_edit, self.dest_edit,
             self.archive_check, self.sharing_check,
+            self.source_copy_check, self.sidecar_check,
+            self.name_template_edit,
+            self.folder_scheme,
+            *self.mode_buttons.values(),
         ):
             widget.setEnabled(idle)
         self.archive_format.setEnabled(idle and self.archive_check.isChecked())

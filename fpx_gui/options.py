@@ -22,7 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from fpx_converter import config, outputs
+from fpx_converter import config, layout, outputs
+from fpx_converter import name_template as name_template_mod
 
 #: The GUI puts the manifest in the destination, never beside the source.
 #: `ensure_outside_source` would refuse the alternative anyway, and this way a
@@ -37,21 +38,66 @@ STORE_DIR = Path("source-files")
 STOP_FILENAME = "stop-requested"
 
 
+#: The three things somebody actually wants, and only one at a time.
+ARCHIVE = "archive"
+SHARING = "sharing"
+CUSTOM = "custom"
+
+#: Label and explanation for each, in the order the window shows them.
+MODE_CHOICES: tuple[tuple[str, str, str], ...] = (
+    (
+        ARCHIVE,
+        "Archive copy — TIFF, whole photo",
+        "The one to keep. Lossless, every pixel the camera captured.",
+    ),
+    (
+        SHARING,
+        "Shareable copy — JPEG, cropped",
+        "The one to send people. Opens anywhere, cropped as it was framed.",
+    ),
+    (
+        CUSTOM,
+        "Custom — you choose",
+        "Any combination of format and framing, and the extra files.",
+    ),
+)
+
+
 @dataclass(frozen=True)
 class ConvertOptions:
     """One run, as the window has it configured."""
 
     source: Path
     dest: Path
+    #: Which of the three the window offers: `ARCHIVE`, `SHARING` or `CUSTOM`.
+    #: The first two ignore the format and framing fields entirely and write
+    #: exactly one image per photograph; only `CUSTOM` reads them.
+    mode: str = ARCHIVE
     archive: bool = True
     sharing: bool = True
     archive_format: str = "tiff"
     archive_framing: str = "full"
     sharing_format: str = "jpeg"
     sharing_framing: str = "cropped"
-    #: Resume is on by default, matching the CLI. The window's checkbox is
-    #: phrased the other way round ("start over"), because "resume" is a word
-    #: about the tool and "start over" is a word about the job.
+    #: The source `.fpx` copied beside its converted image. Off by default:
+    #: the source archive is read-only and still there, so this is a second
+    #: copy of something that was never at risk.
+    source_copy: bool = False
+    #: The `.fpx.json` raw-property dump. Off by default: it can be rebuilt
+    #: from the source at any time with `metadata`.
+    sidecar: bool = False
+    #: What each converted image is called, before its extension. Applies to
+    #: all three modes -- naming is about what the files are called, not about
+    #: which of them get written.
+    name_template: str = name_template_mod.DEFAULT_TEMPLATE
+    #: How the output tree is arranged: one of `layout.FOLDER_SCHEMES`.
+    folder_scheme: str = layout.BY_ALBUM
+    #: Read only under `layout.CUSTOM`, and ignored otherwise.
+    folder_template: str = layout.DEFAULT_FOLDER_TEMPLATE
+    #: Always on. It skips what is already finished and costs a re-read at
+    #: worst, and the window no longer offers a way to turn it off -- "ignore
+    #: what a previous run did" described a mechanism rather than a job, and
+    #: nobody could say what it would do to their photographs.
     resume: bool = True
 
     @property
@@ -71,7 +117,23 @@ class ConvertOptions:
         return self.dest / STOP_FILENAME
 
     def specs(self) -> tuple[outputs.OutputSpec, ...]:
-        """The outputs this run would write. Raises `OutputSpecError`."""
+        """The outputs this run would write. Raises `OutputSpecError`.
+
+        The two named modes are deliberately not expressed as "the custom
+        settings, preset" -- they are one tree each, so choosing one writes
+        one image per photograph and there is nothing to explain about why a
+        second file appeared.
+        """
+        if self.mode == ARCHIVE:
+            return outputs.build_specs(
+                archive=True, sharing=False,
+                archive_format="tiff", archive_framing="full",
+            )
+        if self.mode == SHARING:
+            return outputs.build_specs(
+                archive=False, sharing=True,
+                sharing_format="jpeg", sharing_framing="cropped",
+            )
         return outputs.build_specs(
             archive=self.archive,
             sharing=self.sharing,
@@ -113,6 +175,9 @@ def validate(options: ConvertOptions) -> tuple[outputs.OutputSpec, ...]:
             f"The source folder does not exist: {options.source}"
         )
     options.checked_dest()
+    name_template_mod.validate(options.name_template)
+    if options.folder_scheme == layout.CUSTOM:
+        layout.validate_folder_template(options.folder_template)
     return options.specs()
 
 
@@ -143,6 +208,33 @@ def convert_args(options: ConvertOptions) -> list[str]:
     ]
     if not options.resume:
         args.append("--no-resume")
+    if options.source_copy:
+        args.append("--source-copy")
+    if options.sidecar:
+        args.append("--sidecar")
+    # Only when it is not what the CLI would do anyway: the log pane is the
+    # one place a person sees what was run, and a line of flags that all
+    # restate the defaults is harder to read, not more informative.
+    if options.name_template != name_template_mod.DEFAULT_TEMPLATE:
+        args += ["--name-template", options.name_template]
+    if options.folder_scheme != layout.BY_ALBUM:
+        args += ["--folder-scheme", options.folder_scheme]
+        # Only where it is read. Beside `--folder-scheme year` it would look
+        # like it meant something, and the log pane is the one place a person
+        # can see what was actually run.
+        if options.folder_scheme == layout.CUSTOM:
+            args += ["--folder-template", options.folder_template]
+
+    # The named modes are one tree each. Derived here rather than in the
+    # window, so the command line in the log pane always matches what the
+    # option actually means.
+    if options.mode == ARCHIVE:
+        return [*args, "--no-sharing", "--archive-format", "tiff",
+                "--archive-framing", "full"]
+    if options.mode == SHARING:
+        return [*args, "--no-archive", "--sharing-format", "jpeg",
+                "--sharing-framing", "cropped"]
+
     if options.archive:
         args += [
             "--archive-format", options.archive_format,

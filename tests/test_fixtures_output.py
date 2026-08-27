@@ -133,12 +133,16 @@ def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) 
             "sha256": "0" * 64,
         }
 
-        # 1. Execute dual output write
+        # 1. Execute dual output write. The source copy and the raw-property
+        #    sidecar are opt-in now, and this test is about everything a run
+        #    can produce, so it asks for both.
         res = writer.write_single_entry_dual_output(
             fpx_path=fpx_path,
             entry=entry,
             output_root=output_root,
             source_root=source_root,
+            source_copy=True,
+            sidecar=True,
         )
 
         assert res.validation_ok, f"Validation failed for {filename}: {res.errors}"

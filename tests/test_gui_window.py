@@ -26,7 +26,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="the desktop front end needs requirements-gui.txt")
 pytest.importorskip("pytestqt", reason="the desktop front end needs requirements-gui.txt")
 
-from fpx_converter import config, outputs  # noqa: E402
+from fpx_converter import config, layout, name_template, outputs, writer  # noqa: E402
+from fpx_gui import options as options_mod  # noqa: E402
 from fpx_gui import summary  # noqa: E402
 from fpx_gui.window import MainWindow  # noqa: E402
 
@@ -48,6 +49,11 @@ def folders(tmp_path: Path) -> tuple[Path, Path]:
 def _fill(window, source: Path, dest: Path) -> None:  # noqa: ANN001
     window.source_edit.setText(str(source))
     window.dest_edit.setText(str(dest))
+
+
+def _custom(window) -> None:  # noqa: ANN001
+    """Select Custom, which is the only mode that reads the tree controls."""
+    window.mode_buttons[options_mod.CUSTOM].setChecked(True)
 
 
 def _stamp(dest: Path) -> int | None:
@@ -97,36 +103,87 @@ class TestTheControlsComeFromTheCli:
             values = [combo.itemData(i) for i in range(combo.count())]
             assert values == list(outputs.FRAMINGS)
 
-    def test_the_defaults_are_the_shipped_behaviour(self, window, folders) -> None:  # noqa: ANN001
+    def test_the_window_opens_on_the_archive_copy_and_writes_one_image(
+        self, window, folders
+    ) -> None:  # noqa: ANN001
+        """One photograph in, one file out, and nothing to read first.
+
+        The window used to open with both trees ticked and both extras
+        implied, so the plainest possible run produced four files per
+        photograph. Whichever of the three somebody picks, the two named ones
+        write exactly one image.
+        """
         source, dest = folders
         _fill(window, source, dest)
         chosen = window.current_options()
-        assert {spec.label for spec in chosen.specs()} == {
-            "archive/tiff/full",
-            "sharing/jpeg/cropped",
-        }
+        assert chosen.mode == options_mod.ARCHIVE
+        assert [spec.label for spec in chosen.specs()] == ["archive/tiff/full"]
+        assert chosen.source_copy is False
+        assert chosen.sidecar is False
         assert chosen.resume is True
+
+    def test_the_three_choices_are_exclusive_and_only_custom_asks_questions(
+        self, window, folders
+    ) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        # `isHidden`, not `isVisible`: the window is never shown in a test, so
+        # every child reads as invisible whatever it was asked to be.
+        assert window.custom_box.isHidden()
+
+        window.mode_buttons[options_mod.SHARING].setChecked(True)
+        assert window.current_options().mode == options_mod.SHARING
+        assert not window.mode_buttons[options_mod.ARCHIVE].isChecked()
+        assert window.custom_box.isHidden()
+
+        _custom(window)
+        assert not window.custom_box.isHidden()
+        assert not window.mode_buttons[options_mod.SHARING].isChecked()
+
+    def test_the_extra_files_have_their_own_options(self, window, folders) -> None:  # noqa: ANN001
+        """Both off, both reachable, and neither entangled with the images."""
+        source, dest = folders
+        _fill(window, source, dest)
+        _custom(window)
+        assert not window.source_copy_check.isChecked()
+        assert not window.sidecar_check.isChecked()
+
+        window.source_copy_check.setChecked(True)
+        window.sidecar_check.setChecked(True)
+        chosen = window.current_options()
+        assert chosen.source_copy is True
+        assert chosen.sidecar is True
+        assert "--source-copy" in options_mod.convert_args(chosen)
+        assert "--sidecar" in options_mod.convert_args(chosen)
 
 
 class TestTheControlsReachTheCommandLine:
     def test_a_changed_dropdown_changes_the_options(self, window, folders) -> None:  # noqa: ANN001
         source, dest = folders
         _fill(window, source, dest)
+        _custom(window)
         window.sharing_framing.setCurrentIndex(list(outputs.FRAMINGS).index("full"))
         window.sharing_format.setCurrentIndex(list(outputs.FORMATS).index("tiff"))
         chosen = window.current_options()
         assert chosen.sharing_framing == "full"
         assert chosen.sharing_format == "tiff"
 
-    def test_start_over_turns_resume_off(self, window, folders) -> None:  # noqa: ANN001
+    def test_start_over_is_gone_and_every_run_resumes(self, window, folders) -> None:  # noqa: ANN001
+        """The checkbox named a mechanism, not a job, so it is not offered.
+
+        Resuming skips what a previous run finished and costs a re-read at
+        worst. `--no-resume` is still on the CLI for whoever needs it.
+        """
         source, dest = folders
         _fill(window, source, dest)
-        window.start_over.setChecked(True)
-        assert window.current_options().resume is False
+        assert not hasattr(window, "start_over")
+        assert window.current_options().resume is True
+        assert "--no-resume" not in options_mod.convert_args(window.current_options())
 
     def test_unticking_a_tree_drops_it_and_greys_its_menus(self, window, folders) -> None:  # noqa: ANN001
         source, dest = folders
         _fill(window, source, dest)
+        _custom(window)
         window.archive_check.setChecked(False)
         assert window.current_options().archive is False
         assert not window.archive_format.isEnabled()
@@ -138,6 +195,7 @@ class TestTheControlsReachTheCommandLine:
         """`build_specs` would refuse it; the button refuses it first."""
         source, dest = folders
         _fill(window, source, dest)
+        _custom(window)
         window.archive_check.setChecked(False)
         window.sharing_check.setChecked(False)
         assert not window.convert_button.isEnabled()
@@ -319,3 +377,111 @@ class TestTheProgressBar:
         window._on_line("something entirely unexpected")
         assert "something entirely unexpected" in window.log.toPlainText()
         assert window.progress_bar.value() == 0
+
+
+class TestTheNamingAndFolderControls:
+    def test_the_window_opens_on_what_the_cli_would_do_unasked(self, window, folders) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        chosen = window.current_options()
+        assert chosen.name_template == name_template.DEFAULT_TEMPLATE
+        assert chosen.folder_scheme == layout.BY_ALBUM
+        assert "--name-template" not in options_mod.convert_args(chosen)
+        assert "--folder-scheme" not in options_mod.convert_args(chosen)
+
+    def test_the_preview_is_the_real_path_and_not_a_second_copy_of_the_rules(
+        self, window, folders
+    ) -> None:  # noqa: ANN001
+        """It is `writer.build_output_relpath`, the same call the conversion
+        makes. A front end with its own naming logic would drift, and a preview
+        that lied about where six hundred photographs were going would be worse
+        than no preview at all."""
+        source, dest = folders
+        _fill(window, source, dest)
+        window.name_template_edit.setText("{day}-{month}-{year}_{name}")
+
+        entry, derived = window._PREVIEW_DATED
+        expected = writer.build_output_relpath(
+            entry, derived, "jpg", None, "{day}-{month}-{year}_{name}", layout.BY_ALBUM, ""
+        ).as_posix()
+        assert expected in window.name_preview.text()
+        assert "04-07-2002_Backyard" in expected
+
+    def test_the_preview_shows_an_undated_photo_too(self, window, folders) -> None:  # noqa: ANN001
+        """Most of this corpus has no date anywhere in it. Somebody needs to
+        meet the zeros in the preview, not in six hundred filenames."""
+        source, dest = folders
+        _fill(window, source, dest)
+        assert "0000-00-00_000000_DCP00247" in window.name_preview.text()
+
+    def test_a_pattern_that_drops_the_filename_disables_convert(self, window, folders) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        assert window.convert_button.isEnabled()
+
+        window.name_template_edit.setText("{year}-{month}-{day}")
+        assert not window.convert_button.isEnabled()
+        assert "{name}" in window.name_preview.text()
+
+        window.name_template_edit.setText(name_template.DEFAULT_TEMPLATE)
+        assert window.convert_button.isEnabled()
+
+    def test_the_folder_menu_is_built_from_the_schemes_the_cli_has(self, window) -> None:  # noqa: ANN001
+        values = [
+            window.folder_scheme.itemData(i) for i in range(window.folder_scheme.count())
+        ]
+        assert values == [v for v, _, _ in layout.FOLDER_SCHEMES]
+
+    def test_choosing_a_scheme_changes_where_the_preview_says_files_go(
+        self, window, folders
+    ) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        seen = {}
+        for index, (value, _label, _hint) in enumerate(layout.FOLDER_SCHEMES):
+            window.folder_scheme.setCurrentIndex(index)
+            assert window.current_options().folder_scheme == value
+            # The path the preview is built from, rather than the sentence
+            # it is shown in, so the assertion is about the folder and not
+            # about the wording around it.
+            seen[value] = window._preview_path(*window._PREVIEW_DATED)
+
+        stem = "2002-07-04_143210_Backyard.jpg"
+        assert seen[layout.BY_ALBUM] == f"2002/Summer 2002/{stem}"
+        assert seen[layout.BY_YEAR] == f"2002/{stem}"
+        assert seen[layout.BY_YEAR_MONTH] == f"2002/2002 July/{stem}"
+        assert seen[layout.FLAT] == stem
+        assert seen[layout.CUSTOM] == f"2002/Summer 2002/{stem}"
+
+    def test_the_folder_pattern_box_appears_only_under_custom(self, window, folders) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        assert window.folder_template_edit.isHidden()
+
+        values = [v for v, _, _ in layout.FOLDER_SCHEMES]
+        window.folder_scheme.setCurrentIndex(values.index(layout.CUSTOM))
+        assert not window.folder_template_edit.isHidden()
+
+        window.folder_scheme.setCurrentIndex(values.index(layout.FLAT))
+        assert window.folder_template_edit.isHidden()
+
+    def test_a_folder_pattern_that_walks_upwards_disables_convert(self, window, folders) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        values = [v for v, _, _ in layout.FOLDER_SCHEMES]
+        window.folder_scheme.setCurrentIndex(values.index(layout.CUSTOM))
+        window.folder_template_edit.setText("../{album}")
+        assert not window.convert_button.isEnabled()
+
+    def test_reset_puts_both_patterns_back(self, window, folders) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        values = [v for v, _, _ in layout.FOLDER_SCHEMES]
+        window.folder_scheme.setCurrentIndex(values.index(layout.FLAT))
+        window.name_template_edit.setText("{name}")
+
+        window._reset_patterns()
+        chosen = window.current_options()
+        assert chosen.name_template == name_template.DEFAULT_TEMPLATE
+        assert chosen.folder_scheme == layout.BY_ALBUM
+        assert chosen.folder_template == layout.DEFAULT_FOLDER_TEMPLATE

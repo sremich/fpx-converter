@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, outputs
+from . import name_template as name_template_mod
 
 STATE_VERSION = 2
 STATE_FILENAME = "run-state.json"
@@ -167,9 +168,17 @@ class RunState:
     write, which is the thing this exists to prevent.
     """
 
-    def __init__(self, path: Path, specs: tuple[outputs.OutputSpec, ...]) -> None:
+    def __init__(
+        self,
+        path: Path,
+        specs: tuple[outputs.OutputSpec, ...],
+        name_template: str | None = None,
+        folder_key: str = "album",
+    ) -> None:
         self.path = path
         self.spec_labels = sorted(spec.label for spec in specs)
+        self.name_template = name_template or name_template_mod.DEFAULT_TEMPLATE
+        self.folder_key = folder_key
         self.done: dict[str, dict[str, Any]] = {}
         self._load()
 
@@ -189,6 +198,15 @@ class RunState:
         # not the same run, and resuming across the change would leave a tree
         # half in one shape and half in the other.
         if raw.get("spec_labels") != self.spec_labels:
+            return
+        # The filename pattern decides what those files are *called*. Resuming
+        # across a change to it would skip nothing and rename nothing, leaving
+        # half the tree under the old pattern and half under the new one, with
+        # no record of which was which. Same reasoning as the specs above.
+        if raw.get("name_template", name_template_mod.DEFAULT_TEMPLATE) != self.name_template:
+            return
+        # And which folders they land in, for the same reason.
+        if raw.get("folder_key", "album") != self.folder_key:
             return
         done = raw.get("done")
         if isinstance(done, dict):
@@ -231,6 +249,8 @@ class RunState:
         payload = {
             "state_version": STATE_VERSION,
             "spec_labels": self.spec_labels,
+            "name_template": self.name_template,
+            "folder_key": self.folder_key,
             "tool_version": __version__,
             "updated": now_iso(),
             "done": self.done,

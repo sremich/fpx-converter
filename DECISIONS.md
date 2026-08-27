@@ -1148,3 +1148,122 @@ exactly one.
 **Consequence.** `fpx-converter.exe --run-cli --version` prints the contents
 of `VERSION`, and CI fails the build if it prints `unknown` — which is what a
 bundle missing that file would print.
+
+## 2026-08-27 — The extras are opt-in, and the default writes only images
+
+**Decision.** `convert` writes the `.fpx` source copy and the `.fpx.json`
+raw-property sidecar only under `--source-copy` and `--sidecar`. Both were
+written on every conversion until now.
+
+**Why.** The original reasoning was that the source copy "is not one of the
+derivatives" and so was not optional. Stevie's objection is better: the source
+archive is read-only and still on disk, so the copy duplicates something that
+was never at risk, and the sidecar is re-derivable from it with `metadata`.
+Asking for one photograph and getting four files is a surprise, and the default
+is what almost every run will use.
+
+**Consequence.** A 687-file run writes 1,374 files rather than 2,748. Anyone who
+wants the old shape passes both flags, and the tests that are *about* those
+files now ask for them — which covers more than before, because it also proves
+the flags work.
+
+## 2026-08-27 — Three choices in the window, not six controls
+
+**Decision.** The desktop app offers Archive copy (TIFF, whole photo),
+Shareable copy (JPEG, cropped), or Custom — one at a time. The two format and
+two framing menus, and the extras, live under Custom and appear only there.
+`Start over` is gone.
+
+**Why.** Two checkboxes and four menus is the shape of the CLI's flags rather
+than of anybody's intention. Somebody converting a shoebox of photographs wants
+one of three things, and the two common ones want no further questions.
+`Start over` meant `--no-resume`, which describes a mechanism rather than a job;
+nobody could say what it would do to their photographs, and resuming is what
+you want every time — it skips what is finished and costs a re-read at worst.
+
+**Consequence.** The two named modes are one output tree each, derived in
+`options.convert_args` rather than in the window, so the command line shown in
+the log pane always matches what the option means. They deliberately ignore the
+custom menus: a mode built as "the custom settings, preset" would carry the last
+custom choice into a run whose label said something else. A tier-1 test asserts
+exactly that, and a mutation confirms it fails without it. The CLI is unchanged.
+
+## 2026-08-27 — Filenames and folders take patterns; `{name}` is not optional
+
+**Decision.** `--name-template` sets the filename and `--folder-scheme` /
+`--folder-template` set the output tree's shape. A filename pattern that does
+not contain `{name}` is refused.
+
+**Why.** "Sorted by date or raw output?" is a fair question with more than one
+right answer, and the shipped answers were only ever this archive's answers.
+The one thing that is not a preference: filenames are the only human-authored
+content in this corpus — no captions, titles or notes exist in any property set
+— so a pattern that drops them destroys, for every file it renames, something
+that re-reading the source cannot recover. That is a different class of loss
+from a wrong date, and it is refused rather than warned about.
+
+**Consequence.** Validation runs once before a run rather than per file, so a
+mistake costs a message and not a half-renamed tree. Substituted values are
+sanitised every time, because those come from the archive: an album named
+`Trip 1/2` must not become two folders. A pattern of just `{name}` can also
+produce a Windows reserved device name (`CON.tif`), which the shipped
+date-prefixed pattern never could, so `render` guards that too.
+
+## 2026-08-27 — A folder's date and a filename's date are not the same date
+
+**Decision.** Folder patterns have their own three-field vocabulary —
+`{year}`, `{month}`, `{album}` — resolved from `layout.filing_year_month`.
+Asking for `{day}`, `{time}`, `{date}` or `{name}` in a folder pattern is
+refused, with a message saying they belong in the filename.
+
+**Why.** The first implementation reused the filename's fields wholesale, and a
+custom `{year}/{album}` then filed almost everything under `0000/` while
+`--folder-scheme year` — the same word — correctly said `2002/`. They were
+answering different questions with one token. A folder in this project has
+always been a browsing affordance and `output_folder` has always been allowed to
+use an album name or the import stamp; a filename's date prefix tracks what is
+*claimable* and zeroes anything undefensible. Both remain true, and the
+vocabularies are now separate so they cannot be confused.
+
+**Consequence.** `filing_year_month` returns a pair rather than a `datetime`,
+because a `datetime` forced an unknown month to be *some* month and every such
+file landed in January — which reads as evidence rather than as the absence of
+it. `year-month` leaves the month level off instead. The import stamp lends its
+month only where it agrees with the album about the year.
+
+**Also.** `stem_scope` takes the scheme. Only `album` puts a file somewhere the
+manifest alone can predict; every other scheme files by a date that needs the
+metadata read, and output names are assigned before any of that happens. They
+therefore share one naming bucket — stricter than the truth, and stricter is the
+safe direction: an occasional unnecessary hash suffix against silently
+overwriting a photograph in a flat folder.
+
+## 2026-08-27 — A run that renames or refiles is not the same run
+
+**Decision.** `run-state.json` records the filename pattern and a key naming the
+folder arrangement, and a change to either invalidates the resume, exactly as a
+changed output spec already did.
+
+**Why.** Resuming across such a change would skip nothing and move nothing: the
+files the previous run wrote are still there under their old names, the new run
+writes its own beside them, and the tree ends up half in each shape with nothing
+recording which is which.
+
+**Consequence.** The folder key is `custom:<template>` under `custom`, because
+two different custom patterns are two different arrangements and the scheme name
+alone cannot tell them apart. A state file written before this change has no
+`name_template` key and is read as the default, so an existing destination still
+resumes.
+
+## 2026-08-27 — ExifTool gets no console of its own
+
+**Decision.** Every `subprocess.run` of ExifTool passes `CREATE_NO_WINDOW`.
+
+**Why.** Found by running the packaged application rather than by any test: a
+687-file run flashed 687 console windows across the desktop and paid the process
+cost of creating each one. No test could have caught it — the windows only
+appear when the parent is a GUI process, and the suite runs from a terminal.
+
+**Consequence.** A reminder that "the tests are green" and "somebody can use
+this" are different claims, which is the same lesson the unreadable dropdowns
+taught in the same session.

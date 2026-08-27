@@ -35,7 +35,16 @@ SAMPLE = 4
 def run_result(tmp_path_factory: pytest.TempPathFactory) -> dict:
     """One conversion, driven end to end. Shared: it is the expensive part."""
     dest = tmp_path_factory.mktemp("gui-out")
-    chosen = ConvertOptions(source=FIXTURES, dest=dest)
+    # Custom with both trees and both extras: this file is about the wiring,
+    # so it exercises everything a run can produce rather than the default,
+    # which is one image per photograph.
+    chosen = ConvertOptions(
+        source=FIXTURES,
+        dest=dest,
+        mode=options_mod.CUSTOM,
+        source_copy=True,
+        sidecar=True,
+    )
     options_mod.validate(chosen)
     before = _snapshot(FIXTURES)
 
@@ -72,6 +81,12 @@ def _snapshot(root: Path) -> dict[str, str]:
 
 class TestItActuallyConverts:
     def test_both_output_trees_were_written(self, run_result: dict) -> None:
+        """Under Custom with both trees ticked, which is what the fixture sets.
+
+        The window's own default is one image per photograph now; this test is
+        about the pair still being reachable through the real child process,
+        not about the default.
+        """
         dest: Path = run_result["dest"]
         assert list((dest / "archive").rglob("*.tif")), "no archival TIFF was written"
         assert list((dest / "sharing").rglob("*.jpg")), "no shareable JPEG was written"

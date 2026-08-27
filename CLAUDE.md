@@ -174,6 +174,14 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
       a build that fails must not leave a published release with nothing in
       it. Cancellation needed two mechanisms rather than one; see
       `DECISIONS.md`.
+- [ ] **1.2.0 — Names, folders, and what a run writes.** Post-1.1.0 work
+      driven by Stevie running the packaged application: ExifTool no longer
+      opens a console window per photograph, the unreadable dropdowns are
+      fixed, the app's six output controls became three exclusive choices,
+      the `.fpx` copy and the sidecar became opt-in, and both the filename and
+      the folder arrangement became user-definable — `--name-template`,
+      `--folder-scheme`, `--folder-template`, with a live two-photograph
+      preview in the window. Twelve properties verified by mutation.
 
 Two wants from the original requirements changed after the milestone-0
 inventory measured the corpus: the **audio-extraction want is CLOSED** (zero
@@ -231,6 +239,30 @@ archive, so they are rules, not preferences.
   the most descriptive one, **not the first listed** — taking the first put 52
   photos of one Christmas under a folder named after a zip file and cost them
   the day-precise date their real album gave for free.
+- **A folder is a browsing affordance; a filename's date prefix tracks what
+  is claimable; `DateTimeOriginal` is the only claim.** All three now take
+  patterns, and they do *not* share their date values. `--folder-scheme` and
+  `{year}`/`{month}` in a folder pattern may use an album name or the import
+  stamp — the licence `output_folder` has always taken. `--name-template`'s
+  date fields come from `format_date_prefix` and zero anything undefensible.
+  Reusing the filename's fields for folders was written and caught: a custom
+  `{year}/{album}` filed almost everything under `0000/` while
+  `--folder-scheme year` — the same word — correctly said `2002/`. Folder
+  patterns therefore have their own three-field vocabulary (`{year}`,
+  `{month}`, `{album}`), and asking for `{day}` or `{time}` in one is refused
+  rather than answered. `year-month` never manufactures a month either: an
+  album naming only a year files directly under the year.
+- **A run that renames or refiles is not the same run.** `run-state.json`
+  records the filename pattern and the folder arrangement beside the output
+  specs, and a change to any of them invalidates the resume. Resuming across
+  one would skip nothing and move nothing, leaving half a tree under the old
+  shape and half under the new with nothing recording which was which.
+- **A conversion writes only the images asked for.** The `.fpx` copy and the
+  `.fpx.json` sidecar are opt-in (`--source-copy`, `--sidecar`). They were
+  written on every conversion until 1.2.0, so asking for one photograph
+  produced four files. The source archive is read-only and still there, so the
+  copy duplicates something that was never at risk, and the sidecar is
+  re-derivable with `metadata`.
 - **`archive/` keeps the full frame; `sharing/` gets the crop.** 70 files
   carry a crop somebody framed in the Kodak software — 56 axis-aligned, and
   14 riding along with a 90° rotation. Both the captured frame and the
@@ -259,7 +291,10 @@ archive, so they are rules, not preferences.
 - **Filenames are the only human-authored content in the archive.** Within a
   hash group, prefer the human-authored name over a camera-generated twin,
   and record every contributing path in the sidecar. Losing a filename loses
-  a caption permanently.
+  a caption permanently. This is why `--name-template` **requires `{name}`**:
+  a pattern that drops it throws away the only thing a person wrote, for
+  every file it renames, and unlike a wrong date it cannot be recovered by
+  re-reading the source.
 - **Do not normalise doubled file extensions.** Files differing only by a
   repeated extension can be genuinely different pixels.
 - **The desktop app wraps the CLI; it never reimplements it.** Every

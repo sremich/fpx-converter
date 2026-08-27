@@ -25,6 +25,7 @@ from . import album_dates as album_dates_mod
 from . import ingest as ingest_mod
 from . import manifest as manifest_mod
 from . import metadata as metadata_mod
+from . import name_template as name_template_mod
 from . import thumbnail as thumbnail_mod
 from . import timestamps as timestamps_mod
 from . import writer as writer_mod
@@ -350,6 +351,18 @@ def _stop_requested(path: Path, since: float) -> bool:
         return False
 
 
+def _folder_key(args: argparse.Namespace) -> str:
+    """One string naming how this run arranges its folders.
+
+    Stored in `run-state.json`. Resuming across a change to it would skip
+    nothing and move nothing, leaving half a tree in one shape and half in
+    the other -- the same reasoning as the output specs.
+    """
+    if args.folder_scheme == layout.CUSTOM:
+        return f"{layout.CUSTOM}:{args.folder_template}"
+    return str(args.folder_scheme)
+
+
 def cmd_convert(args: argparse.Namespace) -> int:
     """Convert the manifest, resuming what is done and never stopping on one file."""
     # Stamped first, before the manifest load and the stem assignment over
@@ -391,6 +404,16 @@ def cmd_convert(args: argparse.Namespace) -> int:
         print(f"{exc}", file=sys.stderr)
         return 1
 
+    # Once, before the run, rather than on the first file. A bad pattern
+    # should cost a message and not a half-renamed output tree.
+    try:
+        name_template_mod.validate(args.name_template)
+        if args.folder_scheme == layout.CUSTOM:
+            layout.validate_folder_template(args.folder_template)
+    except name_template_mod.TemplateError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+
     all_entries = manifest.get("entries", [])
     entries = all_entries[: args.limit] if args.limit and args.limit > 0 else all_entries
 
@@ -400,7 +423,11 @@ def cmd_convert(args: argparse.Namespace) -> int:
     # photos keeps the bare stem, and the same photo would exist at two paths.
     stems = naming.assign_output_stems(
         [
-            (e["sha256"], layout.stem_scope(e), e.get("preferred_name", e["store_name"]))
+            (
+                e["sha256"],
+                layout.stem_scope(e, args.folder_scheme),
+                e.get("preferred_name", e["store_name"]),
+            )
             for e in all_entries
         ]
     )
@@ -413,7 +440,12 @@ def cmd_convert(args: argparse.Namespace) -> int:
         return _convert_dry_run(entries, store_dir, source_root, specs)
 
     dest.mkdir(parents=True, exist_ok=True)
-    state = batch.RunState(dest / batch.STATE_FILENAME, specs)
+    state = batch.RunState(
+        dest / batch.STATE_FILENAME,
+        specs,
+        args.name_template,
+        _folder_key(args),
+    )
     if args.no_resume:
         state.done.clear()
 
@@ -483,6 +515,11 @@ def cmd_convert(args: argparse.Namespace) -> int:
                     claimed=claimed,
                     specs=specs,
                     supplied=supplied,
+                    source_copy=args.source_copy,
+                    sidecar=args.sidecar,
+                    name_template=args.name_template,
+                    folder_scheme=args.folder_scheme,
+                    folder_template=args.folder_template,
                 )
                 records.append(record)
         except KeyboardInterrupt:
@@ -537,6 +574,11 @@ def _handle_entry(
     claimed: set[Path],
     specs: tuple[outputs.OutputSpec, ...],
     supplied: album_dates_mod.AlbumDates,
+    source_copy: bool = False,
+    sidecar: bool = False,
+    name_template: str | None = None,
+    folder_scheme: str = layout.BY_ALBUM,
+    folder_template: str | None = None,
 ) -> batch.FileRecord:
     """One manifest entry: resume it, convert it, or record why it failed.
 
@@ -574,6 +616,11 @@ def _handle_entry(
             specs=specs,
             album=album,
             album_dates=supplied,
+            source_copy=source_copy,
+            sidecar=sidecar,
+            name_template=name_template,
+            folder_scheme=folder_scheme,
+            folder_template=folder_template,
         )
     except KeyboardInterrupt:
         raise
@@ -625,6 +672,11 @@ def _convert_one(
     specs: tuple[outputs.OutputSpec, ...],
     album: str,
     album_dates: album_dates_mod.AlbumDates | None = None,
+    source_copy: bool = False,
+    sidecar: bool = False,
+    name_template: str | None = None,
+    folder_scheme: str = layout.BY_ALBUM,
+    folder_template: str | None = None,
 ) -> batch.FileRecord:
     sha, store_name = entry["sha256"], entry["store_name"]
     fpx_path = _resolve_fpx_path(entry, store_dir, source_root)
@@ -647,6 +699,11 @@ def _convert_one(
         claimed=claimed,
         specs=specs,
         album_dates=album_dates,
+        source_copy=source_copy,
+        sidecar=sidecar,
+        name_template=name_template,
+        folder_scheme=folder_scheme,
+        folder_template=folder_template,
     )
     # Everything this entry put on disk, images and source copy alike. The
     # resume check tests all of them, so a deleted sidecar brings the file
@@ -884,6 +941,48 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_conv.add_argument(
         "--no-archive", action="store_true", help="do not write the archive tree"
+    )
+    p_conv.add_argument(
+        "--source-copy",
+        action="store_true",
+        help="also copy each source .fpx beside its converted image (off by "
+        "default: the source archive is read-only and still there)",
+    )
+    p_conv.add_argument(
+        "--sidecar",
+        action="store_true",
+        help="also write the .fpx.json raw-property dump beside each image "
+        "(off by default: it can be rebuilt from the source with `metadata`)"
+    )
+    p_conv.add_argument(
+        "--folder-scheme",
+        default=layout.BY_ALBUM,
+        choices=[value for value, _, _ in layout.FOLDER_SCHEMES],
+        help=(
+            "how the output tree is arranged (default: album, which keeps the folder "
+            "names from the source; 'custom' reads --folder-template)"
+        ),
+    )
+    p_conv.add_argument(
+        "--folder-template",
+        default=layout.DEFAULT_FOLDER_TEMPLATE,
+        metavar="PATTERN",
+        help=(
+            "with --folder-scheme custom, the folders to file each image under; "
+            "the same fields as --name-template, with / between levels "
+            f"(default: {layout.DEFAULT_FOLDER_TEMPLATE})"
+        ),
+    )
+    p_conv.add_argument(
+        "--name-template",
+        default=name_template_mod.DEFAULT_TEMPLATE,
+        metavar="PATTERN",
+        help=(
+            "what each converted image is called, before its extension. The "
+            "fields are "
+            + ", ".join("{" + n + "}" for n, _ in name_template_mod.FIELDS)
+            + f"; {{name}} is required. Default: {name_template_mod.DEFAULT_TEMPLATE}"
+        ),
     )
     p_conv.add_argument(
         "--no-sharing", action="store_true",

@@ -6,6 +6,62 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [Unreleased]
+
+### Changed
+- **A photograph now produces only the images you asked for.** The `.fpx`
+  source copy and the `.fpx.json` raw-property sidecar were written on every
+  conversion, so asking for one photograph produced four files. Both are kept
+  and both are one flag away — `convert --source-copy` and `convert --sidecar`,
+  and their own tickboxes under Custom in the app. The source archive is
+  read-only and still there, so the copy duplicated something that was never at
+  risk, and the sidecar can be rebuilt at any time with `metadata`.
+- **The desktop app offers three choices instead of six controls.** Archive
+  copy (TIFF, whole photo), Shareable copy (JPEG, cropped), or Custom — one at
+  a time, with the format and framing menus appearing only under Custom. Two
+  checkboxes and four menus was the shape of the CLI's flags rather than of
+  anybody's intention. The CLI is unchanged; every flag still exists.
+- **"Start over" is gone from the app.** It meant `--no-resume`, but "ignore
+  what a previous run did" describes a mechanism rather than a job, and nobody
+  could say what it would do to their photographs. Resuming skips what is
+  finished and costs a re-read at worst. The flag stays on the CLI.
+
+### Added
+- **`convert --name-template PATTERN`, and a pattern box in the app.** What each
+  converted image is called, before its extension. Fields: `{year}` `{month}`
+  `{day}` `{date}` `{time}` `{name}` `{album}`; the default is unchanged,
+  `{year}-{month}-{day}_{time}_{name}`. `{name}` is required — filenames are the
+  only human-authored content in this kind of archive, and unlike a wrong date a
+  lost one cannot be recovered by re-reading the source. A component the
+  evidence does not support still renders as zeros, in a custom pattern exactly
+  as in the shipped one.
+- **`convert --folder-scheme`, and a folder menu in the app.** How the output
+  tree is arranged: `album` (the default, and what the tool has always done),
+  `year`, `year-month`, `flat`, or `custom` with `--folder-template`. A folder
+  pattern uses `/` between levels and the three fields a folder can answer for:
+  `{year}`, `{month}`, `{album}`.
+- **A live preview in the app, showing two photographs.** The second is the
+  point: most of this kind of archive has no date anywhere in it, so somebody
+  choosing a pattern meets the zeros in the preview rather than in six hundred
+  filenames. It is built by calling `writer.build_output_relpath` — the same
+  function the conversion calls — rather than by a second copy of the naming
+  rules living in the window.
+
+### Fixed
+- **ExifTool no longer opens a console window for every photograph.** A
+  687-file run flashed 687 windows across the desktop and paid for each one.
+  Found by running the packaged application; `CREATE_NO_WINDOW` on the child.
+- **The dropdown menus in the app were unreadable.** Styling a `QComboBox` at
+  all takes Qt off its native rendering path, and the text then stopped
+  inheriting its colour — it fell back to a near-black that vanished on a dark
+  field. `color` is now set explicitly.
+- **`year-month` never invents a January.** An album that names only a year
+  files under the year, with no month level at all.
+- **Resuming across a changed pattern.** A run that renames or refiles is not
+  the same run: `run-state.json` records both patterns, and a change invalidates
+  the resume exactly as a changed output spec already did. Without it a tree
+  would end up half in each shape with nothing recording which was which.
+
 ## [1.1.0] — 2026-08-27
 
 ### Added

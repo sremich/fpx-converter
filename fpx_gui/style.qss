@@ -62,6 +62,16 @@ QLabel#Detail {
     color: @muted;
 }
 
+/* The explanatory line under a control: what this choice actually does, and
+   for the naming patterns, what the resulting filenames look like. Quieter
+   than the control it explains, or it competes with it. */
+QLabel#Hint {
+    font-size: 12px;
+    color: @muted;
+}
+
+QLabel#Hint[severity="bad"] { color: @error; }
+
 /* ---- Cards ------------------------------------------------------------- */
 
 QFrame#Card {
@@ -94,11 +104,17 @@ QLineEdit:disabled {
 }
 
 QComboBox {
+    /* `color` is not optional here. Styling a QComboBox at all takes Qt off
+       the native rendering path, and the text then stops inheriting the
+       colour from QWidget -- it fell back to a near-black that is unreadable
+       on a dark field, which is how these menus shipped showing nothing but
+       an ellipsis. */
+    color: @text;
     background: @field;
     border: 1px solid @border;
     border-radius: 8px;
     padding: 7px 11px;
-    min-width: 108px;
+    min-width: 148px;
 }
 
 QComboBox:focus {
@@ -124,9 +140,28 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 
-QCheckBox {
+QCheckBox, QRadioButton {
     spacing: 9px;
     padding: 3px 0;
+}
+
+/* Round, because the three output choices are exclusive and the shape is how
+   somebody knows that before they click one. */
+QRadioButton::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid @border;
+    border-radius: 10px;
+    background: @field;
+}
+
+QRadioButton::indicator:checked {
+    background: @accent;
+    border: 1px solid @accent;
+}
+
+QRadioButton::indicator:hover {
+    border-color: @accent;
 }
 
 QCheckBox::indicator {
@@ -165,6 +200,18 @@ QPushButton:hover {
 QPushButton:disabled {
     color: @muted;
     border: 1px solid @border;
+}
+
+/* Sits beside a text field it acts on, so it matches the field's height
+   rather than standing off it like an action of its own. */
+QPushButton#Secondary {
+    padding: 8px 14px;
+    font-size: 13px;
+    color: @muted;
+}
+
+QPushButton#Secondary:hover {
+    color: @text;
 }
 
 QPushButton#Primary {

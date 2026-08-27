@@ -289,6 +289,12 @@ class TestConvertCLI:
         assert main(["convert", "--manifest", str(tmp_path / "nope.json")]) == 1
 
     def test_converts_fixtures_to_dual_output(self, tmp_path: Path) -> None:
+        """Everything a run can write, asked for at once.
+
+        The `.fpx` copy and the `.fpx.json` sidecar are opt-in, so this asks
+        for them by flag. That makes the test cover more than it did when they
+        came for free: it now also proves the two flags reach the writer.
+        """
         manifest_path = tmp_path / "m.json"
         main(scan_argv(FIXTURES, manifest_path))
         dest = tmp_path / "output"
@@ -300,6 +306,8 @@ class TestConvertCLI:
             str(FIXTURES),
             "--dest",
             str(dest),
+            "--source-copy",
+            "--sidecar",
         ]
         assert main(argv) == 0
         archive_tifs = list((dest / "archive").rglob("*.tif"))
