@@ -110,7 +110,9 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
       writes, pyexiv2 read-back validation, filesystem mtime, naming scheme.
       Shipped as one combined 0.4.0 pre-release: all three milestones were
       built as a branch stack and audited afterwards, so the intermediate
-      states were never CI-green and were never released.
+      states were never CI-green and were never released. **Shipped
+      2026-08-27** after three audit rounds; the third found that the colour
+      check added by the second could not detect colour.
 - [ ] **0.5.0 — Batch engine + audit.** CLI with resume-by-hash,
       `conversion.log`, `audit_report.json`; never aborts on one bad file.
 - [ ] **0.6.0 — QA gallery.** `report/index.html`, thumbnails free from the
