@@ -17,6 +17,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: Kodak's camera-generated filenames. Not captions -- the absence of one.
@@ -274,4 +276,61 @@ def test_no_personal_name_from_the_archive_is_tracked_in_git() -> None:
     assert not offenders, (
         "album names or human-authored filenames from the archive are committed "
         f"to git (CLAUDE.md forbids this): {sorted(offenders)}"
+    )
+
+
+def test_no_personal_name_is_buried_inside_a_committed_binary() -> None:
+    """The hole the text guard cannot see.
+
+    `test_no_personal_name_from_the_archive_is_tracked_in_git` reads each
+    tracked file as UTF-8 and skips whatever will not decode -- which is every
+    `.fpx` fixture. But a FlashPix file is a compound document full of
+    property sets, and a property set is exactly where a filename or an album
+    would be stored. A photograph can be person-free in its pixels and still
+    carry a name in its bytes.
+
+    Checks ASCII and UTF-16LE, because property sets store strings either way.
+
+    Skipped where no manifest exists (CI, a fresh clone): there is nothing to
+    check against, and the tracked bytes have already been checked on the
+    machine that has one.
+    """
+    manifest_path = REPO_ROOT / "source-files" / "manifest.json"
+    if not manifest_path.is_file():
+        pytest.skip("no local manifest; nothing to check the fixtures against")
+
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))["entries"]
+    names = {a for e in entries for a in e.get("albums", []) if a}
+    for entry in entries:
+        stem = entry.get("preferred_name", "").split(".")[0].strip()
+        if stem and not _CAMERA_NAME.fullmatch(stem):
+            names.add(stem)
+
+    # Five, not four. Two four-letter names in this archive are ordinary
+    # English words that occur by chance inside compressed pixel data -- they
+    # matched two fixtures at byte offsets deep in the JPEG streams. A guard
+    # that cries wolf on every build gets switched off, and the names short
+    # enough to collide are the ones least able to identify anybody.
+    needles = []
+    for name in names:
+        if len(name) < 5:
+            continue
+        lowered = name.lower()
+        needles.append((name, lowered.encode("ascii", "ignore")))
+        needles.append((name, lowered.encode("utf-16-le", "ignore")))
+
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "tests" / "fixtures").iterdir()):
+        if not path.is_file() or path.suffix.lower() != ".fpx":
+            continue
+        raw = path.read_bytes().lower()
+        for name, needle in needles:
+            if len(needle) >= 5 and needle in raw:
+                # Length only. Printing it would put the very thing this test
+                # exists to keep out of git into a CI log.
+                offenders.append(f"{path.name}: a {len(name)}-character personal name")
+
+    assert not offenders, (
+        "a committed fixture carries a personal name inside its bytes "
+        f"(CLAUDE.md forbids this): {sorted(set(offenders))}"
     )

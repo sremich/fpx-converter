@@ -1,7 +1,15 @@
 """Tier-2: end-to-end pixel decoding over real committed `.fpx` fixtures.
 
-The four fixtures are non-personal Kodak stock sample images that shipped with
-Picture Easy. Never add personal photos here.
+Fixtures are images containing **no people**: the Kodak stock samples that
+shipped with Picture Easy, plus archive photographs confirmed person-free by
+eye and renamed to a neutral stem. Never add a photograph with a person in
+it, and never keep a filename somebody typed -- `CLAUDE.md` treats filenames
+as the archive's captions.
+
+`EXPECTED_FIXTURES` below pins the originals in detail. The parametrised
+tests run over everything in the directory, so a fixture added later is
+covered the moment it lands rather than when somebody remembers to add it to
+a list.
 """
 
 from __future__ import annotations
@@ -137,3 +145,82 @@ with Image.open(fpx_path) as im:
     assert pytest.approx(custom_mean, abs=1e-3) == pil_info["mean"]
     assert pytest.approx(custom_std, abs=1e-3) == pil_info["std"]
     assert custom_arr[100:110, 100:110, :].tolist() == pil_info["sample"]
+
+
+#: Greyscale correlation against the file's own embedded DIB. Measured, not
+#: guessed: 39 of the 40 fixtures score 0.957 or better and most exceed 0.99.
+GEOMETRY_FLOOR = 0.95
+
+#: One exception, recorded rather than explained away. `starfish.fpx` scores
+#: 0.882 -- a wide smooth gradient of wet sand at sunset has little structure
+#: for a 96-pixel greyscale correlation to lock onto, and this is also one of
+#: the four files whose decode is ~20% darker than its own thumbnail for
+#: reasons still open (see HANDOVER). Its framing is right; the metric is
+#: weak on this subject. Do not raise the general floor by loosening it here.
+GEOMETRY_FLOORS = {"starfish.fpx": 0.85}
+
+
+def _all_fixtures() -> list[Path]:
+    return sorted(p for p in FIXTURES.iterdir() if p.suffix.lower() == ".fpx")
+
+
+@pytest.mark.parametrize("path", _all_fixtures(), ids=lambda p: p.name)
+def test_every_fixture_decodes_at_its_own_declared_size(path: Path) -> None:
+    """Never hardcode 1152x864: the size is read per file and used everywhere.
+
+    Seven declared sizes exist in this archive. Asserting against the
+    decoder's own `declared_width`/`declared_height` rather than a constant is
+    the point -- a decode that quietly produced the wrong grid would still
+    match a hardcoded expectation.
+    """
+    decoded = decoder.decode_fpx(path)
+    assert decoded.image.mode == "RGB"
+    assert decoded.image.size == (decoded.declared_width, decoded.declared_height)
+    assert decoded.colour_space in {"NIF_RGB", "PhotoYCC"}
+
+
+@pytest.mark.parametrize("path", _all_fixtures(), ids=lambda p: p.name)
+def test_every_fixture_agrees_with_its_own_thumbnail_geometry(path: Path) -> None:
+    """The greyscale oracle: framing and orientation, and nothing about colour.
+
+    Deliberately not cited anywhere as evidence about colour -- that is
+    `test_fixtures_colour.py`, and conflating the two is how two solidly green
+    files passed every check this project had.
+    """
+    decoded = decoder.decode_fpx(path)
+    thumb = thumbnail.extract_thumbnail(path)
+    corr = thumbnail.compute_image_correlation(decoded.cropped_image(), thumb)
+    floor = GEOMETRY_FLOORS.get(path.name, GEOMETRY_FLOOR)
+    assert corr >= floor, f"{path.name} geometry correlation {corr:.3f} < {floor}"
+
+
+def test_the_cropped_fixture_crops_and_the_crop_is_the_right_box() -> None:
+    """First committed cover for the crop branch.
+
+    Both of this project's crop defects shipped because no fixture carried a
+    viewing transform: 53 files cropped where 70 should have been, then 14
+    rotated files dropping their crop entirely. A matrix's shape does not tell
+    you whether it crops -- the box is the authority -- so this asserts the
+    box does something, and that doing it moves the image *towards* the
+    thumbnail rather than away.
+    """
+    path = FIXTURES / "feeder-crop.fpx"
+    decoded = decoder.decode_fpx(path)
+
+    assert decoded.crop_applied is not None, "the crop fixture stopped carrying a crop"
+    left, top, right, bottom = decoded.crop_applied
+    assert 0 <= left < right <= decoded.declared_width
+    assert 0 <= top < bottom <= decoded.declared_height
+    assert decoded.cropped_image().size != decoded.image.size
+
+    # `image` always keeps the full frame -- archive/ preserves every captured
+    # pixel -- so the crop must be visible only through `cropped_image()`.
+    assert decoded.image.size == (decoded.declared_width, decoded.declared_height)
+
+    thumb = thumbnail.extract_thumbnail(path)
+    full = thumbnail.compute_image_correlation(decoded.image, thumb)
+    cropped = thumbnail.compute_image_correlation(decoded.cropped_image(), thumb)
+    assert cropped > full, (
+        f"cropping moved the image away from its own thumbnail "
+        f"({full:.3f} -> {cropped:.3f})"
+    )

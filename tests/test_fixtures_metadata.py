@@ -119,7 +119,11 @@ def test_sidecar_dump_end_to_end_over_fixtures(tmp_path: Path) -> None:
         source_root=FIXTURES,
     )
     assert report.ok
-    assert report.written == len(EXPECTED_FIXTURE_DETAILS)
+    # Every fixture, not just the four pinned in detail below: a sidecar that
+    # silently failed to write for 36 of 40 files would still satisfy a count
+    # taken from the detail table.
+    assert report.written == report.total_entries
+    assert report.written >= len(EXPECTED_FIXTURE_DETAILS)
 
     for entry in manifest["entries"]:
         store_name = entry["store_name"]

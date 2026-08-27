@@ -17,6 +17,12 @@ from fpx_converter.cli import main
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+#: Counted, not pinned. The fixture set grew from 4 to 40 when the
+#: person-free archive photos were adopted, and every one of these
+#: assertions was a bare `== 4` that had to be found and edited. Deriving it
+#: keeps the assertion about "the CLI processed everything it was given".
+FIXTURE_COUNT = len([p for p in FIXTURES.iterdir() if p.suffix.lower() == ".fpx"])
+
 
 def scan_argv(source: Path, manifest: Path, *extra: str) -> list[str]:
     return [
@@ -36,7 +42,7 @@ class TestScan:
         manifest_path = tmp_path / "m.json"
         assert main(scan_argv(FIXTURES, manifest_path)) == 0
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        assert data["counts"]["files_seen"] == 4
+        assert data["counts"]["files_seen"] == FIXTURE_COUNT
         assert data["verification"]["ok"] is True
         assert data["verification"]["files_rehashed"] > 0
 
@@ -75,7 +81,7 @@ class TestIngest:
         main(scan_argv(FIXTURES, manifest_path))
         dest = tmp_path / "store"
         assert main(["ingest", "--manifest", str(manifest_path), "--dest", str(dest)]) == 0
-        assert len(list(dest.iterdir())) == 4
+        assert len(list(dest.iterdir())) == FIXTURE_COUNT
 
     def test_refuses_an_unverified_manifest(self, tmp_path: Path, capsys) -> None:
         """A manifest whose scan could not prove the source was untouched is
@@ -169,7 +175,7 @@ class TestMetadataCLI:
             str(dest),
         ]
         assert main(argv) == 0
-        assert len(list(dest.glob("*.json"))) == 4
+        assert len(list(dest.glob("*.json"))) == FIXTURE_COUNT
 
     def test_dry_run_writes_no_sidecars(self, tmp_path: Path) -> None:
         manifest_path = tmp_path / "m.json"
@@ -243,7 +249,7 @@ class TestThumbnailCLI:
         ]
         assert main(argv) == 0
         pngs = list(dest.glob("*.png"))
-        assert len(pngs) == 4
+        assert len(pngs) == FIXTURE_COUNT
 
     def test_dry_run_writes_no_thumbnails(self, tmp_path: Path) -> None:
         manifest_path = tmp_path / "m.json"
@@ -301,10 +307,10 @@ class TestConvertCLI:
         archive_fpxs = list((dest / "archive").rglob("*.fpx"))
         archive_sidecars = list((dest / "archive").rglob("*.fpx.json"))
 
-        assert len(archive_tifs) == 4
-        assert len(sharing_jpgs) == 4
-        assert len(archive_fpxs) == 4
-        assert len(archive_sidecars) == 4
+        assert len(archive_tifs) == FIXTURE_COUNT
+        assert len(sharing_jpgs) == FIXTURE_COUNT
+        assert len(archive_fpxs) == FIXTURE_COUNT
+        assert len(archive_sidecars) == FIXTURE_COUNT
 
     def test_dry_run_writes_no_conversion_files(self, tmp_path: Path) -> None:
         manifest_path = tmp_path / "m.json"

@@ -8,6 +8,26 @@ commit, then tag.
 
 ## [Unreleased]
 
+### Added
+- **36 new test fixtures, and the first CI coverage of colour.** All 687
+  distinct files in the archive were screened by eye for people; the 40 that
+  contain none are now committed with neutral filenames. Both PhotoYCC files
+  are among them, so the colour path that once shipped two photographs
+  solidly green with 42% of their pixels clipped now has tier-1/2 coverage
+  that runs on every push. Also newly covered: a file carrying a
+  viewing-transform crop, and six of the seven declared sizes.
+- **Mutation tests for the colour oracle.** The fixtures must pass it *and* a
+  deliberately broken decode must fail it — wrong PhotoYCC neutral, swapped
+  red and blue, fully desaturated. Every one of those is a mutation the
+  oracle's first version passed, because it correlated the channels
+  separately and Pearson correlation is invariant under a per-channel affine
+  map. An oracle that cannot fail is not an oracle.
+- `fpx_converter/oracles.py`: the chroma check, moved out of the tier-3
+  script so tiers 1, 2 and 3 share one definition instead of three that
+  drift.
+- `tests/fixtures/README.md`: what each fixture covers, what the set does
+  **not** cover, and the screening rule.
+
 ### Changed
 - **The output tree follows the source folder names, not the dates.** A
   descriptive source folder keeps its name as the album whatever date the

@@ -64,7 +64,7 @@ not in `requirements.txt`. Do not try to fetch it from a URL — see
 | Tier | What it is | Gates |
 |------|-----------|-------|
 | 1. Unit | Property-set parser against hand-built byte fixtures; tile-table parsing; JPEG table + tile reassembly; timestamp and offset logic; naming scheme; collision handling. No real photos, no ExifTool, no source archive. | Every push (CI) |
-| 2. e2e | Full pipeline on the committed non-personal FPX fixtures → TIFF + JPEG → independent read-back of every tag | Any change to the decoder, metadata engine, or output writer |
+| 2. e2e | Full pipeline on the 40 committed person-free FPX fixtures → TIFF + JPEG → independent read-back of every tag, plus the chroma oracle and its mutation tests | Any change to the decoder, metadata engine, or output writer |
 | 3. Sample batch | `scripts/tier3_sample.py` — ~50 real files spanning every album, every declared size, both colour spaces and all four transform outcomes: convert, pyexiv2 read-back, pixel stats, both thumbnail oracles, album ground-truth date check. Exits non-zero on any of them and prints its own sample composition | Before merging any branch that touches decode or metadata |
 | 4. Full dataset | Unattended run over all files; audit report shows zero unexplained failures; ~20 files eyeballed in a real photo app for date, orientation, and colour | **1.0.0.** Until it passes, every release stays a pre-release |
 
@@ -85,7 +85,19 @@ written, shipped and caught. Whatever the metric, a 96-pixel thumbnail is
 evidence and not sight; tier 4 still needs eyes.
 
 Tiers 3 and 4 read the personal corpus and therefore **never run in CI**.
-They run locally, and their outputs are gitignored. CI's job is tier 1.
+They run locally, and their outputs are gitignored. CI's job is tiers 1 and 2.
+
+**The colour oracle lives in `fpx_converter/oracles.py`, not in the tier-3
+script**, so tiers 1, 2 and 3 run the same code rather than three copies that
+drift. Tier 2 exercises it both ways: the fixtures must pass it, and a
+deliberately broken decode must *fail* it — wrong PhotoYCC neutral, swapped
+red and blue, fully desaturated. All three are mutations the previous
+per-channel oracle passed, which is why the pair of directions is the test
+and not just the first half.
+
+**Rotation has no fixture and cannot get one.** All 22 rotated files in the
+archive contain people. Tier 3 is the only automated cover for the branch
+that carried the 0.4.0 dropped-crop defect; see `tests/fixtures/README.md`.
 
 ## Milestone plan
 
