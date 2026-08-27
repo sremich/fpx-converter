@@ -95,21 +95,35 @@ def test_no_personal_data_is_tracked() -> None:
         check=True,
     ).stdout.splitlines()
 
+    # Every container a photo, a frame of video or an extracted thumbnail
+    # could arrive in, not only the ones this pipeline currently writes. The
+    # repository is for the software; the photographs are local-only working
+    # material. A suffix missing from this list is a hole in the rule, so it
+    # errs long rather than tight.
     personal_suffixes = (
-        ".fpx",
-        ".tif",
-        ".tiff",
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".wav",
-        ".fpx.json",
+        ".fpx", ".fpx.json",
+        ".tif", ".tiff", ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".gif",
+        ".bmp", ".dib", ".webp", ".heic", ".heif", ".avif", ".raw", ".dng",
+        ".cr2", ".nef", ".arw", ".orf", ".pcd", ".thm", ".psd", ".ico",
+        ".avi", ".mov", ".mp4", ".mpg", ".mpeg", ".wmv", ".3gp",
+        ".wav", ".mp3", ".aif", ".aiff",
     )
+    # The trees that hold the archive and everything derived from it. Nothing
+    # under them belongs in git whatever its extension -- a manifest, a log or
+    # an audit report names albums and filenames, which are personal too.
+    personal_trees = ("source-files/", "output/", "report/")
+
     offenders = [
         path
         for path in tracked
-        if path.lower().endswith(personal_suffixes)
+        if (
+            path.lower().endswith(personal_suffixes)
+            or path.lower().startswith(personal_trees)
+        )
         and not path.startswith("tests/fixtures/")
+        # A placeholder that keeps an empty local-only tree in the checkout
+        # holds no content at all.
+        and not path.endswith("/.gitkeep")
     ]
     assert not offenders, f"personal media is tracked in git: {offenders}"
 
@@ -230,8 +244,11 @@ def test_no_personal_name_from_the_archive_is_tracked_in_git() -> None:
 
     # splitlines, not split: a tracked path containing a space would
     # otherwise be torn into fragments and never opened.
+    # Same widened listing as `test_no_personal_data_is_tracked`, and for the
+    # same reason: this guard read layout.py as clean until the moment it was
+    # committed, because until then it was not in the index.
     tracked = subprocess.run(
-        ["git", "ls-files"],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

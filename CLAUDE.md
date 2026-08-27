@@ -139,9 +139,18 @@ archive, so they are rules, not preferences.
 
 - **The source tree is read-only.** Never write, move, rename, or delete
   under it. Ingestion verifies the tree is byte-identical afterwards.
-- **Never commit personal media.** `tests/fixtures/` is the only sanctioned
-  exception, and only for non-personal stock images. A tier-1 test enforces
-  this against `git ls-files`.
+- **The repository is for the software; the photographs are not.** The
+  archive and everything derived from it — images, sidecars, manifests,
+  logs, audit reports — is local-only working material for building and
+  testing the tool. Nothing personal goes to GitHub: no photograph, no album
+  name, no human-authored filename, no caption. `tests/fixtures/` is the
+  only sanctioned exception, and only for images that contain **no people**
+  — the Kodak stock samples, plus any archive photo confirmed person-free by
+  eye and renamed to a neutral stem. Two tier-1 tests enforce this, and they
+  list `--cached --others --exclude-standard`, not plain `git ls-files`: a
+  brand-new file is not in the index, so the narrower listing read a leak as
+  clean right up until the commit that added it — which is how one got
+  pushed.
 - **There is no capture date in this corpus.** The FlashPix capture-date
   property is absent from every file. The only timestamp is an import-batch
   stamp. Never write it to `DateTimeOriginal` — it goes to
