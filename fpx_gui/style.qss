@@ -1,0 +1,248 @@
+/* The whole look of the application, in one file.
+ *
+ * `@name` placeholders are substituted by `style.build_stylesheet` from one
+ * of two palettes, chosen to follow the system light/dark setting. Qt
+ * stylesheets have no variables and no media queries, so this is how a single
+ * sheet serves both themes without two copies of every rule drifting apart.
+ *
+ * No external asset and no downloaded font: the packaged exe has to look like
+ * this on a machine with nothing installed. Font families are named in a
+ * fallback chain of faces Windows already ships.
+ */
+
+QWidget {
+    background: @bg;
+    color: @text;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Inter", sans-serif;
+    font-size: 14px;
+}
+
+QWidget#Root {
+    background: @bg;
+}
+
+/* ---- Type scale -------------------------------------------------------- */
+
+QLabel#Title {
+    font-size: 26px;
+    font-weight: 600;
+    color: @text;
+}
+
+QLabel#Subtitle {
+    font-size: 14px;
+    color: @muted;
+}
+
+QLabel#CardTitle {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: @muted;
+}
+
+QLabel#FieldLabel {
+    font-size: 13px;
+    color: @muted;
+}
+
+QLabel#Headline {
+    font-size: 17px;
+    font-weight: 600;
+    color: @text;
+}
+
+QLabel#Headline[severity="ok"] { color: @ok; }
+QLabel#Headline[severity="warn"] { color: @warn; }
+QLabel#Headline[severity="error"] { color: @error; }
+
+QLabel#Detail {
+    font-size: 13px;
+    color: @muted;
+}
+
+/* ---- Cards ------------------------------------------------------------- */
+
+QFrame#Card {
+    background: @surface;
+    border: 1px solid @border;
+    border-radius: 12px;
+}
+
+QFrame#Card QWidget {
+    background: transparent;
+}
+
+/* ---- Inputs ------------------------------------------------------------ */
+
+QLineEdit {
+    background: @field;
+    border: 1px solid @border;
+    border-radius: 8px;
+    padding: 9px 11px;
+    selection-background-color: @accent;
+    selection-color: @accentText;
+}
+
+QLineEdit:focus {
+    border: 1px solid @accent;
+}
+
+QLineEdit:disabled {
+    color: @muted;
+}
+
+QComboBox {
+    background: @field;
+    border: 1px solid @border;
+    border-radius: 8px;
+    padding: 7px 11px;
+    min-width: 108px;
+}
+
+QComboBox:focus {
+    border: 1px solid @accent;
+}
+
+QComboBox:disabled {
+    color: @muted;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+}
+
+QComboBox QAbstractItemView {
+    background: @surface;
+    border: 1px solid @border;
+    border-radius: 8px;
+    padding: 4px;
+    selection-background-color: @accent;
+    selection-color: @accentText;
+    outline: none;
+}
+
+QCheckBox {
+    spacing: 9px;
+    padding: 3px 0;
+}
+
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid @border;
+    border-radius: 5px;
+    background: @field;
+}
+
+QCheckBox::indicator:checked {
+    background: @accent;
+    border: 1px solid @accent;
+    image: none;
+}
+
+QCheckBox::indicator:hover {
+    border: 1px solid @accent;
+}
+
+/* ---- Buttons ----------------------------------------------------------- */
+
+QPushButton {
+    background: @field;
+    color: @text;
+    border: 1px solid @border;
+    border-radius: 8px;
+    padding: 9px 18px;
+    font-size: 14px;
+}
+
+QPushButton:hover {
+    border: 1px solid @accent;
+}
+
+QPushButton:disabled {
+    color: @muted;
+    border: 1px solid @border;
+}
+
+QPushButton#Primary {
+    background: @accent;
+    color: @accentText;
+    border: 1px solid @accent;
+    font-weight: 600;
+    padding: 11px 26px;
+}
+
+QPushButton#Primary:hover {
+    background: @accentHover;
+    border: 1px solid @accentHover;
+}
+
+QPushButton#Primary:disabled {
+    background: @field;
+    color: @muted;
+    border: 1px solid @border;
+}
+
+/* ---- Progress ---------------------------------------------------------- */
+
+QProgressBar {
+    background: @field;
+    border: 1px solid @border;
+    border-radius: 7px;
+    height: 12px;
+    text-align: center;
+    color: transparent;
+}
+
+QProgressBar::chunk {
+    background: @accent;
+    border-radius: 6px;
+}
+
+/* ---- Log pane ---------------------------------------------------------- */
+
+QPlainTextEdit#Log {
+    background: @logBg;
+    color: @logText;
+    border: 1px solid @border;
+    border-radius: 10px;
+    padding: 10px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 12px;
+    selection-background-color: @accent;
+    selection-color: @accentText;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 11px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+    background: @border;
+    border-radius: 4px;
+    min-height: 28px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: @muted;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+    height: 0;
+}
+
+QToolTip {
+    background: @surface;
+    color: @text;
+    border: 1px solid @border;
+    padding: 6px 8px;
+}
