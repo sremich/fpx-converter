@@ -281,8 +281,8 @@ chronological sorting without false precision.
 
 70 files carry a viewing transform that resolves to a crop — 56 axis-aligned
 crops and 14 files that combine a 90° rotation with a crop. The archival TIFF
-(`archive/<album>/<name>.tif`) preserves the full frame the camera captured.
-The shareable JPEG (`sharing/<album>/<name>.jpg`) applies the crop. Either way,
+(`archive/<folder>/<name>.tif`) preserves the full frame the camera captured.
+The shareable JPEG (`sharing/<folder>/<name>.jpg`) applies the crop. Either way,
 the original `.fpx` file and the `.fpx.json` sidecar are copied alongside the
 TIFF for reference.
 

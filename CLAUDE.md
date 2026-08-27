@@ -156,6 +156,19 @@ archive, so they are rules, not preferences.
   `sort_datetime`: they drive the mtime and the filename prefix, where
   unknown components are written as zeros (`2001-00-00_000000_`). A prefix
   is a browsing affordance; `DateTimeOriginal` is a claim.
+- **A folder name somebody typed outranks any date we can derive.** A
+  descriptive source folder keeps its name as the album whatever the photo's
+  date, nested under the year if the name gives one and sitting beside the
+  year folders if it does not. Only a folder whose name says nothing — the
+  tool-generated and placeholder names in `layout.NON_DESCRIPTIVE_ALBUMS`,
+  extensible per-archive through `FPX_NON_DESCRIPTIVE_ALBUMS` in `.env` — is
+  replaced by
+  `<year>/<year> <Month>`, and that year-month can only come from the import
+  stamp, so it is a browsing affordance exactly like the filename prefix and
+  never a claim. A file usually belongs to several albums; it is filed under
+  the most descriptive one, **not the first listed** — taking the first put 52
+  photos of one Christmas under a folder named after a zip file and cost them
+  the day-precise date their real album gave for free.
 - **`archive/` keeps the full frame; `sharing/` gets the crop.** 70 files
   carry a crop somebody framed in the Kodak software — 56 axis-aligned, and
   14 riding along with a 90° rotation. Both the captured frame and the

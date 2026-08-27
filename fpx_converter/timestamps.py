@@ -457,7 +457,13 @@ def parse_folder_date(folder_name: str) -> FolderDateResult:
         )
 
     # 7. Year range (e.g. "2001-02" or "2001-2002")
-    m_range = re.search(r"\b(19\d\d|20\d\d)-(?:(\d{2})|(19\d\d|20\d\d))\b", lower)
+    #
+    # `(?<!\d)` rather than `\b`: a year glued straight onto a word has no
+    # word boundary in front of it, so a folder named like `holidays2001-02`
+    # matched nothing and 24 photos in this corpus lost their year. A digit
+    # in front still blocks the match, which is what keeps a camera-generated
+    # name like `DCP01999` out.
+    m_range = re.search(r"(?<!\d)(19\d\d|20\d\d)-(?:(\d{2})|(19\d\d|20\d\d))(?!\d)", lower)
     y2: int | None = None
     if m_range:
         y1 = int(m_range.group(1))
@@ -484,8 +490,8 @@ def parse_folder_date(folder_name: str) -> FolderDateResult:
             description=f"{y1} to {y2}",
         )
 
-    # 8. Single standalone year (e.g. "2000", "2001", "2002")
-    m_yr = re.search(r"\b(19\d\d|20\d\d)\b", lower)
+    # 8. Single year (e.g. "2000", or glued on as in "summer2000")
+    m_yr = re.search(r"(?<!\d)(19\d\d|20\d\d)(?!\d)", lower)
     if m_yr:
         yr = int(m_yr.group(1))
         start_d = datetime.date(yr, 1, 1)

@@ -139,9 +139,15 @@ def assign_store_names(groups: list[tuple[str, str]]) -> dict[str, str]:
 
 
 def assign_output_stems(groups: list[tuple[str, str, str]]) -> dict[str, str]:
-    """Map sha256 -> unique output stem, scoped per album.
+    """Map sha256 -> unique output stem, scoped per destination folder.
 
-    `groups` is a list of `(sha256, album, preferred_name)` triples.
+    `groups` is a list of `(sha256, scope, preferred_name)` triples, where
+    `scope` comes from `layout.stem_scope` -- the album for a descriptive
+    folder, and one shared bucket for every file being filed by year and
+    month. The shared bucket is deliberately stricter than it needs to be:
+    two such files landing in different months cannot collide, but resolving
+    which month they land in needs the import stamp, and that would mean
+    reading every file before any name could be assigned.
 
     Two distinct hashes can land in the same album under the same preferred
     name — Kodak cameras reset their numbering, and this corpus already

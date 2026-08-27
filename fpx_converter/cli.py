@@ -17,7 +17,7 @@ import datetime
 import sys
 from pathlib import Path
 
-from . import __version__, config, naming, scan
+from . import __version__, config, layout, naming, scan
 from . import ingest as ingest_mod
 from . import manifest as manifest_mod
 from . import metadata as metadata_mod
@@ -334,7 +334,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     # at two paths. Assign over everything, then slice.
     stems = naming.assign_output_stems(
         [
-            (e["sha256"], writer_mod.primary_album(e), e.get("preferred_name", e["store_name"]))
+            (e["sha256"], layout.stem_scope(e), e.get("preferred_name", e["store_name"]))
             for e in all_entries
         ]
     )

@@ -121,6 +121,34 @@ def parse_album_tz_overrides(raw: str) -> dict[str, str]:
     return overrides
 
 
+def extra_non_descriptive_albums(env_path: Path | None = None) -> frozenset[str]:
+    """Archive-specific folder names to treat as saying nothing, from `.env`.
+
+    `layout.NON_DESCRIPTIVE_ALBUMS` carries only names that are generic in any
+    archive -- "untitled", "new folder", "misc". A particular archive may have
+    its own, and those are album names, which this repository does not carry.
+    They go in `.env`:
+
+        FPX_NON_DESCRIPTIVE_ALBUMS=["SomeDumpFolder", "scan batch 3"]
+
+    Refused loudly rather than ignored: a name that silently fails to register
+    files a pile of photos under a folder nobody meant to keep.
+    """
+    raw = load_env(env_path).get("FPX_NON_DESCRIPTIVE_ALBUMS", "").strip()
+    if not raw:
+        return frozenset()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"FPX_NON_DESCRIPTIVE_ALBUMS is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, list) or not all(isinstance(v, str) for v in parsed):
+        raise ConfigError(
+            "FPX_NON_DESCRIPTIVE_ALBUMS must be a JSON list of strings, "
+            f'e.g. ["Untitled Folder"] -- got {parsed!r}'
+        )
+    return frozenset(v.strip().lower() for v in parsed if v.strip())
+
+
 def timezone_settings(env_path: Path | None = None) -> tuple[str, dict[str, str]]:
     """`(default_tz, album_overrides)` from `.env` and the environment.
 

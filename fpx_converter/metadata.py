@@ -19,7 +19,7 @@ from typing import Any
 
 import olefile
 
-from . import config, decoder, naming, propset, timestamps
+from . import config, decoder, layout, naming, propset, timestamps
 
 # Standard property set streams present in FlashPix files
 STANDARD_PROPERTY_SETS = [
@@ -457,13 +457,13 @@ def _derive_metadata(
                 f"embedded scan date {scan_time_iso!r} is not a parseable timestamp"
             )
 
-    primary_album = ""
-    if entry and entry.get("albums"):
-        # Select first non-empty album from album list
-        for a in entry["albums"]:
-            if a:
-                primary_album = a
-                break
+    # The album the file is *filed under*, which is the most descriptive one
+    # it belongs to -- not the first listed. Taking the first put 52 photos of
+    # one Christmas under a folder named after a zip file, and cost them the
+    # day-precise date their real album gave for free.
+    primary_album = layout.choose_album(entry) if entry else ""
+    if primary_album == "Root":
+        primary_album = ""
 
     resolved_ts = timestamps.resolve_file_timestamps(
         import_ft=import_ft,

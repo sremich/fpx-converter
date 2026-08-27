@@ -44,6 +44,7 @@ import numpy as np  # noqa: E402
 from fpx_converter import (  # noqa: E402
     config,
     decoder,
+    layout,
     metadata,
     naming,
     thumbnail,
@@ -213,7 +214,7 @@ def main() -> int:
         prof = profile(path)
         if prof is not None:
             profiles[entry["sha256"]] = prof
-            album_of[entry["sha256"]] = writer.primary_album(entry)
+            album_of[entry["sha256"]] = layout.choose_album(entry)
 
     albums = set(album_of.values())
     print(f"  {len(profiles)} files, {len(albums)} albums, {time.time() - t0:.0f}s")
@@ -251,7 +252,7 @@ def main() -> int:
     # sample run produces are the names the full run would.
     stems = naming.assign_output_stems(
         [
-            (e["sha256"], writer.primary_album(e), e.get("preferred_name", e["store_name"]))
+            (e["sha256"], layout.stem_scope(e), e.get("preferred_name", e["store_name"]))
             for e in entries
         ]
     )

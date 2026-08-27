@@ -20,7 +20,7 @@ from typing import Any
 
 from PIL import ImageCms
 
-from . import config, decoder, metadata, naming, validator
+from . import config, decoder, layout, metadata, naming, validator
 
 #: ExifTool is located from `FPX_EXIFTOOL` or from PATH -- never from a
 #: hardcoded absolute path. The previous fallback pointed at one developer's
@@ -139,21 +139,25 @@ def build_output_relpath(
     ext: str,
     stem: str | None = None,
 ) -> Path:
-    """Construct the `<album>/<YYYY-MM-DD_HHMMSS>_<originalname>.<ext>` relative path.
+    """Construct the `<folder>/<YYYY-MM-DD_HHMMSS>_<originalname>.<ext>` relative path.
+
+    `<folder>` comes from `layout.output_folder`: a descriptive source folder
+    keeps its name, nested under the year if the name gives one, and a folder
+    whose name says nothing is replaced by year-and-month.
 
     `stem` overrides the name taken from the manifest entry, and is how
     `naming.assign_output_stems` keeps two same-named photos in one album
     from resolving to the same file. Callers converting more than one entry
     should always pass it.
     """
-    album_name = primary_album(entry)
+    folder = layout.output_folder(entry, derived)
     date_prefix, _is_undated = format_date_prefix(derived.get("timestamps", {}))
     base_stem = (
         stem
         if stem is not None
         else naming.strip_fpx_suffix(entry.get("preferred_name", "image.fpx"))
     )
-    return Path(album_name) / f"{date_prefix}_{base_stem}.{ext}"
+    return folder / f"{date_prefix}_{base_stem}.{ext}"
 
 
 def build_exiftool_args(

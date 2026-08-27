@@ -64,8 +64,9 @@ class TestNamingAndPrefixes:
         rel_tif = writer.build_output_relpath(entry, derived, "tif")
         rel_jpg = writer.build_output_relpath(entry, derived, "jpg")
 
-        assert rel_tif == Path("Holiday Trip 2001") / "2001-07-04_120000_Baby on Beach.tif"
-        assert rel_jpg == Path("Holiday Trip 2001") / "2001-07-04_120000_Baby on Beach.jpg"
+        # The album name is kept whole and nested under the year it names.
+        assert rel_tif == Path("2001/Holiday Trip 2001") / "2001-07-04_120000_Baby on Beach.tif"
+        assert rel_jpg == Path("2001/Holiday Trip 2001") / "2001-07-04_120000_Baby on Beach.jpg"
 
     def test_preserves_single_fpx_in_doubled_extension_preferred_name(self) -> None:
         entry = {

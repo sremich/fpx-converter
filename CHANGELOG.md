@@ -8,6 +8,32 @@ commit, then tag.
 
 ## [Unreleased]
 
+### Changed
+- **The output tree follows the source folder names, not the dates.** A
+  descriptive source folder keeps its name as the album whatever date the
+  photo carries, nested under the year when the name gives one
+  (`2001/<that folder's name>/`) and sitting beside the year folders when it
+  does not. Only a folder whose name says nothing — the tool-generated and
+  placeholder names in `layout.NON_DESCRIPTIVE_ALBUMS` — is replaced by
+  `<year>/<year> <Month>`, and on this corpus
+  that is 42 of 687 files. That year-month can only come from the import
+  stamp, which is not trusted as a capture date, so it is a browsing
+  affordance like the filename prefix and never reaches EXIF.
+
+### Fixed
+- **A file is filed under the most descriptive album it belongs to, not the
+  first one listed.** Most files belong to both an event folder and the flat
+  dump they were also copied into, and the first-listed rule picked the dump.
+  **52 photos of one Christmas** were filed under a folder named after a zip
+  file — and because the album is also what resolves the date, they lost the
+  day-precise capture date their real album gave for free. Files carrying
+  `DateTimeOriginal` go from 70 to 122.
+- **A year glued onto a word is now parsed.** The folder-date patterns
+  required a word boundary before the year, which a name like
+  `holidays2001-02` does not have, so 72 files lost the year their folder
+  named. A digit in front still blocks the match, keeping camera-generated
+  names like `DCP01999` out.
+
 ## [0.4.0] — 2026-08-27
 
 ### Fixed
