@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QRect, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -68,8 +69,8 @@ def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
     frame.setObjectName("Card")
     layout = QVBoxLayout(frame)
-    layout.setContentsMargins(20, 16, 20, 18)
-    layout.setSpacing(12)
+    layout.setContentsMargins(20, 14, 20, 16)
+    layout.setSpacing(10)
     label = QLabel(title)
     label.setObjectName("CardTitle")
     layout.addWidget(label)
@@ -98,7 +99,6 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("FlashPix Converter")
-        self.setMinimumSize(920, 760)
 
         self._worker: PipelineWorker | None = None
         self._tracker = progress.ProgressTracker()
@@ -110,8 +110,8 @@ class MainWindow(QMainWindow):
         root = QWidget()
         root.setObjectName("Root")
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(28, 24, 28, 24)
-        outer.setSpacing(18)
+        outer.setContentsMargins(28, 22, 28, 22)
+        outer.setSpacing(14)
 
         outer.addLayout(self._build_header())
         outer.addWidget(self._build_folders_card())
@@ -122,8 +122,101 @@ class MainWindow(QMainWindow):
         outer.addLayout(self._build_status())
         outer.addWidget(self._build_log(), stretch=1)
 
-        self.setCentralWidget(root)
+        # In a scroll area, so a window shorter than its contents scrolls
+        # rather than squeezing them. The natural height is over a thousand
+        # pixels, which does not fit a 1366x768 laptop with a taskbar, and the
+        # failure mode without this is silent: every card is still there,
+        # every one of them unreadable.
+        scroller = QScrollArea()
+        scroller.setObjectName("Scroller")
+        scroller.setWidget(root)
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setCentralWidget(scroller)
+
+        self._size_to_contents()
         self._sync_enabled()
+
+    #: What the window opens at, before the screen gets a say. Wide enough
+    #: that the explanatory lines under each control wrap once rather than
+    #: three times, which is most of what decides the height.
+    PREFERRED_WIDTH = 980
+
+    #: Room for a few lines of log beyond the layout's own minimum, so a run
+    #: can be watched without resizing first.
+    LOG_ROOM = 90
+
+    def content_height_at(self, width: int) -> int:
+        """How tall the contents actually are, given this window width.
+
+        `sizeHint` is the wrong question: half of this window is wrapped text,
+        and a wrapped label's hint is measured at the layout's own preferred
+        width -- far narrower than the window ever is -- so it reports a third
+        more height than the content occupies.
+        """
+        root = self.centralWidget().widget()
+        layout = root.layout()
+        # Invalidate first. `activate()` recomputes only what is already
+        # marked dirty, and showing or hiding a child does not mark it -- so
+        # measuring twice around a visibility change returned the first
+        # answer both times, and the window sized itself for a panel it had
+        # just been told about.
+        layout.invalidate()
+        layout.activate()
+        margins = root.contentsMargins()
+        return layout.minimumHeightForWidth(width - margins.left() - margins.right())
+
+    def tallest_content_height(self, width: int) -> int:
+        """The same, for whichever mode needs the most room.
+
+        Custom shows a panel the two named modes do not, and a hidden widget
+        counts as nothing to a layout. Measuring the mode that happens to be
+        selected therefore sizes the window for the smallest of the three, and
+        picking Custom afterwards puts a scrollbar on a window with a screen's
+        worth of room around it -- a smaller version of exactly the complaint
+        this sizing work exists to answer.
+        """
+        was_visible = self.custom_box.isVisible()
+        self.custom_box.setVisible(True)
+        try:
+            return self.content_height_at(width)
+        finally:
+            self.custom_box.setVisible(was_visible)
+
+    def _size_to_contents(self, available: QRect | None = None) -> None:
+        """Open at the size the layout says it needs, within the screen there is.
+
+        Asked of the layout rather than typed. The previous `(920, 760)` was
+        right for the window as it stood and silently wrong the moment a card
+        was added: it let Qt open the window nearly 300 pixels shorter than its
+        own content needed and squeeze every widget to fit, which is what
+        Stevie saw -- three radio buttons collapsed to underscores and an
+        empty card.
+
+        `available` defaults to the screen's usable area and is passed by the
+        tests, which would otherwise inherit the offscreen platform's 800x800
+        display and could not tell a window that fits from one that does not.
+        """
+        if available is None:
+            screen = self.screen()
+            available = screen.availableGeometry() if screen is not None else None
+
+        # Leaving room for the title bar and border, which `availableGeometry`
+        # does not account for.
+        max_w = available.width() - 40 if available is not None else self.PREFERRED_WIDTH
+        max_h = available.height() - 60 if available is not None else 1000
+
+        width = min(self.PREFERRED_WIDTH, max_w)
+
+        # The width has to stay honest -- squeeze it and the explanatory lines
+        # wrap away into nothing, and they are the point of them. The height
+        # does not, because the scroll area handles a window shorter than its
+        # contents, and on an ordinary 1080p display this content is taller
+        # than the screen whatever is done to it.
+        self.setMinimumWidth(min(760, max_w))
+        self.setMinimumHeight(min(520, max_h))
+        self.resize(width, min(self.tallest_content_height(width) + self.LOG_ROOM, max_h))
 
     # -- construction ----------------------------------------------------
 
@@ -172,47 +265,18 @@ class MainWindow(QMainWindow):
         layout.addLayout(grid)
         return frame
 
-    def _tree_row(
-        self, label: str, note: str, default_format: str, default_framing: str
-    ) -> tuple[QCheckBox, QComboBox, QComboBox, QGridLayout]:
-        check = QCheckBox(label)
-        check.setChecked(True)
-        hint = QLabel(note)
-        hint.setObjectName("FieldLabel")
-
-        fmt = QComboBox()
-        for name in outputs.FORMATS:
-            fmt.addItem(name.upper(), name)
-        fmt.setCurrentIndex(list(outputs.FORMATS).index(default_format))
-
-        framing = QComboBox()
-        for name in outputs.FRAMINGS:
-            framing.addItem(
-                "Whole photo" if name == "full" else "Cropped as framed", name
-            )
-        framing.setCurrentIndex(list(outputs.FRAMINGS).index(default_framing))
-
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(4)
-        grid.addWidget(check, 0, 0)
-        grid.addWidget(fmt, 0, 1)
-        grid.addWidget(framing, 0, 2)
-        grid.addWidget(hint, 1, 0, 1, 3)
-        grid.setColumnStretch(0, 1)
-
-        check.toggled.connect(fmt.setEnabled)
-        check.toggled.connect(framing.setEnabled)
-        check.toggled.connect(self._sync_enabled)
-        return check, fmt, framing, grid
-
     def _build_outputs_card(self) -> QFrame:
-        """Three choices, one at a time, and the detail only where it is wanted.
+        """Three choices, one at a time, each writing one image per photograph.
 
         This began as two checkboxes and four menus, which is the shape of the
         CLI's flags rather than of anybody's intention. Somebody converting a
         shoebox of photographs wants one of three things, and the two common
         ones want no further questions at all.
+
+        Custom asks two, and deliberately not a third: choosing between an
+        archive copy and a shareable one *is* the choice above it, and offering
+        it again in here would let somebody tick neither and then wonder why
+        Convert had greyed itself out.
         """
         frame, layout = _card("What to write")
 
@@ -238,27 +302,61 @@ class MainWindow(QMainWindow):
         self.custom_box = QFrame()
         self.custom_box.setObjectName("CustomBox")
         custom = QVBoxLayout(self.custom_box)
-        custom.setContentsMargins(26, 4, 0, 0)
-        custom.setSpacing(6)
+        custom.setContentsMargins(26, 2, 0, 0)
+        custom.setSpacing(8)
 
-        self.archive_check, self.archive_format, self.archive_framing, archive_row = (
-            self._tree_row(
-                "Archive copy",
-                "Lossless, every pixel the camera captured.",
-                "tiff",
-                "full",
-            )
+        # Both menus are captioned. They used to sit under a checkbox naming
+        # the tree, which said what they were for; without it two bare boxes
+        # reading "TIFF" and "Whole photo" control nothing a reader can name --
+        # in the release whose premise is that this window was unreadable.
+        self.custom_format = QComboBox()
+        for name in outputs.FORMATS:
+            self.custom_format.addItem(name.upper(), name)
+        self.custom_format.setCurrentIndex(list(outputs.FORMATS).index("tiff"))
+        self.custom_format.setToolTip(
+            "TIFF keeps every pixel and is the archival choice. JPEG is "
+            "smaller and opens anywhere."
         )
-        self.sharing_check, self.sharing_format, self.sharing_framing, sharing_row = (
-            self._tree_row(
-                "Shareable copy",
-                "Opens anywhere, cropped as it was framed.",
-                "jpeg",
-                "cropped",
+
+        self.custom_framing = QComboBox()
+        for name in outputs.FRAMINGS:
+            self.custom_framing.addItem(
+                "Whole photo" if name == "full" else "Cropped as framed", name
             )
+        self.custom_framing.setCurrentIndex(list(outputs.FRAMINGS).index("full"))
+        self.custom_framing.setToolTip(
+            "70 photographs were cropped in the Kodak software. Whole photo "
+            "ignores that and keeps everything the camera captured; cropped "
+            "gives you the picture as it was framed."
         )
-        custom.addLayout(archive_row)
-        custom.addLayout(sharing_row)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        for caption, combo in (
+            ("File type", self.custom_format),
+            ("Framing", self.custom_framing),
+        ):
+            column = QVBoxLayout()
+            column.setSpacing(2)
+            label = QLabel(caption)
+            label.setObjectName("Hint")
+            column.addWidget(label)
+            column.addWidget(combo)
+            row.addLayout(column)
+        row.addStretch(1)
+        custom.addLayout(row)
+
+        # And where it lands, because Custom no longer has a control that says
+        # so. The tree follows the framing, which is this project's rule rather
+        # than a preference: archive/ keeps the full frame, sharing/ gets the
+        # crop. Written by asking `ConvertOptions`, not by a second copy of
+        # that rule living here.
+        self.custom_destination = QLabel()
+        self.custom_destination.setObjectName("Hint")
+        self.custom_destination.setWordWrap(True)
+        custom.addWidget(self.custom_destination)
+        self.custom_format.currentIndexChanged.connect(self._sync_custom_destination)
+        self.custom_framing.currentIndexChanged.connect(self._sync_custom_destination)
 
         # The extra files, each its own option. They used to be written on
         # every conversion, so asking for one photograph produced four files.
@@ -276,6 +374,7 @@ class MainWindow(QMainWindow):
         custom.addWidget(self.source_copy_check)
         custom.addWidget(self.sidecar_check)
 
+        self._sync_custom_destination()
         layout.addWidget(self.custom_box)
         self.custom_box.setVisible(False)
         return frame
@@ -340,10 +439,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
 
         fields = QLabel(
-            "Fields: "
-            + "  ".join("{" + n + "}" for n, _ in name_template.FIELDS)
-            + " — {name} is the filename from your archive, and it has to stay: "
-            "those names are the only thing here a person wrote."
+            "  ".join("{" + n + "}" for n, _ in name_template.FIELDS)
+            + " — {name} has to stay. Those names are the only thing in your "
+            "archive that a person wrote."
         )
         fields.setObjectName("Hint")
         fields.setWordWrap(True)
@@ -419,8 +517,8 @@ class MainWindow(QMainWindow):
         self.name_preview.setText(
             "\n".join(
                 [
-                    f"A photo whose album named the day:  {dated}",
-                    f"One with nothing to date it — most of them:  {undated}",
+                    f"Dated by its album:  {dated}",
+                    f"Nothing to date it (most of them):  {undated}",
                 ]
             )
         )
@@ -500,30 +598,36 @@ class MainWindow(QMainWindow):
             source=Path(self.source_edit.text().strip()),
             dest=Path(self.dest_edit.text().strip()),
             mode=self._mode(),
-            archive=self.archive_check.isChecked(),
-            sharing=self.sharing_check.isChecked(),
             source_copy=self.source_copy_check.isChecked(),
             sidecar=self.sidecar_check.isChecked(),
             name_template=self.name_template_edit.text(),
             folder_scheme=self._folder_scheme(),
             folder_template=self.folder_template_edit.text(),
-            archive_format=self.archive_format.currentData(),
-            archive_framing=self.archive_framing.currentData(),
-            sharing_format=self.sharing_format.currentData(),
-            sharing_framing=self.sharing_framing.currentData(),
+            custom_format=self.custom_format.currentData(),
+            custom_framing=self.custom_framing.currentData(),
         )
 
     def _running(self) -> bool:
         return self._worker is not None
 
+    def _sync_custom_destination(self) -> None:
+        """Say which folder Custom writes into, in the window rather than in
+        the docs. `tree_format_framing` is the authority; this reads it."""
+        tree, fmt, _ = options_mod.ConvertOptions(
+            source=Path(), dest=Path(),
+            mode=options_mod.CUSTOM,
+            custom_format=self.custom_format.currentData(),
+            custom_framing=self.custom_framing.currentData(),
+        ).tree_format_framing()
+        suffix = "tif" if fmt == "tiff" else "jpg"
+        self.custom_destination.setText(f"Writes one .{suffix} per photo into {tree}/")
+
     def _sync_enabled(self) -> None:
         idle = not self._running()
         has_folders = bool(self.source_edit.text().strip() and self.dest_edit.text().strip())
-        custom = self._mode() == options_mod.CUSTOM
-        self.custom_box.setVisible(custom)
-        wants_output = (not custom) or (
-            self.archive_check.isChecked() or self.sharing_check.isChecked()
-        )
+        # Every mode writes one image, so there is no longer a combination of
+        # controls that would produce nothing and have to be refused.
+        self.custom_box.setVisible(self._mode() == options_mod.CUSTOM)
         # A pattern that would lose the archive's filenames, or produce one no
         # filesystem will take, stops the run here rather than after it has
         # renamed half a tree.
@@ -533,22 +637,18 @@ class MainWindow(QMainWindow):
         )
         self.folder_template_edit.setEnabled(idle)
         name_ok = not self._sync_preview()
-        self.convert_button.setEnabled(idle and has_folders and wants_output and name_ok)
+        self.convert_button.setEnabled(idle and has_folders and name_ok)
         self.cancel_button.setEnabled(not idle)
         self.review_button.setEnabled(idle and has_folders)
         for widget in (
             self.source_edit, self.dest_edit,
-            self.archive_check, self.sharing_check,
             self.source_copy_check, self.sidecar_check,
+            self.custom_format, self.custom_framing,
             self.name_template_edit,
             self.folder_scheme,
             *self.mode_buttons.values(),
         ):
             widget.setEnabled(idle)
-        self.archive_format.setEnabled(idle and self.archive_check.isChecked())
-        self.archive_framing.setEnabled(idle and self.archive_check.isChecked())
-        self.sharing_format.setEnabled(idle and self.sharing_check.isChecked())
-        self.sharing_framing.setEnabled(idle and self.sharing_check.isChecked())
 
     def _say(self, headline: str, severity: str = "", detail: str = "") -> None:
         self._headline.setText(headline)

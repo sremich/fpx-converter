@@ -6,6 +6,70 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [1.2.1] — 2026-08-27
+
+### Fixed
+- **The desktop window opened too small to read.** Reported with a screenshot:
+  the cards were squashed into slivers — three radio buttons collapsed to
+  underscores, the naming card empty, the placeholder text in the folder fields
+  sliced in half. `setMinimumSize(920, 760)` was the cause. It was comfortable
+  for the four sections 1.1.0 had, and by 1.2.0 the content's own minimum was
+  past a thousand pixels, so Qt was allowed to open the window nearly 300
+  pixels shorter than its contents needed and compress everything to fit.
+
+  The size now comes from the layout — `minimumHeightForWidth` at the width the
+  window will actually have, because half of it is wrapped text and a wrapped
+  label's hint is measured at a width the window never has. The contents also
+  sit in a scroll area, so a display too short for them scrolls instead of
+  squeezing them: a floor tall enough for this content does not fit a 1366×768
+  laptop, and demanding one would trade an unreadable window for an unusable
+  one. A hardcoded number was wrong the moment a card was added; nothing here
+  needs revisiting when the next one is.
+  Two smaller things fell out of measuring it properly. The window is sized
+  for the *tallest* mode rather than whichever one is selected — a hidden
+  widget counts as nothing to a layout, so measuring the default sized the
+  window for the smallest of the three and picking Custom then put a scrollbar
+  on a window with a screen's worth of room around it. And the measurement now
+  invalidates the layout before asking: `activate()` recomputes only what is
+  already marked dirty, and showing a child does not mark it, so measuring
+  twice around a visibility change returned the first answer both times.
+- **The explanatory lines under each control are shorter.** Every one of them
+  said something true at more length than it was worth, and the height they
+  cost was the difference between a window that fits an ordinary screen and one
+  that does not. The detail is still in the tooltips and the wiki.
+
+### Changed
+- **Custom writes one image too.** It offered a further choice between an
+  archive copy and a shareable one — which is the choice directly above it,
+  asked twice — and let somebody tick neither and then meet a Convert button
+  that had greyed itself out with no explanation. Custom is now a format and a
+  framing, plus the two extra-file tickboxes, and every one of the three modes
+  writes exactly one image per photograph. Nothing left the CLI:
+  `--no-archive`, `--no-sharing` and the two independent format/framing pairs
+  are all still there for a run that wants both trees.
+
+  With that control gone, something has to decide which folder Custom writes
+  into, and it is the framing rather than the mode: `archive/` keeps the full
+  frame, `sharing/` gets the crop, which is the rule the two named modes have
+  always followed. So Custom set to JPEG and cropped writes exactly what the
+  Shareable copy button writes, in the same place — the same two answers land
+  in the same folder however they were reached. The window says which folder,
+  under the menus, and both menus are now captioned; two bare boxes reading
+  "TIFF" and "Whole photo" named nothing once the tickbox above them was
+  removed.
+- **`scripts/mutation_check.py` takes a lock, and covers a 17th rule.** Two
+  copies running at once read each other's mutations: one reports a rule it
+  could not apply, and — the direction that matters — the other can score a red
+  caused by somebody else's mutation as a catch. Both happened while this
+  release was being verified. The 17th rule is the new one below: a cropped
+  image must not be filed in the tree that keeps the full frame.
+- **The executable carries its version: `fpx-converter-1.2.1.exe`.** Two
+  downloads a year apart are no longer two files with the same name, and the
+  only way to tell them apart was to run one. The spec reads `VERSION` rather
+  than carrying a copy, and the release workflow derives the filename from the
+  same file — a tier-1 test fails if either grows a literal, and another fails
+  if the workflow looks for a name the spec no longer builds.
+
 ## [1.2.0] — 2026-08-27
 
 ### Changed

@@ -149,9 +149,7 @@ FOLDER_SCHEMES: tuple[tuple[str, str, str], ...] = (
     (
         BY_ALBUM,
         "By album — your folder names, kept",
-        "2002/Summer 2002/ — a folder somebody named outranks any date "
-        "we can work out. Tool-made names, like a zip file's, are replaced by "
-        "the year and month.",
+        "2002/Summer 2002/ — your own folder names, kept.",
     ),
     (BY_YEAR, "By year", "2002/"),
     (BY_YEAR_MONTH, "By year, then month", "2002/2002 July/"),

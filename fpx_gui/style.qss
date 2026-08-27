@@ -21,6 +21,14 @@ QWidget#Root {
     background: @bg;
 }
 
+/* The window's contents scroll when the screen is shorter than they are. It
+   is a container and nothing else: no frame, no ground of its own. */
+QScrollArea#Scroller,
+QScrollArea#Scroller > QWidget > QWidget {
+    background: @bg;
+    border: none;
+}
+
 /* ---- Type scale -------------------------------------------------------- */
 
 QLabel#Title {

@@ -26,6 +26,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="the desktop front end needs requirements-gui.txt")
 pytest.importorskip("pytestqt", reason="the desktop front end needs requirements-gui.txt")
 
+from PySide6.QtWidgets import QLabel  # noqa: E402
+
 from fpx_converter import config, layout, name_template, outputs, writer  # noqa: E402
 from fpx_gui import options as options_mod  # noqa: E402
 from fpx_gui import summary  # noqa: E402
@@ -92,16 +94,19 @@ def _write_clean_report(dest: Path, *, converted: int) -> Path:
 
 
 class TestTheControlsComeFromTheCli:
-    def test_the_format_menus_are_built_from_outputs_formats(self, window) -> None:  # noqa: ANN001
+    def test_the_format_menu_is_built_from_outputs_formats(self, window) -> None:  # noqa: ANN001
         """Not from strings typed into the window."""
-        for combo in (window.archive_format, window.sharing_format):
-            values = [combo.itemData(i) for i in range(combo.count())]
-            assert values == list(outputs.FORMATS)
+        values = [
+            window.custom_format.itemData(i) for i in range(window.custom_format.count())
+        ]
+        assert values == list(outputs.FORMATS)
 
-    def test_the_framing_menus_are_built_from_outputs_framings(self, window) -> None:  # noqa: ANN001
-        for combo in (window.archive_framing, window.sharing_framing):
-            values = [combo.itemData(i) for i in range(combo.count())]
-            assert values == list(outputs.FRAMINGS)
+    def test_the_framing_menu_is_built_from_outputs_framings(self, window) -> None:  # noqa: ANN001
+        values = [
+            window.custom_framing.itemData(i)
+            for i in range(window.custom_framing.count())
+        ]
+        assert values == list(outputs.FRAMINGS)
 
     def test_the_window_opens_on_the_archive_copy_and_writes_one_image(
         self, window, folders
@@ -162,11 +167,13 @@ class TestTheControlsReachTheCommandLine:
         source, dest = folders
         _fill(window, source, dest)
         _custom(window)
-        window.sharing_framing.setCurrentIndex(list(outputs.FRAMINGS).index("full"))
-        window.sharing_format.setCurrentIndex(list(outputs.FORMATS).index("tiff"))
+        window.custom_framing.setCurrentIndex(list(outputs.FRAMINGS).index("cropped"))
+        window.custom_format.setCurrentIndex(list(outputs.FORMATS).index("jpeg"))
         chosen = window.current_options()
-        assert chosen.sharing_framing == "full"
-        assert chosen.sharing_format == "tiff"
+        assert chosen.custom_framing == "cropped"
+        assert chosen.custom_format == "jpeg"
+        # Cropped goes to `sharing/` whichever route asked for it.
+        assert [spec.label for spec in chosen.specs()] == ["sharing/jpeg/cropped"]
 
     def test_start_over_is_gone_and_every_run_resumes(self, window, folders) -> None:  # noqa: ANN001
         """The checkbox named a mechanism, not a job, so it is not offered.
@@ -180,26 +187,6 @@ class TestTheControlsReachTheCommandLine:
         assert window.current_options().resume is True
         assert "--no-resume" not in options_mod.convert_args(window.current_options())
 
-    def test_unticking_a_tree_drops_it_and_greys_its_menus(self, window, folders) -> None:  # noqa: ANN001
-        source, dest = folders
-        _fill(window, source, dest)
-        _custom(window)
-        window.archive_check.setChecked(False)
-        assert window.current_options().archive is False
-        assert not window.archive_format.isEnabled()
-        assert not window.archive_framing.isEnabled()
-
-    def test_unticking_both_disables_convert_rather_than_writing_nothing(
-        self, window, folders
-    ) -> None:  # noqa: ANN001
-        """`build_specs` would refuse it; the button refuses it first."""
-        source, dest = folders
-        _fill(window, source, dest)
-        _custom(window)
-        window.archive_check.setChecked(False)
-        window.sharing_check.setChecked(False)
-        assert not window.convert_button.isEnabled()
-
     def test_convert_needs_both_folders(self, window, folders) -> None:  # noqa: ANN001
         source, dest = folders
         assert not window.convert_button.isEnabled()
@@ -207,6 +194,66 @@ class TestTheControlsReachTheCommandLine:
         assert not window.convert_button.isEnabled()
         window.dest_edit.setText(str(dest))
         assert window.convert_button.isEnabled()
+
+
+class TestCustomAsksTwoQuestions:
+    """A format and a framing, and the two extra files. Not a third choice
+    between an archive copy and a shareable one -- that is the choice above it,
+    and asking again let somebody tick neither and meet a greyed-out button."""
+
+    def test_the_tree_tickboxes_are_gone(self, window) -> None:  # noqa: ANN001
+        assert not hasattr(window, "archive_check")
+        assert not hasattr(window, "sharing_check")
+        assert not hasattr(window, "sharing_format")
+        assert not hasattr(window, "sharing_framing")
+
+    def test_convert_stays_available_whatever_custom_is_set_to(
+        self, window, folders
+    ) -> None:  # noqa: ANN001
+        """There is no combination that writes nothing, so none to refuse."""
+        source, dest = folders
+        _fill(window, source, dest)
+        _custom(window)
+        for fmt in range(window.custom_format.count()):
+            for framing in range(window.custom_framing.count()):
+                window.custom_format.setCurrentIndex(fmt)
+                window.custom_framing.setCurrentIndex(framing)
+                assert window.convert_button.isEnabled()
+                assert len(window.current_options().specs()) == 1
+
+    def test_both_menus_are_captioned_and_say_where_the_file_goes(self, window) -> None:  # noqa: ANN001
+        """Two bare boxes reading "TIFF" and "Whole photo" name nothing.
+
+        They used to sit under a checkbox naming the tree, which is what said
+        what they were for. That checkbox is gone, and this is the release
+        whose premise is that the window was unreadable.
+        """
+        for combo in (window.custom_format, window.custom_framing):
+            assert combo.toolTip(), "a menu with no caption and no tooltip"
+
+        captions = {
+            label.text()
+            for label in window.custom_box.findChildren(QLabel)
+        }
+        assert {"File type", "Framing"} <= captions
+
+        # And the tree, which Custom no longer has a control for. Read from
+        # the options rather than restated here, so the window cannot drift
+        # from what the run will do.
+        window.custom_framing.setCurrentIndex(list(outputs.FRAMINGS).index("cropped"))
+        assert "sharing/" in window.custom_destination.text()
+        window.custom_framing.setCurrentIndex(list(outputs.FRAMINGS).index("full"))
+        assert "archive/" in window.custom_destination.text()
+
+    def test_the_extra_files_are_still_offered_here(self, window, folders) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        _custom(window)
+        window.source_copy_check.setChecked(True)
+        window.sidecar_check.setChecked(True)
+        args = options_mod.convert_args(window.current_options())
+        assert "--source-copy" in args
+        assert "--sidecar" in args
 
 
 class TestTheReadOnlySourceRuleAtTheWindow:
@@ -485,3 +532,106 @@ class TestTheNamingAndFolderControls:
         assert chosen.name_template == name_template.DEFAULT_TEMPLATE
         assert chosen.folder_scheme == layout.BY_ALBUM
         assert chosen.folder_template == layout.DEFAULT_FOLDER_TEMPLATE
+
+
+class TestTheWindowOpensReadable:
+    """Stevie opened 1.2.0 and found the cards squashed into slivers: three
+    radio buttons collapsed to underscores, the naming card empty, the
+    placeholder text in the folder fields sliced in half. Making the window
+    bigger fixed it, which is the tell.
+
+    `setMinimumSize(920, 760)` was the cause. It was comfortable for the four
+    sections 1.1.0 had, and by 1.2.0 the content's own minimum was past 1000 --
+    so Qt was allowed to open the window nearly 300 pixels shorter than its
+    contents needed and compress every widget to fit. A number that was right
+    when it was typed and silently wrong the moment a card was added.
+    """
+
+    def test_nothing_is_ever_compressed_below_what_it_needs(self, window, folders) -> None:  # noqa: ANN001
+        """However small the window gets. This is the property the old
+        hardcoded minimum did not have, and the reason the contents sit in a
+        scroll area rather than being given a taller floor: a floor tall
+        enough for this content does not fit a 1366x768 laptop."""
+        source, dest = folders
+        _fill(window, source, dest)
+        window.show()
+
+        inner = window.centralWidget().widget()
+        for height in (400, 600, 900):
+            window.resize(980, height)
+            inner.layout().activate()
+            needed = inner.layout().minimumHeightForWidth(inner.width())
+            assert inner.height() >= needed, (
+                f"at {height}px tall the contents were squeezed to {inner.height()} "
+                f"when they need {needed}"
+            )
+
+    def test_the_contents_scroll_rather_than_shrink(self, window) -> None:  # noqa: ANN001
+        from PySide6.QtWidgets import QScrollArea
+
+        scroller = window.centralWidget()
+        assert isinstance(scroller, QScrollArea)
+        assert scroller.widgetResizable(), (
+            "without this the contents keep their hint width and never fill the window"
+        )
+
+    def test_on_a_screen_with_room_it_opens_showing_everything(self, window) -> None:  # noqa: ANN001
+        """No scrolling required, because there is space not to.
+
+        The screen is stated rather than inherited: the offscreen platform
+        reports 800x800, which the old hardcoded 760 satisfied, so a test that
+        took the display as it found it could not fail here or in CI.
+        """
+        from PySide6.QtCore import QRect
+
+        window._size_to_contents(QRect(0, 0, 1920, 1200))
+        assert window.height() >= window.content_height_at(window.width()), (
+            "the window opened shorter than its own contents on a screen with room"
+        )
+
+    def test_it_opens_tall_enough_for_custom_not_just_for_the_default(self, window) -> None:  # noqa: ANN001
+        """A hidden widget counts as nothing to a layout.
+
+        Custom shows a panel the two named modes do not, so measuring whichever
+        mode happens to be selected sizes the window for the smallest of the
+        three -- and picking Custom then puts a scrollbar on a window with a
+        screen's worth of room around it. Measured, not assumed: the two
+        heights really do differ.
+        """
+        from PySide6.QtCore import QRect
+
+        default_only = window.content_height_at(window.PREFERRED_WIDTH)
+        tallest = window.tallest_content_height(window.PREFERRED_WIDTH)
+        assert tallest > default_only, (
+            "the Custom panel adds no height, so this test proves nothing"
+        )
+
+        window._size_to_contents(QRect(0, 0, 1920, 1200))
+        assert window.height() >= tallest, (
+            "the window opened too short for Custom on a screen with room"
+        )
+
+    def test_on_a_screen_without_room_it_takes_what_there_is(self, window) -> None:  # noqa: ANN001
+        """And the scroll area covers the rest. A floor tall enough for this
+        content does not fit a 1366x768 laptop, so demanding one would make the
+        window unusable there rather than merely scrollable."""
+        from PySide6.QtCore import QRect
+
+        window._size_to_contents(QRect(0, 0, 1366, 768))
+        assert window.height() <= 768
+        assert window.minimumHeight() <= 768
+        assert window.minimumWidth() <= 1366
+
+    def test_the_minimum_never_demands_more_width_than_the_screen(self, window) -> None:  # noqa: ANN001
+        """The floor is a typed literal and is meant to be: it is the width
+        below which the explanatory lines wrap away into nothing.
+
+        What must not be typed is the *height the window opens at*, and that
+        is `test_on_a_screen_with_room_it_opens_showing_everything` -- this one
+        would pass against any hardcoded floor between 520 and the screen
+        width, so it is named for the narrower thing it actually checks.
+        """
+        screen = window.screen()
+        if screen is not None:
+            assert window.minimumWidth() <= screen.availableGeometry().width()
+        assert window.minimumWidth() >= 520

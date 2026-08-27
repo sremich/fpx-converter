@@ -18,6 +18,12 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 REPO_ROOT = Path(SPECPATH).parent  # noqa: F821 -- PyInstaller injects SPECPATH
 
+# Read, never typed. `VERSION` is the only source of truth for it, and the
+# built file is named for it so two downloads a year apart are not two files
+# called the same thing. `fpx_gui.invoke` re-executes `sys.executable`, so
+# the name is free to change.
+VERSION = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
 # pyexiv2 is a compiled extension (exiv2api.pyd) beside a data directory of
 # its own. `collect_all` takes the binaries and the data with it; a
 # hiddenimport alone produces an exe that imports and then cannot read a tag.
@@ -121,7 +127,7 @@ exe = EXE(  # noqa: F821
     analysis.binaries,
     analysis.datas,
     [],
-    name="fpx-converter",
+    name=f"fpx-converter-{VERSION}",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

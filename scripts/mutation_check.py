@@ -20,13 +20,16 @@ failing test.
 Needs the GUI virtualenv, because some of these are caught by the window's
 tests. Exits non-zero if any mutation survives. Restores every file it touches,
 including on failure -- run it on a clean tree so a crash cannot be mistaken
-for an edit.
+for an edit. It also takes a lock: two runs at once read each other's
+mutations, and one of the ways that goes wrong is a false catch.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -141,6 +144,14 @@ MUTATIONS: list[tuple[str, str, str, str, list[str], int]] = [
         1,
     ),
     (
+        "a cropped image is filed in the tree that keeps the full frame",
+        "fpx_gui/options.py",
+        '        tree = "sharing" if self.custom_framing == "cropped" else "archive"',
+        '        tree = "archive"',
+        [GUI, WINDOW],
+        1,
+    ),
+    (
         "resume ignores a changed filename pattern",
         "fpx_converter/batch.py",
         '        if raw.get("name_template", name_template_mod.DEFAULT_TEMPLATE) '
@@ -184,7 +195,30 @@ def _apply(text: str, before: str, after: str, occurrence: int) -> str:
     return text[:index] + after + text[index + len(before) :]
 
 
+#: Two of these running at once corrupt each other's results. The second run
+#: sees the first one's live mutation instead of the line it expected and
+#: reports NOT APPLIED -- and the other direction, a red caused by somebody
+#: else's mutation being scored as a catch, is the one that would be believed.
+#: Both happened before this lock existed.
+LOCK = Path(tempfile.gettempdir()) / "fpx-mutation-check.lock"
+
+
 def main() -> int:
+    try:
+        handle = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        print(f"another mutation run holds {LOCK}.")
+        print("Wait for it, or delete the file if no run is alive.")
+        return 1
+    os.write(handle, str(os.getpid()).encode())
+    os.close(handle)
+    try:
+        return _run()
+    finally:
+        LOCK.unlink(missing_ok=True)
+
+
+def _run() -> int:
     survivors: list[str] = []
     width = max(len(label) for label, *_ in MUTATIONS) + 2
 

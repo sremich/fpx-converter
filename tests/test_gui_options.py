@@ -52,13 +52,41 @@ class TestTheFlagsAreRealFlags:
         known = {opt for action in parser._actions for opt in action.option_strings}
         assert known, "no options were found; this check would pass vacuously"
 
-        for archive, sharing in ((True, True), (True, False), (False, True)):
-            args = options_mod.convert_args(
-                ConvertOptions(source=source, dest=dest, archive=archive, sharing=sharing)
-            )
-            for token in args[1:]:
-                if token.startswith("--"):
-                    assert token in known, f"{token} is not a flag of `convert`"
+        # Every state the window can be in, since it is the flags those
+        # produce that have to exist. The tree checkboxes are gone, so the
+        # states are the three modes crossed with the custom menus and the
+        # extras rather than the old archive/sharing combinations.
+        seen = set()
+        for mode in (options_mod.ARCHIVE, options_mod.SHARING, options_mod.CUSTOM):
+            for fmt in outputs.FORMATS:
+                for framing in outputs.FRAMINGS:
+                    for extras in ((False, False), (True, True)):
+                        args = options_mod.convert_args(
+                            ConvertOptions(
+                                source=source,
+                                dest=dest,
+                                mode=mode,
+                                custom_format=fmt,
+                                custom_framing=framing,
+                                source_copy=extras[0],
+                                sidecar=extras[1],
+                                name_template="{name}",
+                                folder_scheme=layout.CUSTOM,
+                                folder_template="{year}",
+                            )
+                        )
+                        for token in args[1:]:
+                            if token.startswith("--"):
+                                seen.add(token)
+                                assert token in known, (
+                                    f"{token} is not a flag of `convert`"
+                                )
+        # Every flag the window can emit, actually emitted by this loop.
+        assert {
+            "--no-sharing", "--no-archive", "--archive-format", "--sharing-format",
+            "--source-copy", "--sidecar", "--name-template", "--folder-scheme",
+            "--folder-template", "--progress", "--stop-file",
+        } <= seen
 
     def test_the_generated_command_lines_parse(self, folders) -> None:
         source, dest = folders
@@ -75,83 +103,40 @@ class TestTheFlagsAreRealFlags:
 
 class TestOutputCombinations:
     @pytest.mark.parametrize(
-        ("archive_format", "archive_framing", "sharing_format", "sharing_framing"),
-        list(
-            itertools.product(
-                outputs.FORMATS, outputs.FRAMINGS, outputs.FORMATS, outputs.FRAMINGS
-            )
-        ),
+        ("fmt", "framing"), list(itertools.product(outputs.FORMATS, outputs.FRAMINGS))
     )
     def test_each_pairing_reaches_the_command_line_and_the_specs(
-        self, folders, archive_format, archive_framing, sharing_format, sharing_framing
+        self, folders, fmt, framing
     ) -> None:
+        """Custom is one image: a format and a framing, and no tree to pick.
+
+        It used to walk sixteen combinations of two independent trees. Choosing
+        between an archive copy and a shareable one *is* the choice above
+        Custom, and offering it again inside let somebody tick neither and then
+        meet a greyed-out Convert button with no explanation.
+        """
         source, dest = folders
         chosen = ConvertOptions(
             source=source,
             dest=dest,
-            # The four menus exist only under Custom. The two named modes are
-            # one tree each and ignore these fields entirely, which is the
-            # whole point of them.
+            # These two exist only under Custom. The named modes ignore them
+            # entirely, which is the whole point of them.
             mode=options_mod.CUSTOM,
-            archive_format=archive_format,
-            archive_framing=archive_framing,
-            sharing_format=sharing_format,
-            sharing_framing=sharing_framing,
+            custom_format=fmt,
+            custom_framing=framing,
         )
+        # The tree follows the framing: `archive/` keeps the full frame,
+        # `sharing/` gets the crop. Custom has no control for it since 1.2.1,
+        # so this is the rule that decides -- and it means the same two
+        # answers land in the same place however they were reached.
+        tree = "sharing" if framing == "cropped" else "archive"
         parsed = build_parser().parse_args(options_mod.convert_args(chosen))
-        assert parsed.archive_format == archive_format
-        assert parsed.archive_framing == archive_framing
-        assert parsed.sharing_format == sharing_format
-        assert parsed.sharing_framing == sharing_framing
-        assert parsed.no_archive is False
-        assert parsed.no_sharing is False
+        assert getattr(parsed, f"{tree}_format") == fmt
+        assert getattr(parsed, f"{tree}_framing") == framing
+        assert getattr(parsed, "no_sharing" if tree == "archive" else "no_archive")
+        assert not getattr(parsed, f"no_{tree}")
 
-        labels = {spec.label for spec in chosen.specs()}
-        assert labels == {
-            f"archive/{archive_format}/{archive_framing}",
-            f"sharing/{sharing_format}/{sharing_framing}",
-        }
-
-    def test_turning_off_the_archive_emits_no_archive_and_nothing_else(
-        self, folders
-    ) -> None:
-        source, dest = folders
-        args = options_mod.convert_args(
-            ConvertOptions(
-                source=source, dest=dest, mode=options_mod.CUSTOM, archive=False
-            )
-        )
-        assert "--no-archive" in args
-        assert "--archive-format" not in args
-        assert "--archive-framing" not in args
-        parsed = build_parser().parse_args(args)
-        assert parsed.no_archive is True
-        assert parsed.no_sharing is False
-
-    def test_turning_off_sharing_emits_no_sharing_and_nothing_else(self, folders) -> None:
-        source, dest = folders
-        args = options_mod.convert_args(
-            ConvertOptions(
-                source=source, dest=dest, mode=options_mod.CUSTOM, sharing=False
-            )
-        )
-        assert "--no-sharing" in args
-        assert "--sharing-format" not in args
-        parsed = build_parser().parse_args(args)
-        assert parsed.no_sharing is True
-
-    def test_asking_for_neither_is_refused_by_the_cli_s_own_error(self, folders) -> None:
-        """`OutputSpecError`, with the CLI's wording. Not a message invented here."""
-        source, dest = folders
-        chosen = ConvertOptions(
-            source=source,
-            dest=dest,
-            mode=options_mod.CUSTOM,
-            archive=False,
-            sharing=False,
-        )
-        with pytest.raises(outputs.OutputSpecError):
-            options_mod.validate(chosen)
+        assert [spec.label for spec in chosen.specs()] == [f"{tree}/{fmt}/{framing}"]
 
     def test_resume_is_on_and_the_window_offers_no_way_off_it(self, folders) -> None:
         """`Start over` is gone; `--no-resume` stays reachable from the CLI.
@@ -206,13 +191,13 @@ class TestOutputCombinations:
             source=source,
             dest=dest,
             mode=options_mod.ARCHIVE,
-            archive_format="jpeg",
-            archive_framing="cropped",
-            sharing=True,
-            sharing_format="tiff",
+            custom_format="jpeg",
+            custom_framing="cropped",
         )
         assert [spec.label for spec in chosen.specs()] == ["archive/tiff/full"]
-        assert "--sharing-format" not in options_mod.convert_args(chosen)
+        args = options_mod.convert_args(chosen)
+        assert "jpeg" not in args
+        assert "cropped" not in args
 
     def test_the_extra_files_are_off_unless_asked_for(self, folders) -> None:
         """One photograph, one image. The other two files are each an option."""
@@ -237,6 +222,57 @@ class TestOutputCombinations:
             )
             assert asked.source_copy is True, mode
             assert asked.sidecar is True, mode
+
+    def test_the_tree_follows_the_framing_not_the_mode(self, folders) -> None:
+        """`archive/` keeps the full frame; `sharing/` gets the crop.
+
+        Custom lost its archive-vs-shareable control in 1.2.1, so something
+        had to decide where its output lands, and pinning it to `archive/`
+        filed a cropped image in the tree whose whole job is the uncropped
+        one. The consequence worth asserting is that the same two answers
+        reach the same place however they were given: Custom set to JPEG and
+        cropped writes what the Shareable copy button writes.
+        """
+        source, dest = folders
+        shareable = ConvertOptions(source=source, dest=dest, mode=options_mod.SHARING)
+        by_hand = ConvertOptions(
+            source=source, dest=dest,
+            mode=options_mod.CUSTOM,
+            custom_format="jpeg", custom_framing="cropped",
+        )
+        assert [s.label for s in by_hand.specs()] == [s.label for s in shareable.specs()]
+        assert options_mod.convert_args(by_hand) == options_mod.convert_args(shareable)
+
+        full_frame = ConvertOptions(
+            source=source, dest=dest,
+            mode=options_mod.CUSTOM,
+            custom_format="jpeg", custom_framing="full",
+        )
+        assert [s.label for s in full_frame.specs()] == ["archive/jpeg/full"]
+
+    def test_every_mode_writes_exactly_one_image(self, folders) -> None:
+        """Which is what makes "asked for neither" unreachable.
+
+        Three tests used to cover turning a tree off and turning both off. The
+        window has no control for either now, so those states cannot be built
+        and the tests for them are gone rather than weakened. This is the
+        property that replaced them.
+        """
+        source, dest = folders
+        for mode in (options_mod.ARCHIVE, options_mod.SHARING, options_mod.CUSTOM):
+            for fmt in outputs.FORMATS:
+                for framing in outputs.FRAMINGS:
+                    chosen = ConvertOptions(
+                        source=source,
+                        dest=dest,
+                        mode=mode,
+                        custom_format=fmt,
+                        custom_framing=framing,
+                    )
+                    assert len(chosen.specs()) == 1, (mode, fmt, framing)
+                    # And the CLI agrees it is one, rather than erroring.
+                    parsed = build_parser().parse_args(options_mod.convert_args(chosen))
+                    assert parsed.no_archive != parsed.no_sharing
 
     def test_progress_is_always_asked_for(self, folders) -> None:
         """It is what drives the progress bar; a run without it looks hung."""

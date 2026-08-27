@@ -1,6 +1,6 @@
 # Building the standalone executable
 
-One file, nothing to install: `dist/fpx-converter.exe` is the whole desktop
+One file, nothing to install: `dist/fpx-converter-<version>.exe` is the whole desktop
 application, Python and Qt included. The audience does not use a terminal and
 must not have to think about a virtual environment.
 
@@ -26,7 +26,7 @@ archive must not depend on a GUI toolkit.
 C:\venvs\fpxgui\Scripts\python.exe -m PyInstaller --noconfirm packaging/fpx-converter.spec
 ```
 
-Output: `dist/fpx-converter.exe`, about 67 MB. `build/` and `dist/` are
+Output: `dist/fpx-converter-<version>.exe` -- named for `VERSION`, which the spec reads -- about 67 MB. `build/` and `dist/` are
 gitignored; the `.spec` is not, because it is the build definition rather than
 build output.
 
@@ -36,12 +36,12 @@ The exe wears two hats, and both need trying:
 
 ```sh
 # the command line hat -- the one a conversion actually runs through
-dist\fpx-converter.exe --run-cli --version
-dist\fpx-converter.exe --run-cli scan --source tests\fixtures --manifest %TEMP%\fpx\manifest.json
-dist\fpx-converter.exe --run-cli convert --manifest %TEMP%\fpx\manifest.json --dest %TEMP%\fpx --limit 2 --progress
+dist\fpx-converter-<version>.exe --run-cli --version
+dist\fpx-converter-<version>.exe --run-cli scan --source tests\fixtures --manifest %TEMP%\fpx\manifest.json
+dist\fpx-converter-<version>.exe --run-cli convert --manifest %TEMP%\fpx\manifest.json --dest %TEMP%\fpx --limit 2 --progress
 
 # the window
-dist\fpx-converter.exe
+dist\fpx-converter-<version>.exe
 ```
 
 The convert above is the real check: it exercises the bundled `pyexiv2`

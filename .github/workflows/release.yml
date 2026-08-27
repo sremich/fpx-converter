@@ -95,7 +95,7 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             $PRERELEASE \
-            dist/fpx-converter.exe
+            dist/fpx-converter-*.exe
           echo "Release created. REMINDER: tick the /release skill's checklist."
 
   # The exe is the whole point of 1.1.0: somebody who does not use a terminal
@@ -135,12 +135,23 @@ jobs:
       - name: Build the standalone executable
         run: python -m PyInstaller --noconfirm packaging/fpx-converter.spec
 
+      - name: Name the built file once, for every step after this
+        # The spec names the exe for the version in `VERSION`. Resolved here
+        # rather than repeated, so no step can end up looking for a file the
+        # build never made.
+        shell: bash
+        run: echo "EXE=dist/fpx-converter-$(cat VERSION).exe" >> "$GITHUB_ENV"
+
+      - name: The build must produce the file it is named for
+        shell: bash
+        run: test -f "$EXE" || { ls -la dist; echo "::error::$EXE not built"; exit 1; }
+
       - name: The bundle must carry VERSION
         # `unknown` here means VERSION did not make it into the bundle, which
         # would ship an exe that cannot say what it is.
         shell: bash
         run: |
-          printed="$(./dist/fpx-converter.exe --run-cli --version)"
+          printed="$("$EXE" --run-cli --version)"
           echo "$printed"
           case "$printed" in
             *unknown*) echo "::error::VERSION is not in the bundle"; exit 1;;
@@ -155,9 +166,9 @@ jobs:
           FPX_REQUIRE_EXIFTOOL: "1"
         shell: bash
         run: |
-          ./dist/fpx-converter.exe --run-cli scan \
+          "$EXE" --run-cli scan \
             --source tests/fixtures --manifest smoke/m.json
-          ./dist/fpx-converter.exe --run-cli convert \
+          "$EXE" --run-cli convert \
             --manifest smoke/m.json --store tests/fixtures \
             --dest smoke/out --limit 2
           test -f smoke/out/audit_report.json
@@ -166,7 +177,7 @@ jobs:
           # are new modules reached through new flags. A packaging problem in
           # either would not fail the run -- it would quietly put the files
           # somewhere other than where they were asked for.
-          ./dist/fpx-converter.exe --run-cli convert \
+          "$EXE" --run-cli convert \
             --manifest smoke/m.json --store tests/fixtures \
             --dest smoke/named --limit 1 --no-sharing \
             --folder-scheme flat --name-template '{name}'
@@ -186,6 +197,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fpx-converter-exe
-          path: dist/fpx-converter.exe
+          path: ${{ env.EXE }}
           if-no-files-found: error
           retention-days: 1

@@ -35,13 +35,17 @@ SAMPLE = 4
 def run_result(tmp_path_factory: pytest.TempPathFactory) -> dict:
     """One conversion, driven end to end. Shared: it is the expensive part."""
     dest = tmp_path_factory.mktemp("gui-out")
-    # Custom with both trees and both extras: this file is about the wiring,
-    # so it exercises everything a run can produce rather than the default,
-    # which is one image per photograph.
+    # Custom with both extras. Every mode writes one image now, so this runs
+    # the combination the named modes cannot reach -- a cropped TIFF -- along
+    # with both extra files. The JPEG writer is exercised end to end by
+    # `test_fixtures_output.py`; what this file is for is the wiring between
+    # the window and a real child process.
     chosen = ConvertOptions(
         source=FIXTURES,
         dest=dest,
         mode=options_mod.CUSTOM,
+        custom_format="tiff",
+        custom_framing="cropped",
         source_copy=True,
         sidecar=True,
     )
@@ -80,16 +84,28 @@ def _snapshot(root: Path) -> dict[str, str]:
 
 
 class TestItActuallyConverts:
-    def test_both_output_trees_were_written(self, run_result: dict) -> None:
-        """Under Custom with both trees ticked, which is what the fixture sets.
+    def test_the_image_and_both_extras_were_written(self, run_result: dict) -> None:
+        """One image per photograph, and the two files that were asked for.
 
-        The window's own default is one image per photograph now; this test is
-        about the pair still being reachable through the real child process,
-        not about the default.
+        It used to assert both output trees. Every mode writes one image now,
+        so what this checks is that the mode's own combination and both extras
+        made it through a real child process into real files.
         """
         dest: Path = run_result["dest"]
-        assert list((dest / "archive").rglob("*.tif")), "no archival TIFF was written"
-        assert list((dest / "sharing").rglob("*.jpg")), "no shareable JPEG was written"
+        # TIFF and cropped: a pairing neither named mode can reach. The tree
+        # follows the framing, so a cropped image lands in `sharing/` however
+        # it was asked for -- `archive/` is the one that keeps the full frame.
+        assert list((dest / "sharing").rglob("*.tif")), "no TIFF was written"
+        # One image, not two. `archive/` is not empty here and should not be:
+        # the two extras are archival material and live there whichever tree
+        # the image went to. What must not appear there is a second image.
+        assert not [
+            path
+            for suffix in ("*.tif", "*.jpg")
+            for path in (dest / "archive").rglob(suffix)
+        ], "a second image appeared for a run that asked for one"
+        assert list(dest.rglob("*.fpx")), "--source-copy wrote nothing"
+        assert list(dest.rglob("*.fpx.json")), "--sidecar wrote nothing"
 
     def test_the_run_left_its_report_and_its_log(self, run_result: dict) -> None:
         dest: Path = run_result["dest"]

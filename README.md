@@ -12,10 +12,13 @@ the family timeline.
 
 ## Status
 
-**Version 1.0.0 released.** The whole archive converted in one unattended pass: 687 source
-files to archival TIFF and shareable JPEG with full metadata, 0 failed, 0 with warnings,
-`complete: true` and `unexplained_failures: 0`. Version 1.1.0 adds a graphical interface so
-somebody who does not use a terminal can run a conversion.
+**Version 1.2.1 released.** The milestone plan is complete. 1.0.0 converted the whole
+archive in one unattended pass: 687 source files to archival TIFF and shareable JPEG with
+full metadata, 0 failed, 0 with warnings, `complete: true` and `unexplained_failures: 0`.
+1.1.0 added a graphical interface, shipped as one Windows executable, so somebody who does
+not use a terminal can run a conversion. 1.2.0 and 1.2.1 came out of Stevie running that
+executable: a run now writes only the images you asked for, the filename and the folder
+arrangement are yours to define, and the window opens readable.
 
 **What has not been done:** the tier-4 *eyeball* pass — a person opening the converted
 photographs in a real photo app and checking colour, orientation and date by eye. It was a
@@ -45,7 +48,7 @@ What exists:
   self-contained file with no server or build step. Where capture dates are missing,
   the gallery offers a date-entry interface; dates you type come back out as
   `album-dates.json`, which `convert` reads and writes to EXIF `DateTimeOriginal`.
-- **837 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
+- **834 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
   over 40 committed person-free fixtures covering both colour spaces, one
   viewing-transform crop, and six of seven declared sizes, including mutation
   tests for the colour oracle.
@@ -119,12 +122,12 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert
 
 ## Using the desktop application
 
-If you don't use a terminal, the desktop app `fpx-converter.exe` handles conversion
+If you don't use a terminal, the desktop app `fpx-converter-<version>.exe` handles conversion
 entirely from a window.
 
 ### Get the app
 
-Download `fpx-converter.exe` from the latest GitHub release. One file, nothing to
+Download `fpx-converter-<version>.exe` from the latest GitHub release. One file, nothing to
 install — just run it. No Python installation needed.
 
 ### Install ExifTool (one prerequisite)
@@ -153,12 +156,18 @@ Pick one of three, and only one:
   camera captured.
 - **Shareable copy — JPEG, cropped.** The one to send people. Opens anywhere, cropped
   as it was framed in the original software (if it was cropped).
-- **Custom — you choose.** Any combination of format and framing, either tree or both,
-  plus two extra files per photograph if you want them: a copy of the original `.fpx`,
-  and `.fpx.json` holding every property the file carries.
+- **Custom — you choose.** Any combination of format and framing, plus two extra
+  files per photograph if you want them: a copy of the original `.fpx`, and
+  `.fpx.json` holding every property the file carries. Which folder it writes
+  into follows the framing — `archive/` keeps the full frame, `sharing/` gets
+  the crop — and the window says which under the menus.
 
-The two named choices write exactly one image per photograph and ask nothing else. The
-format and framing menus appear only under Custom.
+All three write exactly one image per photograph. The two named choices ask nothing
+else; the format and framing menus appear only under Custom.
+
+To write both trees in one run — a full-frame TIFF *and* a cropped JPEG — use the
+command line, which keeps the two independent (`--archive-format`, `--sharing-format`
+and their framings).
 
 ### Where they go, and what they are called
 
@@ -251,7 +260,7 @@ The tier-1 and tier-2 gates:
 # Lint
 C:\venvs\fpx\Scripts\python.exe -m ruff check .
 
-# Unit and e2e tests (tier 1 + tier 2: 837 tests, no real photos, no source archive)
+# Unit and e2e tests (tier 1 + tier 2: 834 tests, no real photos, no source archive)
 # Note: some tier-2 tests require ExifTool for metadata round-trip validation
 C:\venvs\fpx\Scripts\python.exe -m pytest
 ```
@@ -424,8 +433,8 @@ This is expected and must not be reported as a fault by the audit.
 ## Milestone plan
 
 The approved plan for building the converter, ticked as milestones ship.
-This survives context loss; conversation memory doesn't. Current status:
-0.6.0, 1.0.0, and 1.1.0 shipped.
+This survives context loss; conversation memory doesn't. Every milestone has
+shipped; 1.2.0 and 1.2.1 are post-plan work driven by using the result.
 
 - [x] **0.1.0** — Scaffold + ingestion. Read-only source walk, hash
       cascade, `manifest.json`, copy `.fpx` into `source-files/`.
@@ -456,6 +465,16 @@ This survives context loss; conversation memory doesn't. Current status:
 - [x] **1.1.0** — Desktop app. A GUI wrapping the CLI. Ships as a
       single Windows executable alongside it. Folded with PyInstaller
       packaging work.
+- [x] **1.2.0** — Names, folders, and what a run writes. Not in the original
+      plan: it came out of Stevie running the packaged app. ExifTool stopped
+      opening a console window per photograph, the unreadable dropdowns were
+      fixed, the window's six output controls became three exclusive choices,
+      the `.fpx` copy and the sidecar became opt-in, and both the filename and
+      the folder arrangement became user-definable.
+- [x] **1.2.1** — Two more from using it. The window opened too small to read
+      and now sizes itself from its own layout; the built executable carries
+      its version in its filename; and Custom stopped asking a question the two
+      choices above it had already answered.
 
 ## Key user-facing behaviours
 

@@ -73,12 +73,10 @@ class ConvertOptions:
     #: The first two ignore the format and framing fields entirely and write
     #: exactly one image per photograph; only `CUSTOM` reads them.
     mode: str = ARCHIVE
-    archive: bool = True
-    sharing: bool = True
-    archive_format: str = "tiff"
-    archive_framing: str = "full"
-    sharing_format: str = "jpeg"
-    sharing_framing: str = "cropped"
+    #: Read only under `CUSTOM`. The two named modes are one fixed tree each
+    #: and ignore these entirely, which is the point of them.
+    custom_format: str = "tiff"
+    custom_framing: str = "full"
     #: The source `.fpx` copied beside its converted image. Off by default:
     #: the source archive is read-only and still there, so this is a second
     #: copy of something that was never at risk.
@@ -116,31 +114,41 @@ class ConvertOptions:
     def stop_file(self) -> Path:
         return self.dest / STOP_FILENAME
 
-    def specs(self) -> tuple[outputs.OutputSpec, ...]:
-        """The outputs this run would write. Raises `OutputSpecError`.
+    def tree_format_framing(self) -> tuple[str, str, str]:
+        """Which tree this run writes into, and as what. One image, always.
 
-        The two named modes are deliberately not expressed as "the custom
-        settings, preset" -- they are one tree each, so choosing one writes
-        one image per photograph and there is nothing to explain about why a
-        second file appeared.
+        The named modes are deliberately not expressed as "the custom
+        settings, preset": they ignore the custom fields entirely, so leaving
+        Custom cannot carry its last setting into a run whose label says
+        something else.
+
+        The tree follows the **framing**, which is the project's rule --
+        `archive/` keeps the full frame, `sharing/` gets the crop -- and not
+        the mode. Custom lost its archive-vs-shareable choice in 1.2.1, so
+        something has to decide, and pinning it to `archive/` would have filed
+        a cropped image in the tree whose whole job is the uncropped one. It
+        also means the same two answers land in the same place however they
+        were reached: Custom set to JPEG and cropped writes exactly what the
+        Shareable copy button writes, in the same folder.
         """
-        if self.mode == ARCHIVE:
-            return outputs.build_specs(
-                archive=True, sharing=False,
-                archive_format="tiff", archive_framing="full",
-            )
         if self.mode == SHARING:
+            return "sharing", "jpeg", "cropped"
+        if self.mode == ARCHIVE:
+            return "archive", "tiff", "full"
+        tree = "sharing" if self.custom_framing == "cropped" else "archive"
+        return tree, self.custom_format, self.custom_framing
+
+    def specs(self) -> tuple[outputs.OutputSpec, ...]:
+        """The outputs this run would write. Raises `OutputSpecError`."""
+        tree, fmt, framing = self.tree_format_framing()
+        if tree == "sharing":
             return outputs.build_specs(
                 archive=False, sharing=True,
-                sharing_format="jpeg", sharing_framing="cropped",
+                sharing_format=fmt, sharing_framing=framing,
             )
         return outputs.build_specs(
-            archive=self.archive,
-            sharing=self.sharing,
-            archive_format=self.archive_format,
-            archive_framing=self.archive_framing,
-            sharing_format=self.sharing_format,
-            sharing_framing=self.sharing_framing,
+            archive=True, sharing=False,
+            archive_format=fmt, archive_framing=framing,
         )
 
     def checked_dest(self) -> Path:
@@ -225,31 +233,14 @@ def convert_args(options: ConvertOptions) -> list[str]:
         if options.folder_scheme == layout.CUSTOM:
             args += ["--folder-template", options.folder_template]
 
-    # The named modes are one tree each. Derived here rather than in the
-    # window, so the command line in the log pane always matches what the
-    # option actually means.
-    if options.mode == ARCHIVE:
-        return [*args, "--no-sharing", "--archive-format", "tiff",
-                "--archive-framing", "full"]
-    if options.mode == SHARING:
-        return [*args, "--no-archive", "--sharing-format", "jpeg",
-                "--sharing-framing", "cropped"]
-
-    if options.archive:
-        args += [
-            "--archive-format", options.archive_format,
-            "--archive-framing", options.archive_framing,
-        ]
-    else:
-        args.append("--no-archive")
-    if options.sharing:
-        args += [
-            "--sharing-format", options.sharing_format,
-            "--sharing-framing", options.sharing_framing,
-        ]
-    else:
-        args.append("--no-sharing")
-    return args
+    # Every mode is one image. Derived here rather than in the window, so the
+    # command line in the log pane always matches what the option means, and
+    # from the same function `specs()` uses so the two cannot disagree.
+    tree, fmt, framing = options.tree_format_framing()
+    if tree == "sharing":
+        return [*args, "--no-archive", "--sharing-format", fmt,
+                "--sharing-framing", framing]
+    return [*args, "--no-sharing", "--archive-format", fmt, "--archive-framing", framing]
 
 
 def ingest_args(options: ConvertOptions) -> list[str]:

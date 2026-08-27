@@ -11,12 +11,58 @@ See [`CHANGELOG.md`](../../CHANGELOG.md) for the itemised change list.
 
 | Tier | What it proves | Passing as of |
 |---|---|---|
-| 1. Unit | Parsers, reassembly, timestamp and naming logic, batch engine, resume state, audit reporting, output control, filename and folder patterns, the desktop front end's Qt-free half, mutation tests for the colour oracle | 1.2.0 — 837 tests, plus `scripts/mutation_check.py`, which breaks 16 load-bearing rules on purpose and requires the test named for each to go red |
-| 2. e2e | Full pipeline over 40 committed person-free fixtures covering both colour spaces, the crop path, and six of seven declared sizes; the desktop front end driving a real child process, cancellation included | 1.2.0 — scan through convert on both trees, pixel decoding with PhotoYCC coverage, metadata embedding, pyexiv2 read-back on both TIFF and JPEG, colour oracle mutation tests |
-| 3. Sample batch | Real files spanning every album, every declared size, both colour spaces and all four transform outcomes | 1.2.0 — 64/64 converted clean, 0 pyexiv2 violations, worst chroma correlation 0.739 against a gate of 0.5, thumbnail oracle improved on 9 of 9 cropped files |
+| 1. Unit | Parsers, reassembly, timestamp and naming logic, batch engine, resume state, audit reporting, output control, filename and folder patterns, the desktop front end's Qt-free half, mutation tests for the colour oracle | 1.2.1 — 834 tests, plus `scripts/mutation_check.py`, which breaks 17 load-bearing rules on purpose and requires the test named for each to go red |
+| 2. e2e | Full pipeline over 40 committed person-free fixtures covering both colour spaces, the crop path, and six of seven declared sizes; the desktop front end driving a real child process, cancellation included | 1.2.1 — scan through convert on both trees, pixel decoding with PhotoYCC coverage, metadata embedding, pyexiv2 read-back on both TIFF and JPEG, colour oracle mutation tests |
+| 3. Sample batch | Real files spanning every album, every declared size, both colour spaces and all four transform outcomes | 1.2.1 — 64/64 converted clean, 0 pyexiv2 violations, worst chroma correlation 0.739 against a gate of 0.5, thumbnail oracle improved on 9 of 9 cropped files |
 | 4. Full dataset | Unattended batch run over the whole corpus with audit report, plus an eyeball pass for colour on the PhotoYCC files | 1.0.0 — the batch half passed (687/687, `complete: true`, `unexplained_failures: 0`). **The eyeball half has never been done**; it is a standing recommendation rather than a release gate, which was a deliberate decision |
 
 ## Releases
+
+### 1.2.1 (release)
+
+**What it contains:** Two fixes to things a person meets before the converter
+has done anything at all.
+
+The desktop window opened too small to read: the cards were squashed into
+slivers, three radio buttons collapsed to underscores, and the naming card was
+empty. `setMinimumSize(920, 760)` was right for the four sections 1.1.0 had and
+silently wrong once 1.2.0 added a card, so Qt was allowed to open the window
+nearly 300 pixels shorter than its contents needed. The size now comes from the
+layout, measured at the width the window will actually have, and the contents
+sit in a scroll area so a display too short for them scrolls rather than
+squeezing them.
+
+Custom also stopped asking a question it had no business asking. It offered a
+further choice between an archive copy and a shareable one, which is the choice
+directly above it, and let somebody tick neither and meet a greyed-out Convert
+button. All three modes now write one image; Custom is the one where you say
+which. Which folder it lands in follows the framing — `archive/` keeps the full
+frame, `sharing/` gets the crop — so the same two answers reach the same place
+however they were given, and the window says so under the menus. Both trees in
+a single run remain a command-line thing.
+
+And the executable carries its version — `fpx-converter-1.2.1.exe` — so two
+downloads a year apart are not two files with the same name.
+
+**What it is safe to trust for:** Everything 1.2.0 was. No conversion logic
+changed: the diff is the window's geometry, which of its controls exist, some
+shorter explanatory lines, and the name of the built file. The only
+`fpx_converter` change is a display string the CLI never reads — the one-line
+description beside a folder scheme, which only the window shows.
+
+**What does NOT work:** The tier-4 eyeball pass, unchanged since 1.0.0.
+
+**Verification:** Tiers 1, 2 and 3 all passing; `scripts/mutation_check.py`
+green, all 16 rules caught by the test named for each. Tier 3 was run rather
+than argued about: `fpx_converter/layout.py` is in the diff, and output pathing
+is batch-path code even when the change is only a display string. 64/64
+converted clean, 0 pyexiv2 violations, worst chroma correlation 0.739 against a
+gate of 0.5. The executable was built locally and run before tagging: it reports
+1.2.1, converts, and honours `--folder-scheme flat --name-template '{name}'`.
+The window's new sizing is covered by tests that state the screen rather than
+inherit the headless one, because the offscreen platform reports 800x800 and
+the old hardcoded 760 satisfied it — the first version of those tests could not
+have failed in CI.
 
 ### 1.2.0 (release)
 

@@ -1267,3 +1267,91 @@ appear when the parent is a GUI process, and the suite runs from a terminal.
 **Consequence.** A reminder that "the tests are green" and "somebody can use
 this" are different claims, which is the same lesson the unreadable dropdowns
 taught in the same session.
+
+## 2026-08-27 — Custom is one image, and does not re-ask the question above it
+
+**Decision.** Under Custom the window offers a format and a framing, and the two
+extra-file tickboxes. It no longer offers a choice between an archive copy and a
+shareable one, and it can no longer write both trees in one run.
+
+**Why.** That choice *is* the two options above Custom. Asking it again inside
+the third one meant the same question twice, and it let somebody untick both and
+meet a Convert button that had greyed itself out — a dead end the window had to
+carry special logic to produce. Every mode now writes exactly one image per
+photograph, which makes "asked for nothing" unreachable rather than refused.
+
+**Consequence.** Something still has to decide which tree Custom writes into,
+and it is the **framing**, not the mode: `archive/` keeps the full frame and
+`sharing/` gets the crop, which is a binding rule of this project rather than a
+preference. Pinning it to `archive/` was written first and was wrong — it filed
+a cropped image in the tree whose entire job is the uncropped one, and did it
+invisibly, since the control that used to say where output went had just been
+removed. The rule also buys a property worth having: the same two answers land
+in the same folder however they were reached, so Custom set to JPEG and cropped
+writes precisely what the Shareable copy button writes. The window states the
+destination under the menus, read from `ConvertOptions.tree_format_framing`
+rather than restated, and both menus gained captions — with the tickbox above
+them gone, two boxes reading "TIFF" and "Whole photo" controlled nothing a
+reader could name.
+
+`ConvertOptions` lost four fields and the window lost two
+checkboxes and two menus; `_sync_enabled` lost the branch that disabled Convert.
+Five tests were deleted rather than weakened, because the states they asserted
+about cannot be built any more, and one property replaced them: every mode
+yields exactly one spec. No CLI behaviour changed — `--no-archive`,
+`--no-sharing` and the independent format/framing pairs still do what they did,
+and both trees in one run is a command-line thing now. The one `fpx_converter`
+file in the diff is `layout.py`, and only for the sentence shown beside a
+folder scheme in the window; nothing in the CLI reads it.
+
+## 2026-08-27 — A window's size comes from its layout, never from a number
+
+**Decision/Lesson:** The desktop window no longer carries a
+`setMinimumSize(920, 760)`. It asks the layout how tall its contents are at
+the width the window will actually have — `layout.minimumHeightForWidth(w)` —
+and resizes to that, clamped to the available screen. The contents sit in a
+`QScrollArea` so a display too short for them scrolls rather than compressing
+them.
+
+**Why:** Stevie opened the packaged 1.2.0 app and sent a screenshot of it:
+three radio buttons collapsed to underscores, one card empty, the placeholder
+text in the folder fields sliced in half. The number had been measured against
+the four sections 1.1.0 had. By 1.2.0 the content's own minimum was past a
+thousand pixels, so Qt was entitled to open the window nearly 300 pixels
+shorter than its contents needed and squeeze everything to fit — and it did,
+silently, because nothing had asked the layout anything since the number was
+written.
+
+`sizeHint()` is the wrong question here and was tried first. Half this window
+is word-wrapped `QLabel`s, and a wrapped label's hint is computed at the
+layout's *preferred* width, not the width the window will really have; the
+answer it gives is for a window nobody opens. `minimumHeightForWidth(width)`
+is the query that takes the width as an argument, which is exactly the thing
+that was being guessed.
+
+Raising the fixed number was the obvious alternative and was rejected: a floor
+tall enough for this content does not fit a 1366×768 laptop, so it would trade
+an unreadable window for an unusable one. The scroll area is what makes the
+computed size a target rather than a demand.
+
+Two things had to be right for the measurement to mean anything, and neither
+was obvious. A hidden widget counts as nothing to a layout, so the window is
+sized for the **tallest** mode rather than the selected one — otherwise picking
+Custom, which shows a panel the named modes do not, puts a scrollbar on a
+window with a screen's worth of room around it. And `QLayout.activate()`
+recomputes only what is already marked dirty; showing or hiding a child does
+not mark it, so measuring twice around a visibility change returned the first
+answer both times and the window sized itself for a panel it had just been told
+about. `invalidate()` before `activate()` is what makes the second measurement
+a measurement.
+
+**Implication:** Adding a card to this window needs no size to be revisited —
+that is the point. Anything that would break the measurement instead: giving
+the scroll area's child a fixed height, taking a wrapped label out of the
+layout, or reintroducing a hardcoded minimum. Four tier-1 tests cover it —
+nothing compressed at any window height, the scroll area present and
+resizable, and the opened size on a screen with room and on one without. The
+last two state the screen as an explicit `QRect` rather than reading the
+display: the offscreen platform reports 800×800, which the old hardcoded 760
+satisfied, so a test that took the screen as it found it could not have
+failed here or in CI.

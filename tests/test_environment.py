@@ -76,6 +76,43 @@ def test_version_is_not_duplicated_in_pyproject() -> None:
     assert "version" in pyproject["project"]["dynamic"]
 
 
+def test_the_packaged_exe_is_named_for_the_version_file() -> None:
+    """And reads it rather than carrying a literal.
+
+    The built file is `fpx-converter-<version>.exe`, so two downloads a year
+    apart are not two files with the same name. A version typed into the spec
+    would be a second source of truth for the one value this project insists
+    has exactly one, and it would go stale on the first release that forgot it.
+    """
+    spec = (REPO_ROOT / "packaging" / "fpx-converter.spec").read_text(encoding="utf-8")
+    version = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+    assert 'name=f"fpx-converter-{VERSION}"' in spec, (
+        "the built exe must be named for the version"
+    )
+    assert '(REPO_ROOT / "VERSION").read_text' in spec, (
+        "the spec must read VERSION rather than carry a copy of it"
+    )
+    assert version not in spec, (
+        f"the spec carries the literal version {version!r} -- VERSION is the only "
+        "place it may live"
+    )
+
+
+def test_the_release_workflow_looks_for_the_file_the_spec_builds() -> None:
+    """A rename that reached the spec and not the workflow would build a good
+    executable and then publish a release with nothing attached to it."""
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "dist/fpx-converter.exe" not in workflow, (
+        "the workflow still refers to the unversioned name the spec no longer builds"
+    )
+    assert 'EXE=dist/fpx-converter-$(cat VERSION).exe' in workflow, (
+        "the workflow must derive the exe name from VERSION"
+    )
+
+
 def test_runtime_dependencies_import() -> None:
     """pyexiv2 is a compiled extension; an import failure here is unrecoverable."""
     import numpy

@@ -287,7 +287,10 @@ archive, so they are rules, not preferences.
   crops**: rotation and crop are independent, and within the classifier's
   tolerance an "identity" matrix can still carry one. The box is the
   authority, and where it cannot be resolved the file is reported as
-  unsupported rather than assumed uncropped.
+  unsupported rather than assumed uncropped. In the desktop app the tree
+  therefore follows the **framing** and not the mode: Custom has no
+  archive-vs-shareable control, and deciding by anything else files a
+  cropped image in the tree whose job is the uncropped one.
 - **Stored FILETIMEs are LOCAL wall-clock time, not UTC.** Do not
   timezone-convert them. The time-zone map governs which `OffsetTime*` value
   is written, nothing more.
