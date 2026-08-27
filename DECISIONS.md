@@ -1355,3 +1355,26 @@ last two state the screen as an explicit `QRect` rather than reading the
 display: the offscreen platform reports 800×800, which the old hardcoded 760
 satisfied, so a test that took the screen as it found it could not have
 failed here or in CI.
+
+## 2026-08-27 — Tier 4's eyeball half is done, and it was the point of tier 4
+
+**Decision/Lesson:** After 1.2.1, Stevie opened the converted photographs in a
+real photo app and checked colour, orientation and date by eye. It passed.
+Every tier this project defines has now passed on the real corpus.
+
+**Why:** It stopped being a release gate at 1.0.0 — deliberately, rather than
+by oversight, because keeping a rule the releases were stepping over is worse
+than removing it. That decision was about the *gate*, never about the *check*.
+The check mattered here more than in most projects: the 2 PhotoYCC files
+shipped solidly green with 42% of their pixels clipped to zero, past every
+automated check the project had at the time, and what finally caught it was
+looking. `compute_image_correlation` folds to greyscale and cannot see colour;
+per-channel Pearson correlation is invariant under any per-channel affine map,
+so a wrong gain or a wrong neutral scores as well as a correct decode;
+`chroma_agreement` closes both holes but compares against a 96-pixel embedded
+thumbnail. All three are evidence. None of them is sight.
+
+**Implication:** The pass is of the output as it stands at 1.2.1, not a
+permanent property of the code. Any change to the decoder, the colour
+conversion, or the viewing transform puts it back to outstanding — and the 2
+PhotoYCC files are the ones to look at, not a random sample.

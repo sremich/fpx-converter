@@ -47,8 +47,8 @@ inventory, and each has a full entry in [`DECISIONS.md`](../../DECISIONS.md).
    wrong calendar day.
 3. **The colour space is NIF RGB, not PhotoYCC** — on 1,261 of 1,265 files.
    The colour-science work everyone budgets for mostly isn't there. The 2
-   PhotoYCC files have never been eyeballed for colour correctness; tier 4
-   covers those.
+   PhotoYCC files are the ones that had to be looked at rather than measured,
+   and tier 4 did that after 1.2.1.
 4. **Pillow's `FpxImagePlugin` cannot be the pixel path.** It fails on 1,224
    of 1,265 files and hard-crashes the interpreter on two of them. The
    custom decoder is primary; the plugin is an out-of-process oracle.

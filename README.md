@@ -20,12 +20,13 @@ not use a terminal can run a conversion. 1.2.0 and 1.2.1 came out of Stevie runn
 executable: a run now writes only the images you asked for, the filename and the folder
 arrangement are yours to define, and the window opens readable.
 
-**What has not been done:** the tier-4 *eyeball* pass — a person opening the converted
-photographs in a real photo app and checking colour, orientation and date by eye. It was a
-release gate until 1.0.0 and is now a strong recommendation instead, which was a deliberate
-decision rather than an oversight. It still matters: the two PhotoYCC files in this archive
+**The tier-4 eyeball pass is done.** A person opened the converted photographs in a real
+photo app and checked colour, orientation and date by eye, after 1.2.1. It stopped being a
+release gate at 1.0.0 — a deliberate decision rather than an oversight — and was done
+anyway, which matters here more than the rule did: the two PhotoYCC files in this archive
 once shipped solidly green with 42% of their pixels clipped to zero, past every automated
-check the project had. A 96-pixel thumbnail oracle is evidence, not sight.
+check the project had. A 96-pixel thumbnail oracle is evidence, not sight. Every tier this
+project defines has now passed.
 
 What exists:
 - **The `fpx_converter` package** with eight commands:

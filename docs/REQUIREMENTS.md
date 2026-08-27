@@ -336,8 +336,11 @@ copy to keep current. In summary: tier 1 (unit, no real photos) gates every
 push; tier 2 (e2e on committed non-personal fixtures) gates decoder,
 metadata, and writer changes; tier 3 (sample batch over ~50 real files)
 gates any merge touching decode or metadata; tier 4 (full unattended dataset
-run plus an eyeball pass) gates **1.0.0**, and until it passes every release
-stays a pre-release.
+run plus an eyeball pass) gated **1.0.0**. That last gate was removed at 1.0.0
+by a deliberate decision — the batch half passed, the eyeball half had not been
+done, and keeping a rule the releases were stepping over was worse than
+dropping it. Both halves have since passed: the eyeball pass was done after
+1.2.1.
 
 Manual testing is kept to a minimum until just before 1.0.0; the gallery is
 the main manual instrument. Tiers 3 and 4 read the personal corpus and never
