@@ -8,6 +8,8 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-27
+
 ### Fixed
 - **PhotoYCC files were being colour-converted twice and shipped solidly
   green.** The tile path called `convert("RGB")`, which runs the JFIF
