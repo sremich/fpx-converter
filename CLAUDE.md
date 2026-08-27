@@ -131,8 +131,15 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
       embedded DIBs, filters by album and audit status, **plus the per-group
       date-entry affordance the dating strategy requires**.
 - [ ] **1.0.0 — Full dataset run** plus tier-4 eyeball verification.
-- [ ] *later* — PyInstaller exe; re-verify 3.14 wheel support first, then
-      add the build-and-attach job to `release.yml`.
+- [ ] **1.1.0 — Desktop app.** A GUI so somebody who does not use a
+      terminal can run this: pick a source folder, pick a destination, watch
+      progress, read the audit result. It **wraps the CLI rather than
+      reimplementing it** — the conversion logic has one home and one set of
+      tests, and the GUI is a front end over the same commands. Ships as a
+      single Windows executable alongside it. Folded together with the
+      PyInstaller work below, because they are the same packaging problem;
+      re-verify 3.14 wheel support first, then add the build-and-attach job
+      to `release.yml`.
 
 Two wants from the original requirements changed after the milestone-0
 inventory measured the corpus: the **audio-extraction want is CLOSED** (zero
