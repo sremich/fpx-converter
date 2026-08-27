@@ -845,3 +845,61 @@ colour spaces and all four transform outcomes, then converts through the real
 writer, re-reads with pyexiv2, takes pixel statistics, runs both oracles, and
 exits non-zero on any of them. It prints its own sample composition, so the
 coverage claim is in the output rather than in a commit message.
+
+## 2026-08-27 — A folder name somebody typed outranks any date we can derive
+
+**Context.** The output tree had to be organised somehow. The obvious
+scheme is chronological — year, then month — and the project already
+computes a `sort_datetime` for exactly that kind of browsing affordance.
+But the only clock this corpus carries is an import-batch stamp, and the
+milestone-0 inventory established that it misses the event by as much as
+223 days. A chronological tree built on it would scatter one afternoon's
+photographs across two months and look authoritative doing it.
+
+**Decision.** The source folder name decides. A folder whose name says
+something keeps that name as the album whatever date its photos carry,
+nested under the year when the name gives one and sitting beside the year
+folders when it does not. Only a folder whose name says nothing — a name a
+tool generated, a bare sequence number — is replaced by
+`<year>/<year> <Month>`. On this corpus that is 42 of 687 files: almost
+everything sitting in a flat dump was also copied into a real album, so the
+real name wins.
+
+**Why.** `CLAUDE.md` already says filenames are the only human-authored
+content in this archive. Folder names are the same thing one level up, and
+the same argument applies with more force: somebody typed the folder name
+about these specific photographs, and nobody typed the import stamp. The
+two mistakes are also not symmetric. Wrongly calling a folder
+non-descriptive discards something a person wrote and cannot be recovered
+from the file; wrongly calling one descriptive leaves a slightly odd album
+name. So the non-descriptive list is short and explicit, never a heuristic,
+and it holds only names generic to any archive — anything specific to a
+particular one goes in `.env` as `FPX_NON_DESCRIPTIVE_ALBUMS`, for the same
+reason the timezone overrides do: folder names are personal content.
+
+**The year-month date is a filing date, not a claim.** For the 42 files
+that get one it can only come from the import stamp, which this project
+does not trust as a capture date. That is fine here and nowhere else: a
+folder is a browsing affordance exactly like the filename prefix, and this
+value never reaches `DateTimeOriginal`.
+
+**Two defects fell out of implementing it**, both of which had been live
+since 0.2.0 and neither of which any tier caught:
+
+* A file was filed under the **first** album listed in its manifest entry
+  rather than the most descriptive one. Most files belong to both an event
+  folder and the flat dump they were also copied into, and the dump usually
+  came first. 52 photographs of one holiday were filed under a folder named
+  after a zip file — and because the album is also what resolves the date,
+  they lost the day-precise capture date their real album gave for free.
+  Files carrying `DateTimeOriginal` go from 70 to 122 with the fix.
+* The folder-date patterns required a word boundary before the year, which
+  a name with the year glued onto a word does not have. 72 files lost the
+  year their own folder named. The fix is `(?<!\d)` instead of `\b`, so a
+  digit in front still blocks the match and camera-generated names stay
+  out.
+
+**Consequence for the date review.** The 52 files above now claim a
+day-precise `DateTimeOriginal` derived from their album name. That is only
+defensible if the name means the day rather than the season around it —
+open with Stevie, and the answer changes 52 files either way.

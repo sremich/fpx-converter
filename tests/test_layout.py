@@ -31,7 +31,7 @@ def _derived(import_iso: str | None = None, sort_iso: str | None = None) -> dict
 
 class TestDescriptiveness:
     @pytest.mark.parametrize(
-        "name", ["Solstice Bonfire 1994", "Rosalind", "mustang", "Top Drawer", "Burst", "1998"]
+        "name", ["Solstice Bonfire 1994", "Rosalind", "kestrel", "Left Shelf", "Thicket", "1998"]
     )
     def test_a_name_somebody_typed_is_descriptive(self, name: str) -> None:
         assert layout.is_descriptive(name)

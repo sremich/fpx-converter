@@ -82,8 +82,13 @@ def test_no_personal_data_is_tracked() -> None:
     """
     import subprocess
 
+    # --others --exclude-standard adds files that are not committed yet but
+    # would be by the next `git add -A`. Plain `git ls-files` checks only
+    # what is already in the index, so a brand-new file with a leak in it
+    # passes right up until the moment it is committed -- which is exactly
+    # how a real album name got into two new files and pushed.
     tracked = subprocess.run(
-        ["git", "ls-files"],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

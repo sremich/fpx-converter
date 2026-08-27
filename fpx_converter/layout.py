@@ -7,12 +7,12 @@ under it; descriptive albums that name no date sit at the top, beside the
 year folders.
 
     archive/
-      2001/
-        winterfest 1994/          <- descriptive, and it names a year
-        2001 December/           <- from a folder whose name said nothing
-      2002/
-        Big East Coast Trip 2002/
-      Rosalind/                    <- descriptive, no date in the name
+      1994/
+        Winterfest 1994/         <- descriptive, and it names a year
+        1994 December/           <- from a folder whose name said nothing
+      1995/
+        Solstice Bonfire 1995/
+      Rosalind/                  <- descriptive, no date in the name
       undated/                   <- no usable date at all
 
 The point is that a folder name somebody typed is evidence and a folder name
