@@ -34,10 +34,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import __version__, outputs
+from . import __version__, layout, outputs
 from . import name_template as name_template_mod
 
 STATE_VERSION = 2
+
+#: Every opt-in non-image output, which is also what a pre-1.2.0 run wrote.
+EXTRA_NAMES: tuple[str, ...] = ("sidecar", "source_copy")
 STATE_FILENAME = "run-state.json"
 LOG_FILENAME = "conversion.log"
 REPORT_FILENAME = "audit_report.json"
@@ -173,12 +176,16 @@ class RunState:
         path: Path,
         specs: tuple[outputs.OutputSpec, ...],
         name_template: str | None = None,
-        folder_key: str = "album",
+        folder_key: str = layout.BY_ALBUM,
+        extras: tuple[str, ...] = (),
     ) -> None:
         self.path = path
         self.spec_labels = sorted(spec.label for spec in specs)
         self.name_template = name_template or name_template_mod.DEFAULT_TEMPLATE
         self.folder_key = folder_key
+        #: The opt-in non-image outputs this run wants: `source_copy`,
+        #: `sidecar`, or neither.
+        self.extras = tuple(sorted(extras))
         self.done: dict[str, dict[str, Any]] = {}
         self._load()
 
@@ -206,7 +213,20 @@ class RunState:
         if raw.get("name_template", name_template_mod.DEFAULT_TEMPLATE) != self.name_template:
             return
         # And which folders they land in, for the same reason.
-        if raw.get("folder_key", "album") != self.folder_key:
+        if raw.get("folder_key", layout.BY_ALBUM) != self.folder_key:
+            return
+        # The extras are one-sided: asking for fewer files than last time still
+        # resumes, because the images are there and the extras merely linger.
+        # Asking for one the previous run did not record must not, or adding
+        # `--source-copy` to a finished destination would skip every file and
+        # report success having written none of them.
+        #
+        # A state file from before 1.2.0 has no key here, and every run before
+        # 1.2.0 wrote both -- so it is read as both, and such a destination
+        # still resumes whatever is asked of it. `is_done` then checks the
+        # recorded paths are on disk, which those runs recorded.
+        stored = raw.get("extras", list(EXTRA_NAMES))
+        if not set(self.extras).issubset(set(stored)):
             return
         done = raw.get("done")
         if isinstance(done, dict):
@@ -251,6 +271,7 @@ class RunState:
             "spec_labels": self.spec_labels,
             "name_template": self.name_template,
             "folder_key": self.folder_key,
+            "extras": list(self.extras),
             "tool_version": __version__,
             "updated": now_iso(),
             "done": self.done,

@@ -22,7 +22,7 @@ from fpx_converter.naming import (
         # Exactly one suffix comes off. Doubled extensions are real distinct
         # files in this corpus and must not collapse into their single-suffix
         # twin.
-        ("DCP00247.fpx.fpx", "DCP00247.fpx"),
+        ("DCP12345.fpx.fpx", "DCP12345.fpx"),
         ("no-extension", "no-extension"),
         ("a.tif", "a.tif"),
     ],
@@ -66,8 +66,8 @@ def test_human_authored_names(filename: str) -> None:
 
 
 def test_doubled_extension_is_not_treated_as_camera_generated() -> None:
-    """The stem is `DCP00247.fpx`, which is not bare-prefix-plus-digits."""
-    assert not is_camera_generated("DCP00247.fpx.fpx")
+    """The stem is `DCP12345.fpx`, which is not bare-prefix-plus-digits."""
+    assert not is_camera_generated("DCP12345.fpx.fpx")
 
 
 class TestSourceLocation:
@@ -160,8 +160,8 @@ class TestAssignStoreNames:
         assert len({n.lower() for n in names.values()}) == 2
 
     def test_doubled_extension_keeps_its_inner_suffix(self) -> None:
-        names = assign_store_names([("aa" * 32, "DCP00247.fpx.fpx")])
-        assert names["aa" * 32] == "DCP00247.fpx.fpx"
+        names = assign_store_names([("aa" * 32, "DCP12345.fpx.fpx")])
+        assert names["aa" * 32] == "DCP12345.fpx.fpx"
 
     def test_a_suffixed_name_that_is_itself_taken_still_resolves(self) -> None:
         """A single fallback is not enough.

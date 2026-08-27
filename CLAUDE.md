@@ -60,6 +60,15 @@ destination);
 format and framing are independent: `--archive-format`, `--archive-framing`,
 `--sharing-format`, `--sharing-framing`, `--no-archive`, `--no-sharing`.
 
+A run writes only the images it was asked for; `--source-copy` and `--sidecar`
+add the `.fpx` copy and the `.fpx.json` raw-property dump, both off by default.
+`--folder-scheme album|year|year-month|flat|custom` shapes the output tree
+(`custom` reads `--folder-template`, e.g. `{year}/{album}`), and
+`--name-template` sets the filename, defaulting to
+`{year}-{month}-{day}_{time}_{name}`. A filename pattern must contain `{name}`;
+a folder pattern may use only `{year}`, `{month}` and `{album}`. Both are
+validated once before a run, and changing either invalidates a resume.
+
 `scan` takes `--source` to override `FPX_SOURCE_ROOT` without a `.env`.
 Both `--manifest` and `--dest` refuse any path inside the source root — the
 read-only rule is enforced in code, not left to the caller. The batch engine
@@ -174,14 +183,19 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
       a build that fails must not leave a published release with nothing in
       it. Cancellation needed two mechanisms rather than one; see
       `DECISIONS.md`.
-- [ ] **1.2.0 — Names, folders, and what a run writes.** Post-1.1.0 work
+- [x] **1.2.0 — Names, folders, and what a run writes.** Post-1.1.0 work
       driven by Stevie running the packaged application: ExifTool no longer
       opens a console window per photograph, the unreadable dropdowns are
       fixed, the app's six output controls became three exclusive choices,
       the `.fpx` copy and the sidecar became opt-in, and both the filename and
       the folder arrangement became user-definable — `--name-template`,
       `--folder-scheme`, `--folder-template`, with a live two-photograph
-      preview in the window. Twelve properties verified by mutation.
+      preview in the window. **Shipped 2026-08-27.** 16 rules are verified by
+      `scripts/mutation_check.py`, which breaks each one and requires the test
+      named for it to fail. Pre-release audit found two real bugs — adding
+      `--source-copy` to a finished destination wrote nothing, and a new
+      trailing-character strip changed the default filename — both fixed before
+      the tag.
 
 Two wants from the original requirements changed after the milestone-0
 inventory measured the corpus: the **audio-extraction want is CLOSED** (zero

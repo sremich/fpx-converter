@@ -45,7 +45,7 @@ What exists:
   self-contained file with no server or build step. Where capture dates are missing,
   the gallery offers a date-entry interface; dates you type come back out as
   `album-dates.json`, which `convert` reads and writes to EXIF `DateTimeOriginal`.
-- **603 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
+- **837 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
   over 40 committed person-free fixtures covering both colour spaces, one
   viewing-transform crop, and six of seven declared sizes, including mutation
   tests for the colour oracle.
@@ -148,13 +148,40 @@ and the run exits non-zero.
 
 ### Convert
 
-Pick what to write:
-- **Archive copy:** the one to keep. Lossless TIFF, every pixel the camera captured.
-- **Shareable copy:** the one to send. JPEG, cropped as it was framed in the original
-  software (if it was cropped).
+Pick one of three, and only one:
+- **Archive copy — TIFF, whole photo.** The one to keep. Lossless, every pixel the
+  camera captured.
+- **Shareable copy — JPEG, cropped.** The one to send people. Opens anywhere, cropped
+  as it was framed in the original software (if it was cropped).
+- **Custom — you choose.** Any combination of format and framing, either tree or both,
+  plus two extra files per photograph if you want them: a copy of the original `.fpx`,
+  and `.fpx.json` holding every property the file carries.
 
-Each format is independent; you can write TIFF without JPEG or vice versa. The window
-offers independent cropping choices for each — "Whole photo" or "Cropped as framed."
+The two named choices write exactly one image per photograph and ask nothing else. The
+format and framing menus appear only under Custom.
+
+### Where they go, and what they are called
+
+Below that, two settings that apply whichever of the three you picked.
+
+**Folders.** By default the converted photos keep your own folder names — a folder
+somebody typed outranks any date the tool can work out. You can also file them by year,
+by year and month, all in one folder, or by a pattern of your own such as
+`{year}/{album}`.
+
+**Filenames.** By default each image is named like
+`2002-07-04_143210_Backyard.jpg` — as much of the date as the evidence supports, then
+the name from your archive. You can change the pattern: `{year}` `{month}` `{day}`
+`{date}` `{time}` `{name}` `{album}`, in any arrangement.
+
+`{name}` has to stay. Those filenames are the only thing in this kind of archive that a
+person wrote — there are no captions or titles anywhere else — so a pattern without it
+throws them away for good, and the Convert button stays greyed out until you put it back.
+
+Under both boxes you will see two example filenames, which update as you type. The second
+one matters: most of these photographs have no date recorded anywhere, so most of your
+filenames will be mostly zeros. That is the archive being honest, not the converter
+failing — and it is better to see it before six hundred files than after.
 
 Press **Convert**. You will see:
 - A progress bar (once the total count is known)
@@ -224,7 +251,7 @@ The tier-1 and tier-2 gates:
 # Lint
 C:\venvs\fpx\Scripts\python.exe -m ruff check .
 
-# Unit and e2e tests (tier 1 + tier 2: 603 tests, no real photos, no source archive)
+# Unit and e2e tests (tier 1 + tier 2: 837 tests, no real photos, no source archive)
 # Note: some tier-2 tests require ExifTool for metadata round-trip validation
 C:\venvs\fpx\Scripts\python.exe -m pytest
 ```

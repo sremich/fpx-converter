@@ -71,11 +71,11 @@ class TestNamingAndPrefixes:
     def test_preserves_single_fpx_in_doubled_extension_preferred_name(self) -> None:
         entry = {
             "albums": ["Sample"],
-            "preferred_name": "DCP00247.fpx.fpx",
+            "preferred_name": "DCP12345.fpx.fpx",
         }
         derived = {"timestamps": {}}
         rel_tif = writer.build_output_relpath(entry, derived, "tif")
-        assert rel_tif == Path("Sample") / "0000-00-00_000000_DCP00247.fpx.tif"
+        assert rel_tif == Path("Sample") / "0000-00-00_000000_DCP12345.fpx.tif"
 
 
 class TestExifToolArgBuilder:
@@ -161,8 +161,8 @@ class TestOutputNameCollisions:
         sha_b = "b" * 64
         stems = naming.assign_output_stems(
             [
-                (sha_a, "Holiday Trip 2001", "DCP00247.fpx"),
-                (sha_b, "Holiday Trip 2001", "DCP00247.fpx"),
+                (sha_a, "Holiday Trip 2001", "DCP12345.fpx"),
+                (sha_b, "Holiday Trip 2001", "DCP12345.fpx"),
             ]
         )
         assert stems[sha_a] != stems[sha_b]
@@ -205,9 +205,9 @@ class TestOutputNameCollisions:
 
     def test_distinct_relpaths_for_colliding_entries(self) -> None:
         derived = {"timestamps": {"datetime_original_exif": "2001:07:04 00:00:00"}}
-        entry = {"albums": ["Album"], "preferred_name": "DCP00247.fpx"}
-        first = writer.build_output_relpath(entry, derived, "tif", "DCP00247")
-        second = writer.build_output_relpath(entry, derived, "tif", "DCP00247_bbbbbbbb")
+        entry = {"albums": ["Album"], "preferred_name": "DCP12345.fpx"}
+        first = writer.build_output_relpath(entry, derived, "tif", "DCP12345")
+        second = writer.build_output_relpath(entry, derived, "tif", "DCP12345_bbbbbbbb")
         assert first != second
 
 

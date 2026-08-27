@@ -287,6 +287,13 @@ def _custom_folder(
         rendered = _FOLDER_FIELD_RE.sub(
             lambda m: name_template_mod.sanitise(values.get(m.group(1), "")), level
         ).strip()
+        # The template was checked for `..`; the values were not, and they come
+        # from the archive rather than from the person who typed the pattern.
+        # Not reachable from a manifest -- album names are single directory
+        # names -- but this is the one mistake the project cannot undo, so the
+        # check is on the thing that ends up in the path.
+        if rendered in (".", ".."):
+            continue
         if rendered:
             parts.append(rendered)
     return Path(*parts) if parts else Path(UNDATED_FOLDER)

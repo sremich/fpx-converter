@@ -32,9 +32,9 @@ _CAMERA_NAME = re.compile(r"^(?:dcp|dc|p)[\s_-]?\d+$", re.IGNORECASE)
 def strip_fpx_suffix(filename: str) -> str:
     """Drop exactly one trailing `.fpx`, preserving anything else.
 
-    Doubled extensions are NOT normalised away: `DCP00247.fpx` and
-    `DCP00247.fpx.fpx` are genuinely different pixels in this corpus, so the
-    stem of the latter is `DCP00247.fpx` and the two never collide.
+    Doubled extensions are NOT normalised away: `DCP12345.fpx` and
+    `DCP12345.fpx.fpx` are genuinely different pixels in this corpus, so the
+    stem of the latter is `DCP12345.fpx` and the two never collide.
     """
     if filename.lower().endswith(".fpx"):
         return filename[: -len(".fpx")]

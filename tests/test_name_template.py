@@ -32,12 +32,41 @@ def _render(template: str, ts: dict, name: str = "Backyard", album: str = "Album
 
 
 class TestTheShippedPatternIsWhatItAlwaysWas:
-    def test_the_default_reproduces_the_old_prefix_exactly(self) -> None:
+    #: Names that are awkward in a filename. The last two are the ones that
+    #: matter: a stem ending in a space or a dot is legal on Windows, because
+    #: the extension always follows it, and normalising either would rename
+    #: files relative to 1.1.0 and collapse two distinct source names into one.
+    AWKWARD = [
+        "Backyard",
+        "DCP12345",
+        "a.b.c",
+        "Beach ",
+        "X.",
+        "  leading",
+        "CON",
+    ]
+
+    @pytest.mark.parametrize("name", AWKWARD)
+    def test_the_default_reproduces_the_old_prefix_exactly(self, name: str) -> None:
         """Not "close enough" -- the same string, so nothing is renamed by
-        adding the feature."""
+        adding the feature.
+
+        Parametrised over the *name* as well as the timestamp. The first
+        version pinned `name="Backyard"` and so could not see that `render`
+        had started stripping trailing dots and spaces, which changed the
+        default path for exactly the names that needed it left alone.
+        """
         for ts in (DATED, YEAR_ONLY, NOTHING):
             prefix, _ = writer.format_date_prefix(ts)
-            assert _render(name_template.DEFAULT_TEMPLATE, ts) == f"{prefix}_Backyard"
+            assert _render(name_template.DEFAULT_TEMPLATE, ts, name=name) == (
+                f"{prefix}_{name}"
+            )
+
+    def test_two_names_differing_only_in_a_trailing_space_stay_apart(self) -> None:
+        """They are different photographs and must not resolve to one path."""
+        first = _render("{name}_{year}", NOTHING, name="Beach")
+        second = _render("{name}_{year}", NOTHING, name="Beach ")
+        assert first != second
 
     def test_an_unknown_component_is_zeroed_and_not_guessed(self) -> None:
         assert _render("{year}-{month}-{day}_{name}", YEAR_ONLY) == "2001-00-00_Backyard"
@@ -88,10 +117,16 @@ class TestWhatRenderingProtectsAgainst:
         assert "/" not in _render("{album}_{name}", NOTHING, album="Trip 1/2")
         assert "\\" not in _render("{album}_{name}", NOTHING, album="a\\b")
 
-    def test_a_trailing_dot_or_space_is_dropped(self) -> None:
-        """Windows drops them silently, which would merge two distinct names."""
-        assert _render("{name} ", NOTHING, name="a") == "a"
-        assert _render("{name}.", NOTHING, name="a") == "a"
+    def test_a_trailing_dot_or_space_is_kept(self) -> None:
+        """The first version dropped them, on the belief that Windows would
+        silently trim them anyway. It trims a trailing dot or space from the
+        end of a *path component*, and a stem is never the end of one -- the
+        extension always follows. `a .tif` and `a..tif` are both creatable and
+        both distinct, so dropping them renamed files relative to 1.1.0 and
+        merged two source names that differ only there."""
+        assert _render("{name} ", NOTHING, name="a") == "a "
+        assert _render("{name}.", NOTHING, name="a") == "a."
+        assert _render("{name}", NOTHING, name="a ") != _render("{name}", NOTHING, name="a")
 
 
 class TestTheFolderPattern:
@@ -174,6 +209,30 @@ class TestTheFolderPattern:
         for bad in ("../{album}", "{year}/../..", "..", "/{album}"):
             with pytest.raises(name_template.TemplateError):
                 layout.validate_folder_template(bad)
+
+    def test_a_value_that_renders_to_dot_dot_never_becomes_a_path_level(self) -> None:
+        """The pattern is validated; the values are not, and they come from the
+        archive rather than from the person who typed it.
+
+        Not reachable from a real manifest -- `manifest.py` records album names
+        as single parent-directory names, and no filesystem hands back `..` as
+        one. It is checked anyway on the thing that ends up in the path,
+        because a folder that walked upwards could put converted images inside
+        the read-only source archive, and that is the one mistake this project
+        cannot undo.
+        """
+        for hostile in ("..", ".", " .. "):
+            entry = {"albums": [hostile], "preferred_name": "x.fpx"}
+            folder = layout.output_folder(
+                entry, {"timestamps": {}}, layout.CUSTOM, "{album}"
+            )
+            assert ".." not in folder.parts, hostile
+            assert folder == Path(layout.UNDATED_FOLDER), hostile
+
+        # And it must not swallow a level that merely contains dots.
+        entry = {"albums": ["a..b"], "preferred_name": "x.fpx"}
+        folder = layout.output_folder(entry, {"timestamps": {}}, layout.CUSTOM, "{album}")
+        assert folder == Path("a..b")
 
     def test_an_empty_folder_pattern_is_refused_rather_than_silently_flat(self) -> None:
         with pytest.raises(name_template.TemplateError):

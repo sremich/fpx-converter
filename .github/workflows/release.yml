@@ -162,6 +162,26 @@ jobs:
             --dest smoke/out --limit 2
           test -f smoke/out/audit_report.json
 
+          # And that the bundle honours the naming and folder patterns, which
+          # are new modules reached through new flags. A packaging problem in
+          # either would not fail the run -- it would quietly put the files
+          # somewhere other than where they were asked for.
+          ./dist/fpx-converter.exe --run-cli convert \
+            --manifest smoke/m.json --store tests/fixtures \
+            --dest smoke/named --limit 1 --no-sharing \
+            --folder-scheme flat --name-template '{name}'
+          found="$(find smoke/named/archive -name '*.tif')"
+          test "$(echo "$found" | wc -l)" -eq 1
+          case "$found" in
+            smoke/named/archive/*/*)
+              echo "flat scheme still made a subfolder: $found" >&2; exit 1;;
+          esac
+          case "$(basename "$found")" in
+            [0-9][0-9][0-9][0-9]-*)
+              echo "a date prefix survived a pattern that never asked for one: $found" >&2
+              exit 1;;
+          esac
+
       - name: Hand the executable to the release job
         uses: actions/upload-artifact@v4
         with:

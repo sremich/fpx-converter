@@ -380,7 +380,7 @@ class MainWindow(QMainWindow):
         },
     )
     _PREVIEW_UNDATED = (
-        {"albums": ["Pictures"], "preferred_name": "DCP00247.fpx"},
+        {"albums": ["Pictures"], "preferred_name": "DCP12345.fpx"},
         {"timestamps": {}},
     )
 

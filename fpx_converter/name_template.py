@@ -172,9 +172,12 @@ def render(
 
     stem = _FIELD_RE.sub(lambda m: values.get(m.group(1), ""), template)
 
-    # Windows drops trailing dots and spaces silently, which would turn two
-    # distinct names into one file.
-    stem = stem.strip().rstrip(". ")
+    # Deliberately not stripped. Windows trims a trailing dot or space from the
+    # end of a path component, and a stem is never the end of one -- the
+    # extension always follows -- so `Beach .tif` and `X..tif` are creatable
+    # and distinct. Normalising them would rename files relative to 1.1.0 and
+    # would collapse two source names that differ only there, which is the same
+    # mistake as normalising a doubled `.fpx` extension.
     if stem.split(".")[0].lower() in _RESERVED:
         stem = f"{stem}_"
     return stem or sanitise(name) or "image"

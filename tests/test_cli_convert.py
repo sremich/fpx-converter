@@ -372,3 +372,62 @@ class TestPatternsAndResume:
         assert code == 1
         assert ".." in capsys.readouterr().err
         assert not list(dest.rglob("*.tif"))
+
+
+class TestAskingForMoreThanLastTime:
+    """Adding `--source-copy` to a finished destination has to do something.
+
+    The resume key covered the output specs, the filename pattern and the
+    folder arrangement, but not the two flags that decide whether the extras
+    exist. A second run asking for them found every image already on disk,
+    skipped every file, and reported success having written none of what it
+    was asked for -- exit 0, clean audit report, nothing in the log.
+    """
+
+    def test_adding_the_extras_to_a_finished_destination_writes_them(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        manifest, dest = converted
+        _convert(manifest, dest)
+        assert not list(dest.rglob("*.fpx"))
+
+        _convert(manifest, dest, *EXTRAS)
+        assert len(list(dest.rglob("*.fpx"))) == SAMPLE, "the source copies never appeared"
+        assert len(list(dest.rglob("*.fpx.json"))) == SAMPLE, "the sidecars never appeared"
+
+    def test_asking_for_one_extra_is_enough_to_redo_the_work(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        manifest, dest = converted
+        _convert(manifest, dest)
+        _convert(manifest, dest, "--sidecar")
+        assert _report(dest)["counts"]["converted"] == SAMPLE
+        assert len(list(dest.rglob("*.fpx.json"))) == SAMPLE
+        assert not list(dest.rglob("*.fpx")), "a copy nobody asked for was written"
+
+    def test_asking_for_fewer_still_resumes(self, converted: tuple[Path, Path]) -> None:
+        """One-sided on purpose. Dropping a flag is not a failure to produce
+        anything: the images are there and the extras merely linger, so making
+        it redo the whole batch would cost time and buy nothing."""
+        manifest, dest = converted
+        _convert(manifest, dest, *EXTRAS)
+        _convert(manifest, dest)
+        assert _report(dest)["counts"]["resumed"] == SAMPLE
+        assert _report(dest)["counts"]["converted"] == 0
+
+    def test_a_state_file_from_before_the_key_existed_still_resumes(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        """Every run before 1.2.0 wrote both extras and recorded their paths,
+        so a state file with no `extras` key is read as having written both --
+        and such a destination resumes whatever is asked of it."""
+        manifest, dest = converted
+        _convert(manifest, dest, *EXTRAS)
+
+        state_path = dest / batch.STATE_FILENAME
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        del state["extras"]
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        _convert(manifest, dest, *EXTRAS)
+        assert _report(dest)["counts"]["resumed"] == SAMPLE

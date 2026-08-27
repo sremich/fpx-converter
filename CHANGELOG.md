@@ -6,7 +6,7 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
-## [Unreleased]
+## [1.2.0] — 2026-08-27
 
 ### Changed
 - **A photograph now produces only the images you asked for.** The `.fpx`
@@ -40,6 +40,12 @@ commit, then tag.
   `year`, `year-month`, `flat`, or `custom` with `--folder-template`. A folder
   pattern uses `/` between levels and the three fields a folder can answer for:
   `{year}`, `{month}`, `{album}`.
+- **`scripts/mutation_check.py`.** Breaks 16 load-bearing rules on purpose and
+  requires the test named for each one to go red — a rule that cannot be broken
+  without a test noticing is a rule with evidence behind it. It refuses to score
+  a red run that names no failing test, because the first version of it passed
+  `--timeout` to a virtualenv without `pytest-timeout` and reported nine catches
+  it had not made.
 - **A live preview in the app, showing two photographs.** The second is the
   point: most of this kind of archive has no date anywhere in it, so somebody
   choosing a pattern meets the zeros in the preview rather than in six hundred
@@ -61,6 +67,21 @@ commit, then tag.
   the same run: `run-state.json` records both patterns, and a change invalidates
   the resume exactly as a changed output spec already did. Without it a tree
   would end up half in each shape with nothing recording which was which.
+- **Adding `--source-copy` to a finished destination did nothing at all.**
+  Found by pre-release audit. The resume key covered the output specs and both
+  patterns but not the two flags that decide whether the extras exist, so the
+  second run found every image on disk, skipped every file, and reported
+  success having written none of what it was asked for. The key now includes
+  them, one-sidedly: asking for fewer files than last time still resumes,
+  because the images are there and the extras merely linger.
+- **The default filename was not byte-for-byte what 1.1.0 wrote.** Also found
+  by pre-release audit. A new trailing-dot-and-space strip changed the name of
+  any file whose stem ended in one, and collapsed two source names differing
+  only there into a single path — one photograph recorded as failed where 1.1.0
+  converted both. The strip was wrong in the first place: Windows trims those
+  characters from the end of a path component, and a stem is never the end of
+  one, because the extension always follows it. No file in the 687-entry corpus
+  was affected; the exposure was other people's archives.
 
 ## [1.1.0] — 2026-08-27
 

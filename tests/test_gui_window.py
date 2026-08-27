@@ -412,7 +412,7 @@ class TestTheNamingAndFolderControls:
         meet the zeros in the preview, not in six hundred filenames."""
         source, dest = folders
         _fill(window, source, dest)
-        assert "0000-00-00_000000_DCP00247" in window.name_preview.text()
+        assert "0000-00-00_000000_DCP12345" in window.name_preview.text()
 
     def test_a_pattern_that_drops_the_filename_disables_convert(self, window, folders) -> None:  # noqa: ANN001
         source, dest = folders

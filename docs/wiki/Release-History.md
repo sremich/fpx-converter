@@ -2,8 +2,8 @@
 
 One entry per release, added as part of the `/release` checklist. Each entry
 says what the release contains and — more usefully — **what it is safe to be
-trusted for**, because until 1.0.0 every release is a pre-release that has
-not been verified against the full dataset.
+trusted for**. Everything before 1.0.0 was a pre-release that had not been
+verified against the full dataset; 1.0.0 onwards are full releases.
 
 See [`CHANGELOG.md`](../../CHANGELOG.md) for the itemised change list.
 
@@ -11,12 +11,107 @@ See [`CHANGELOG.md`](../../CHANGELOG.md) for the itemised change list.
 
 | Tier | What it proves | Passing as of |
 |---|---|---|
-| 1. Unit | Parsers, reassembly, timestamp and naming logic, batch engine, resume state, audit reporting, output control, mutation tests for colour oracle | 0.6.0 — 603 tests covering all code paths that exist |
-| 2. e2e | Full pipeline over 40 committed person-free fixtures covering both colour spaces, the crop path, and six of seven declared sizes | 0.6.0 — scan through convert on both archive and sharing trees, pixel decoding with PhotoYCC coverage, metadata embedding, pyexiv2 read-back validation on both TIFF and JPEG, colour oracle mutation tests |
-| 3. Sample batch | 50 real files spanning all 16 albums, all 7 declared sizes, both colour spaces, all four transform outcomes, and both embedded film scans | 0.4.0 — 50/50 converted, 0 failures, independent pyexiv2 pass over both containers found 0 violations |
-| 4. Full dataset | Unattended batch run over the whole corpus with audit report, plus an eyeball pass for colour on the PhotoYCC files | *not yet reached — gates 1.0.0* |
+| 1. Unit | Parsers, reassembly, timestamp and naming logic, batch engine, resume state, audit reporting, output control, filename and folder patterns, the desktop front end's Qt-free half, mutation tests for the colour oracle | 1.2.0 — 837 tests, plus `scripts/mutation_check.py`, which breaks 16 load-bearing rules on purpose and requires the test named for each to go red |
+| 2. e2e | Full pipeline over 40 committed person-free fixtures covering both colour spaces, the crop path, and six of seven declared sizes; the desktop front end driving a real child process, cancellation included | 1.2.0 — scan through convert on both trees, pixel decoding with PhotoYCC coverage, metadata embedding, pyexiv2 read-back on both TIFF and JPEG, colour oracle mutation tests |
+| 3. Sample batch | Real files spanning every album, every declared size, both colour spaces and all four transform outcomes | 1.2.0 — 64/64 converted clean, 0 pyexiv2 violations, worst chroma correlation 0.739 against a gate of 0.5, thumbnail oracle improved on 9 of 9 cropped files |
+| 4. Full dataset | Unattended batch run over the whole corpus with audit report, plus an eyeball pass for colour on the PhotoYCC files | 1.0.0 — the batch half passed (687/687, `complete: true`, `unexplained_failures: 0`). **The eyeball half has never been done**; it is a standing recommendation rather than a release gate, which was a deliberate decision |
 
 ## Releases
+
+### 1.2.0 (release)
+
+**What it contains:** The first release driven by somebody running the packaged
+application rather than the test suite, and it shows in what it fixes. ExifTool
+no longer opens a console window for every photograph — a 687-file run flashed
+687 of them. The desktop app's dropdown menus, which had been rendering their
+text in a colour that vanished against the field, are readable.
+
+Three changes to what a run does. A conversion now writes only the images asked
+for: the `.fpx` source copy and the `.fpx.json` sidecar became `--source-copy`
+and `--sidecar`, off by default, where before every photograph produced four
+files. The app offers three exclusive choices — Archive copy, Shareable copy,
+Custom — instead of two checkboxes and four menus, and `Start over` is gone.
+And both the output folders and the filenames are now user-definable:
+`--folder-scheme album|year|year-month|flat|custom` with `--folder-template`,
+and `--name-template` over the fields `{year} {month} {day} {date} {time}
+{name} {album}`. The window shows a live preview of two photographs — one an
+album dated, one with nothing to date it — built by calling the same function
+the conversion calls.
+
+**What it is safe to trust for:**
+- Everything 1.1.0 was, with the same defaults: an unchanged default filename
+  (verified byte-for-byte against the old expression over all 687 manifest
+  entries and over a set of deliberately awkward names) and an unchanged
+  default folder layout
+- Filing photographs by year, by year and month, flat, or by your own pattern,
+  with output names unique by construction in every scheme
+- A refusal, before a run starts, of any pattern that would lose the archive's
+  filenames or put files outside the destination
+- Resuming: a change to the output specs, the filename pattern, the folder
+  arrangement, or a request for a file the previous run did not write all
+  invalidate the resume rather than silently skipping
+
+**What does NOT work:** The tier-4 eyeball pass on the two PhotoYCC files is
+still outstanding, unchanged from 1.0.0. The console-window and dropdown fixes
+are the two things in this release that no test can cover — both were found by
+running the application, and confirming them needs the application run again.
+
+**Verification:** Tiers 1, 2 and 3 passing, plus `scripts/mutation_check.py`
+green over 16 mutations. Tier 3 was a trigger for this release (it touches the
+output writer, the batch engine and output naming) and ran: 64 files, 64 clean,
+0 pyexiv2 violations. Two bugs found by pre-release audit and fixed before the
+tag: adding `--source-copy` to a finished destination wrote nothing at all, and
+a new trailing-character normalisation changed the default filename for names
+ending in a dot or a space.
+
+### 1.1.0 (release)
+
+**What it contains:** A desktop application, shipped as one standalone Windows
+executable — no Python, no `pip`, no terminal. Two folder pickers, output
+controls, Convert and Cancel, a progress bar following the real per-file trail,
+a log pane, and a plain-language summary read back from `audit_report.json`.
+It wraps the CLI rather than reimplementing it: every conversion is
+`fpx_converter` running as a child process with the arguments a person would
+have typed. New CLI hooks a front end needs: `convert --progress` and
+`convert --stop-file PATH`.
+
+**What it is safe to trust for:**
+- Converting an archive without touching a terminal, on a machine with nothing
+  installed but ExifTool
+- Cancelling a run and still getting an audit report describing what was done
+- The read-only source rule reaching the front end as a *call* to
+  `config.ensure_outside_source`, not a second copy of the check — replace it
+  with a local copy and exactly two tests fail, a count measured by mutation
+
+**What does NOT work:** The tier-4 eyeball pass, unchanged from 1.0.0.
+
+**Verification:** Tiers 1 and 2 passing, including the front end driving a real
+child process and a cancellation that must still leave a report. The release
+workflow builds the executable and **converts two fixtures through it** before
+creating the release — a `--version` call cannot see a missing `pyexiv2`
+binary. Two full `code-auditor` rounds, 19 findings, all closed.
+
+### 1.0.0 (release)
+
+**What it contains:** The whole archive converted in one unattended pass. 687
+converted, 0 failed, 0 with warnings, `complete: true`,
+`unexplained_failures: 0`, in 641 seconds.
+
+**What it is safe to trust for:**
+- The pipeline over a full real corpus rather than a sample. Every predicted
+  number matched what the run produced: 70 cropped outputs, 609/56/22 transform
+  outcomes, 617/68/2 date sources
+- The pixel-identical-pairs estimate replaced by a measurement — 251 files in
+  120 groups, reported as expected duplicates and not as faults
+
+**What does NOT work:** The tier-4 eyeball pass — two PhotoYCC files opened in
+a real photo application and looked at by a person. It gated releases until
+this one, and rather than keep a rule the releases were stepping over, the rule
+was removed deliberately. It is still worth doing, and it has still not been
+done.
+
+**Verification:** Tiers 1, 2 and 3 passing; the automated half of tier 4
+passing over all 687 files. The eyeball half outstanding, knowingly.
 
 ### 0.6.0 (pre-release)
 

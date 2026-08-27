@@ -351,6 +351,16 @@ def _stop_requested(path: Path, since: float) -> bool:
         return False
 
 
+def _extras_asked_for(args: argparse.Namespace) -> tuple[str, ...]:
+    """The opt-in non-image outputs this run wants, for the resume key."""
+    wanted = []
+    if args.source_copy:
+        wanted.append("source_copy")
+    if args.sidecar:
+        wanted.append("sidecar")
+    return tuple(wanted)
+
+
 def _folder_key(args: argparse.Namespace) -> str:
     """One string naming how this run arranges its folders.
 
@@ -445,6 +455,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
         specs,
         args.name_template,
         _folder_key(args),
+        _extras_asked_for(args),
     )
     if args.no_resume:
         state.done.clear()
