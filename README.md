@@ -104,7 +104,7 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --no-archive --sharing-
 # Convert with a fresh start (ignore prior run's state)
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --no-resume
 
-# Build the QA gallery from a completed run
+# Build the QA gallery from a completed run (writes <output-root>/report/index.html)
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter gallery
 
 # Open the gallery page, fill in missing dates, save as album-dates.json, re-run convert
@@ -184,7 +184,7 @@ After running `convert`, build an HTML review page with `gallery`:
 
 ```powershell
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter gallery
-# writes report/index.html
+# writes <output-root>/report/index.html (output/report/index.html by default)
 ```
 
 The gallery shows:
@@ -196,7 +196,7 @@ The gallery shows:
 - Failed files outlined in red so they stand out
 - Albums holding undated photographs with a date-entry box beside each one
 
-Open `report/index.html` in a browser, enter dates you know in YYYY-MM-DD format,
+Open `output/report/index.html` in a browser, enter dates you know in YYYY-MM-DD format,
 and save the JSON it generates as `album-dates.json` (placed beside the manifest by default).
 Then re-run `convert`:
 

@@ -21,6 +21,8 @@ the family timeline.
 | Document | What it holds | Committed? |
 |---|---|---|
 | [`README.md`](../../README.md) | What it is, install, usage, batch artifacts, current status | yes |
+| [Usage](Usage.md) | Step-by-step walkthrough of every command, its flags, and the artifacts a run produces | yes |
+| [Troubleshooting](Troubleshooting.md) | Common failure symptoms, their real cause, and what to do about them | yes |
 | [`docs/REQUIREMENTS.md`](../REQUIREMENTS.md) | The full requirements, with every starting hypothesis marked confirmed or refuted | yes |
 | [`CLAUDE.md`](../../CLAUDE.md) | Working notes: commands, testing tiers, milestone plan, binding project rules | yes |
 | [`DECISIONS.md`](../../DECISIONS.md) | Append-only record of decisions and hard-won lessons | yes |
