@@ -272,3 +272,35 @@ class TestDualImageSaving:
         writer.save_dual_images(self._decoded(None), tif, jpg)
         with Image.open(tif) as t_im:
             assert t_im.tag_v2.get(259) in (8, 32946)
+
+
+def test_an_over_long_output_path_is_a_named_error_not_a_mystery(tmp_path) -> None:
+    """Windows long-path support is disabled on the machine this archive lives on.
+
+    The 0.5.0 tree gained a year level plus a most-descriptive album name, so
+    paths got longer. Past the limit the failure is an opaque
+    FileNotFoundError from inside a save, recorded as a generic per-file error
+    with nothing pointing at the cause. `CLAUDE.md` makes short paths a rule;
+    this is what enforces it.
+    """
+    from fpx_converter import writer as writer_mod
+
+    fixture = Path(__file__).parent / "fixtures" / "Clouds01.fpx"
+    deep = tmp_path / ("d" * 120) / ("e" * 120)
+    entry = {
+        "store_name": fixture.name,
+        "preferred_name": fixture.name,
+        "sha256": "0" * 64,
+        "albums": ["Sample"],
+        "preferred_relpath": fixture.name,
+    }
+    result = writer_mod.write_single_entry_dual_output(
+        fpx_path=fixture,
+        entry=entry,
+        output_root=deep,
+        source_root=fixture.parent.parent,
+        stem="x",
+        claimed=set(),
+    )
+    assert not result.validation_ok
+    assert any("characters" in e and "--dest" in e for e in result.errors), result.errors

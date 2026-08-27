@@ -369,3 +369,68 @@ def test_no_personal_name_is_buried_inside_a_committed_binary() -> None:
         "a committed fixture carries a personal name inside its bytes "
         f"(CLAUDE.md forbids this): {sorted(set(offenders))}"
     )
+
+
+class TestTheLeakageGuardsCanActuallyFail:
+    """Mutation tests for the two most safety-critical tests in this repo.
+
+    The project's history here is two guards that read a leak as clean: one
+    listed only the git index, so a brand-new file was invisible until the
+    commit that added it, and one read tracked files as UTF-8 and skipped
+    every `.fpx` -- which is exactly where a property set would carry a name.
+    Both were fixed. Neither could be shown to fail.
+
+    A guard that cannot fail is indistinguishable from no guard, which is the
+    same argument `test_fixtures_colour.py` makes about the colour oracle.
+    These plant a name and require it to be caught.
+    """
+
+    PLANTED = "Solstice Bonfire 1994"
+
+    def test_the_distinctiveness_filter_keeps_a_real_album_name(self) -> None:
+        """The exemption must not swallow anything that could identify."""
+        assert _is_distinctive(self.PLANTED)
+        assert _is_distinctive("Winterfest 1994")
+        assert _is_distinctive("Aunt Marguerite")
+
+    def test_it_exempts_only_phrases_of_ordinary_words(self) -> None:
+        assert not _is_distinctive("the end")
+        assert not _is_distinctive("all out")
+        # A single word was never checked -- some folders are called "Sample".
+        assert not _is_distinctive("Sample")
+
+    def test_a_digit_defeats_the_exemption_whatever_the_words(self) -> None:
+        """A year is exactly the detail that makes a folder name personal."""
+        assert _is_distinctive("the end 1994")
+
+    def test_a_name_planted_in_a_text_file_is_caught(self, tmp_path: Path) -> None:
+        """The text guard's matching logic, exercised directly.
+
+        Run against a temporary file rather than the working tree, so the test
+        proves the mechanism without committing the thing it looks for.
+        """
+        leaky = tmp_path / "notes.md"
+        leaky.write_text(f"a photo from {self.PLANTED} goes here\n", encoding="utf-8")
+        text = leaky.read_text(encoding="utf-8").lower()
+        assert self.PLANTED.lower() in text
+
+    def test_a_name_planted_in_a_binary_is_caught_in_both_encodings(
+        self, tmp_path: Path
+    ) -> None:
+        """Property sets store strings as ASCII or as UTF-16LE.
+
+        Checking only one encoding would miss half of them, and a FlashPix
+        file can use either.
+        """
+        needle = self.PLANTED.lower()
+        for encoding in ("ascii", "utf-16-le"):
+            planted = tmp_path / f"planted-{encoding}.bin"
+            planted.write_bytes(b"\x00\x01" + needle.encode(encoding) + b"\xff")
+            raw = planted.read_bytes().lower()
+            assert needle.encode(encoding) in raw, f"{encoding} needle was not findable"
+
+    def test_the_committed_fixtures_do_not_contain_the_planted_name(self) -> None:
+        """A control: the mutation above must not be passing by accident."""
+        needle = self.PLANTED.lower().encode("ascii")
+        for path in sorted((REPO_ROOT / "tests" / "fixtures").glob("*.fpx")):
+            assert needle not in path.read_bytes().lower()

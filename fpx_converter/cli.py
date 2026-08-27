@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__, batch, config, decoder, layout, naming, outputs, scan
+from . import __version__, batch, config, decoder, gallery, layout, naming, outputs, scan
+from . import album_dates as album_dates_mod
 from . import ingest as ingest_mod
 from . import manifest as manifest_mod
 from . import metadata as metadata_mod
@@ -316,6 +318,16 @@ def cmd_convert(args: argparse.Namespace) -> int:
     dest = config.ensure_outside_source(output_base, source_root, "conversion destination")
 
     try:
+        supplied = album_dates_mod.load(_album_dates_path(args, manifest_path))
+    except album_dates_mod.AlbumDateError as exc:
+        # Refused, not ignored. Somebody wrote this file down deliberately;
+        # dropping it silently would lose exactly the evidence it carries.
+        print(f"album dates: {exc}", file=sys.stderr)
+        return 1
+    if supplied:
+        print(f"  album dates supplied for {len(supplied.dates)} albums")
+
+    try:
         specs = outputs.build_specs(
             archive=not args.no_archive,
             sharing=not args.no_sharing,
@@ -355,6 +367,12 @@ def cmd_convert(args: argparse.Namespace) -> int:
         state.done.clear()
 
     records: list[batch.FileRecord] = []
+    # Paths this run must not write over. Files that are *skipped* add theirs
+    # as they are skipped (see `_handle_entry`), so the guard still sees a
+    # collision with something an earlier run wrote. Pre-seeding it from the
+    # whole state instead was wrong in a way only a test caught: a file whose
+    # output had been deleted was correctly chosen for re-conversion and then
+    # refused permission to rewrite its own path.
     claimed: set[Path] = set()
     started, t0 = batch.now_iso(), time.time()
     interrupted = False
@@ -362,63 +380,36 @@ def cmd_convert(args: argparse.Namespace) -> int:
     with batch.ConversionLog(dest / batch.LOG_FILENAME) as log:
         labels = ", ".join(s.label for s in specs)
         log.write(f"=== run start: {len(entries)} entries, outputs {labels}")
-        for index, entry in enumerate(entries, start=1):
-            sha = entry["sha256"]
-            store_name = entry["store_name"]
-            album = layout.choose_album(entry)
-
-            if state.is_done(sha, dest):
-                stored = state.recall(sha)
-                records.append(
-                    batch.record_from_json(stored)
-                    if stored
-                    else batch.FileRecord(
-                        sha256=sha, store_name=store_name, album=album, status="resumed"
-                    )
-                )
-                continue
-
-            try:
-                record = _convert_one(
+        # The whole loop, not just the conversion. The handler used to wrap
+        # `_convert_one` alone, so a Ctrl-C landing in `state.save()` or in a
+        # log write escaped and no audit report was written -- which is the
+        # opposite of what an interruptible batch engine is for.
+        try:
+            for index, entry in enumerate(entries, start=1):
+                record = _handle_entry(
                     entry=entry,
+                    index=index,
+                    total=len(entries),
+                    state=state,
+                    log=log,
                     store_dir=store_dir,
                     source_root=source_root,
                     dest=dest,
-                    stem=stems.get(sha),
+                    stems=stems,
                     claimed=claimed,
                     specs=specs,
-                    album=album,
+                    supplied=supplied,
                 )
-            except KeyboardInterrupt:
-                interrupted = True
-                log.write("INTERRUPTED by the operator")
-                break
-            except Exception as exc:  # noqa: BLE001
-                # The whole point of the engine: one bad file is a line in the
-                # report, not the end of the run over an irreplaceable archive.
-                record = batch.FileRecord(
-                    sha256=sha,
-                    store_name=store_name,
-                    album=album,
-                    status="failed",
-                    errors=[f"{type(exc).__name__}: {exc}"],
-                )
+                records.append(record)
+        except KeyboardInterrupt:
+            interrupted = True
+            log.write("INTERRUPTED by the operator")
 
-            records.append(record)
-            if record.status == "converted":
-                state.mark(sha, record)
-                state.save()
-                log.write(
-                    f"OK   [{index}/{len(entries)}] {store_name} -> "
-                    f"{len(record.outputs)} files in {record.seconds:.1f}s"
-                )
-            else:
-                log.write(
-                    f"FAIL [{index}/{len(entries)}] {store_name}: "
-                    f"{'; '.join(record.errors)}"
-                )
-            for warning in record.warnings:
-                log.write(f"WARN {store_name}: {warning}")
+        # Always leave a state file behind, even for a run where nothing
+        # converted. A destination with a report but no state reads as though
+        # the bookkeeping were lost, and the next run cannot tell an empty
+        # state from a missing one.
+        state.save()
 
         report = batch.build_audit_report(
             records,
@@ -427,6 +418,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
             started=started,
             elapsed=batch.elapsed_since(t0),
             total_entries=len(entries),
+            manifest_entries=len(all_entries),
             interrupted=interrupted,
         )
         batch.write_audit_report(report, dest / batch.REPORT_FILENAME)
@@ -445,6 +437,87 @@ def cmd_convert(args: argparse.Namespace) -> int:
             )
         return 2
     return 1 if interrupted else 0
+
+
+def _handle_entry(
+    *,
+    entry: dict[str, Any],
+    index: int,
+    total: int,
+    state: batch.RunState,
+    log: batch.ConversionLog,
+    store_dir: Path,
+    source_root: Path,
+    dest: Path,
+    stems: dict[str, str],
+    claimed: set[Path],
+    specs: tuple[outputs.OutputSpec, ...],
+    supplied: album_dates_mod.AlbumDates,
+) -> batch.FileRecord:
+    """One manifest entry: resume it, convert it, or record why it failed.
+
+    Never raises for a bad file. `KeyboardInterrupt` is deliberately allowed
+    through -- the caller stops the run and still writes the report.
+    """
+    sha = entry["sha256"]
+    store_name = entry["store_name"]
+    album = layout.choose_album(entry)
+
+    if state.is_done(sha, dest):
+        stored = state.recall(sha)
+        record = (
+            batch.record_from_json(stored)
+            if stored
+            else batch.FileRecord(
+                sha256=sha, store_name=store_name, album=album, status="resumed"
+            )
+        )
+        # A skipped file still owns its paths. Without this the collision
+        # guard could not see a clash with something an earlier run wrote,
+        # and silently overwriting a converted photograph is exactly the
+        # failure it exists to prevent.
+        claimed.update(dest / rel for rel in record.outputs)
+        return record
+
+    try:
+        record = _convert_one(
+            entry=entry,
+            store_dir=store_dir,
+            source_root=source_root,
+            dest=dest,
+            stem=stems.get(sha),
+            claimed=claimed,
+            specs=specs,
+            album=album,
+            album_dates=supplied,
+        )
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # The whole point of the engine: one bad file is a line in the report,
+        # not the end of a run over an irreplaceable archive.
+        record = batch.FileRecord(
+            sha256=sha,
+            store_name=store_name,
+            album=album,
+            status="failed",
+            errors=[f"{type(exc).__name__}: {exc}"],
+        )
+
+    if record.status == "converted":
+        # Marked only on success, so a failure is retried by the next run
+        # rather than remembered as done.
+        state.mark(sha, record)
+        state.save()
+        log.write(
+            f"OK   [{index}/{total}] {store_name} -> "
+            f"{len(record.outputs)} files in {record.seconds:.1f}s"
+        )
+    else:
+        log.write(f"FAIL [{index}/{total}] {store_name}: {'; '.join(record.errors)}")
+    for warning in record.warnings:
+        log.write(f"WARN {store_name}: {warning}")
+    return record
 
 
 def _resolve_fpx_path(
@@ -467,6 +540,7 @@ def _convert_one(
     claimed: set[Path],
     specs: tuple[outputs.OutputSpec, ...],
     album: str,
+    album_dates: album_dates_mod.AlbumDates | None = None,
 ) -> batch.FileRecord:
     sha, store_name = entry["sha256"], entry["store_name"]
     fpx_path = _resolve_fpx_path(entry, store_dir, source_root)
@@ -488,8 +562,13 @@ def _convert_one(
         stem=stem,
         claimed=claimed,
         specs=specs,
+        album_dates=album_dates,
     )
+    # Everything this entry put on disk, images and source copy alike. The
+    # resume check tests all of them, so a deleted sidecar brings the file
+    # back rather than being skipped as done.
     relpaths = [str(path.relative_to(dest)) for path, _ in res.written]
+    relpaths += [str(path.relative_to(dest)) for path in res.side_artifacts]
 
     pixel_sha = None
     if res.validation_ok and res.written:
@@ -507,6 +586,7 @@ def _convert_one(
         status="converted" if res.validation_ok else "failed",
         date_source=res.date_source,
         is_undated=res.is_undated,
+        date_original=res.date_original,
         transform_status=res.transform_status,
         crop_applied=res.crop_applied,
         outputs=relpaths,
@@ -533,6 +613,67 @@ def _convert_dry_run(
     if missing:
         print(f"  {missing} source files could not be found", file=sys.stderr)
         return 2
+    return 0
+
+
+def _album_dates_path(args: argparse.Namespace, manifest_path: Path) -> Path:
+    """Where the owner's album dates live.
+
+    Beside the manifest by default: it names albums, so it is local-only
+    working material like everything else that does.
+    """
+    explicit = getattr(args, "album_dates", None)
+    if explicit:
+        return Path(explicit)
+    return manifest_path.parent / album_dates_mod.DEFAULT_FILENAME
+
+
+def cmd_gallery(args: argparse.Namespace) -> int:
+    """Build the QA review page from a completed run."""
+    dest = Path(args.dest) if args.dest else (config.REPO_ROOT / "output")
+    report_path = Path(args.report) if args.report else dest / batch.REPORT_FILENAME
+    if not report_path.is_file():
+        print(
+            f"No audit report at {report_path} - run `convert` first.", file=sys.stderr
+        )
+        return 1
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
+    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+
+    try:
+        existing = album_dates_mod.load(_album_dates_path(args, manifest_path))
+    except album_dates_mod.AlbumDateError as exc:
+        print(f"album dates: {exc}", file=sys.stderr)
+        return 1
+
+    sidecar_dir = Path(args.sidecars) if args.sidecars else None
+    items = gallery.build_items(
+        report,
+        store_dir=store_dir,
+        sidecar_dir=sidecar_dir,
+        thumbnails=not args.no_thumbnails,
+    )
+    if not items:
+        print("The audit report lists no files.", file=sys.stderr)
+        return 1
+
+    default_out = config.REPO_ROOT / "report" / gallery.REPORT_FILENAME
+    out_path = Path(args.out) if args.out else default_out
+    gallery.write_gallery(
+        gallery.render_html(items, report=report, existing_dates=existing), out_path
+    )
+
+    needing = gallery.albums_needing_a_date(items)
+    size_mb = out_path.stat().st_size / (1024 * 1024)
+    print(f"Wrote {out_path} ({size_mb:.1f} MB, {len(items)} photos)")
+    print(f"  {len(gallery.group_by_album(items))} albums, {len(needing)} with no capture date")
+    if needing:
+        print(
+            "  Open it, fill in the dates you know, save the JSON it produces as "
+            f"{_album_dates_path(args, manifest_path)}, and re-run convert."
+        )
     return 0
 
 
@@ -661,7 +802,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not write the sharing tree; with the defaults this leaves only the "
              "full-frame lossless TIFF",
     )
+    p_conv.add_argument(
+        "--album-dates",
+        help="JSON file of album -> YYYY-MM-DD dates you supplied via the gallery "
+             "(default: album-dates.json beside the manifest)",
+    )
     p_conv.set_defaults(func=cmd_convert)
+
+    # 8. gallery
+    p_gal = sub.add_parser(
+        "gallery", help="build the QA review page from a completed run"
+    )
+    p_gal.add_argument("--dest", help="conversion output root (defaults to output/)")
+    p_gal.add_argument("--report", help="path to audit_report.json")
+    p_gal.add_argument("--manifest")
+    p_gal.add_argument("--store", help="path to the ingested .fpx store directory")
+    p_gal.add_argument("--sidecars", help="directory of .fpx.json sidecars, for dates")
+    p_gal.add_argument("--album-dates", help="JSON file of dates you already supplied")
+    p_gal.add_argument("--out", help="where to write the page (defaults to report/index.html)")
+    p_gal.add_argument(
+        "--no-thumbnails",
+        action="store_true",
+        help="skip the embedded thumbnails; much faster and much less useful",
+    )
+    p_gal.set_defaults(func=cmd_gallery)
 
     return parser
 

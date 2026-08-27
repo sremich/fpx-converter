@@ -20,14 +20,15 @@ the family timeline.
 
 | Document | What it holds | Committed? |
 |---|---|---|
-| [`README.md`](../../README.md) | What it is, install, usage, current status | yes |
+| [`README.md`](../../README.md) | What it is, install, usage, batch artifacts, current status | yes |
 | [`docs/REQUIREMENTS.md`](../REQUIREMENTS.md) | The full requirements, with every starting hypothesis marked confirmed or refuted | yes |
 | [`CLAUDE.md`](../../CLAUDE.md) | Working notes: commands, testing tiers, milestone plan, binding project rules | yes |
 | [`DECISIONS.md`](../../DECISIONS.md) | Append-only record of decisions and hard-won lessons | yes |
 | [`CHANGELOG.md`](../../CHANGELOG.md) | Keep-a-Changelog history | yes |
-| [Release history](Release-History.md) | Per-release notes and what each one is safe to be trusted for | yes |
+| [Release history](Release-History.md) | Per-release notes and what each one is safe to be trusted for, plus tier verification status | yes |
 | `HANDOVER.md` | Roaming agent context: environment map, machine state, session log | **no** — gitignored, local only |
 | `source-files/` | The archive copy, the inventory briefs, the original prompt | **no** — gitignored, local only |
+| [`tests/fixtures/README.md`](../../tests/fixtures/README.md) | Person-free test fixture set: what it covers, screening rule, holes in coverage | yes |
 
 ## The five things a newcomer gets wrong
 
@@ -43,14 +44,18 @@ inventory, and each has a full entry in [`DECISIONS.md`](../../DECISIONS.md).
    them as UTC and converting would move a fifth of the corpus onto the
    wrong calendar day.
 3. **The colour space is NIF RGB, not PhotoYCC** — on 1,261 of 1,265 files.
-   The colour-science work everyone budgets for mostly isn't there.
+   The colour-science work everyone budgets for mostly isn't there. The 2
+   PhotoYCC files have never been eyeballed for colour correctness; tier 4
+   covers those.
 4. **Pillow's `FpxImagePlugin` cannot be the pixel path.** It fails on 1,224
    of 1,265 files and hard-crashes the interpreter on two of them. The
    custom decoder is primary; the plugin is an out-of-process oracle.
 5. **Viewing transforms are real and now applied.** 22 files carry a genuine
    90° CCW rotation (now correctly applied to the output). 70 files resolve to
    a crop (56 axis-aligned, 14 rotated-and-cropped); the archival TIFF
-   preserves the full frame while the shareable JPEG applies the crop.
+   preserves the full frame while the shareable JPEG applies the crop. The
+   output tree follows source folder names, not dates, so the album
+   organization matches what the owner named, not what a timestamp says.
 
 ## Format notes worth keeping
 

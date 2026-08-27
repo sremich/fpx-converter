@@ -340,6 +340,22 @@ class TestCoarseAlbumOverride:
         bare_year = timestamps.parse_folder_date("1994")
         assert bare_year.defensible_date is None
 
+    def test_a_year_span_is_not_narrowed_to_its_first_year(self, monkeypatch) -> None:
+        """The one case where demotion could ADD precision.
+
+        `1994-95` covers two years. Rewriting it as "the year 1994" would be
+        the fabrication this whole mechanism exists to prevent, arriving
+        through the door meant to stop it. The demotion short-circuits on
+        anything already at year precision, and a span is.
+        """
+        self._with_coarse(monkeypatch, "1994-95")
+        before = timestamps._parse_folder_name("1994-95")
+        after = timestamps.parse_folder_date("1994-95")
+        assert after.date_kind == before.date_kind
+        assert after.start_date == before.start_date
+        assert after.end_date == before.end_date
+        assert after.defensible_date is None
+
     def test_an_unparseable_name_is_not_invented_into_a_year(self, monkeypatch) -> None:
         self._with_coarse(monkeypatch, "no date here")
         result = timestamps.parse_folder_date("No Date Here")

@@ -104,7 +104,15 @@ def _check_image_file(
                     )
 
     want = spec.expected_size(declared, crop_box)
-    if want is not None and size != tuple(want):
+    if want is None:
+        # A check that silently does not run is worse than no check: it makes
+        # an unverified file indistinguishable from a verified one, and this
+        # is the only automated proof the project has that a crop applied.
+        errors.append(
+            f"{path.name} ({spec.label}): no declared size in the metadata, so its "
+            "dimensions were not verified against anything"
+        )
+    elif size != tuple(want):
         errors.append(f"{path.name} ({spec.label}) is {size}, expected {tuple(want)}")
     if (
         spec.framing == "cropped"

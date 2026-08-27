@@ -12,11 +12,11 @@ the family timeline.
 
 ## Status
 
-**Version 0.4.0 (pre-release).** The full conversion pipeline is built and tested
-on the committed stock fixtures. Source ingestion, metadata extraction, pixel
-decoding, and dual-output generation all work. The batch engine and QA gallery
-(milestones 0.5.0 and 0.6.0) are not yet built; neither is the full-dataset
-verification required for 1.0.0.
+**Version 0.5.0 (pre-release).** The full batch conversion pipeline is built
+and tested on the committed stock fixtures. Source ingestion, metadata extraction,
+pixel decoding, dual-output generation, and unattended batch processing with
+resume-by-hash all work. The QA gallery (milestone 0.6.0) is not yet built;
+neither is the full-dataset verification required for 1.0.0.
 
 What exists:
 - **The `fpx_converter` package** with seven commands:
@@ -26,9 +26,16 @@ What exists:
   - `metadata` (extract and dump raw property sidecars as `.fpx.json`)
   - `check-dates` (ground-truth date comparison; supports `--strict` flag)
   - `thumbnail` (extract embedded DIB thumbnails as PNG)
-  - `convert` (generate Deflate TIFF + quality-95 4:4:4 JPEG with metadata)
-- **287 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
-  over four committed Kodak stock fixtures and hand-built property-set bytes.
+  - `convert` (batch conversion with resume-by-hash, audit reporting, and
+    independent format/framing control)
+- **Batch engine:** unattended run over the entire corpus, never aborts on
+  one bad file, resumes by source SHA-256, produces `conversion.log` (append-only,
+  flushed per line), `audit_report.json` (describes the output tree), and
+  `run-state.json` (keyed on source hash for resume). Ctrl-C still writes state
+  and report before returning.
+- **300+ tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
+  over 40 committed person-free fixtures and hand-built property-set bytes,
+  including mutation tests for the colour oracle.
 - **CI passing on Windows** (python 3.14, `windows-latest`; ExifTool installed).
 
 ### First ingestion run (full corpus)
@@ -75,8 +82,20 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter check-dates
 # Extract embedded thumbnails
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter thumbnail
 
-# Generate archival TIFF and shareable JPEG with metadata
+# Generate archival TIFF and shareable JPEG with metadata (batch run, resumes on restart)
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert
+
+# Convert with independent format and framing control
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --archive-format tiff --archive-framing full --sharing-format jpeg --sharing-framing cropped
+
+# Generate only a full-frame TIFF (largest uncropped image)
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --no-sharing
+
+# Full-frame JPEG in everyday format (for clients who don't open TIFF)
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --no-archive --sharing-format jpeg --sharing-framing full
+
+# Convert with a fresh start (ignore prior run's state)
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --no-resume
 ```
 
 ## Install and test
@@ -114,13 +133,13 @@ C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert
 
 ### Run the gates
 
-The tier-1 gates:
+The tier-1 and tier-2 gates:
 
 ```powershell
 # Lint
 C:\venvs\fpx\Scripts\python.exe -m ruff check .
 
-# Unit and e2e tests (tier 1 + tier 2: 287 tests, no real photos, no source archive)
+# Unit and e2e tests (tier 1 + tier 2: 300+ tests, no real photos, no source archive)
 # Note: some tier-2 tests require ExifTool for metadata round-trip validation
 C:\venvs\fpx\Scripts\python.exe -m pytest
 ```
@@ -128,6 +147,42 @@ C:\venvs\fpx\Scripts\python.exe -m pytest
 These gates run on every push to CI. CI installs ExifTool and sets
 `FPX_REQUIRE_EXIFTOOL` to enforce the "validate with a different tool than the
 one that wrote" rule: ExifTool writes, pyexiv2 reads back.
+
+### Batch conversion artifacts
+
+The `convert` command produces three state/audit files alongside the output images:
+
+- **`conversion.log`**: append-only text log, flushed after every file. Each line
+  records what happened to one source file: status (converted/failed/resumed),
+  any errors, warnings, and the time taken. Survives crashes and interrupts.
+- **`audit_report.json`**: JSON report describing the **output tree**, not the
+  invocation. Covers all files from all sessions that contributed to the tree.
+  Keys are source SHA-256 values; values are the complete record for each file.
+  The 1.0.0 gate reads `unexplained_failures`. Roughly 146 pixel-identical output
+  pairs are expected and listed as `"expected_duplicate"`, not flagged as failures.
+- **`run-state.json`**: internal resume state, keyed on source SHA-256. Persists
+  between sessions; discarded if the output specs (`--archive-format`, etc.)
+  change or if `--no-resume` is passed. A killed run costs only the file in
+  flight, not the batch.
+
+## Test fixtures and coverage
+
+The test suite runs on 40 committed person-free `.fpx` files (4 Kodak stock
+samples plus 36 adopted from the archive, all confirmed person-free by eye
+and renamed to neutral stems). The fixtures cover:
+
+- Both colour spaces (NIF RGB and PhotoYCC)
+- Six of the seven declared image sizes
+- One viewing-transform crop (the only archive-derived one to be committed)
+- Nine nearly-identical time-lapse frames (dedup key exercise)
+- Fine detail and saturated colours (chroma oracle exercise)
+- Camera-generated filenames (naming collision handling)
+
+What the fixtures do **not** cover: rotation. All 22 rotated files in the
+archive have people in them, and cannot be committed. Rotation coverage comes
+from tier 3 (the real corpus) only, which matters — it is the branch that
+carried the 0.4.0 defect where rotated-and-cropped files dropped their crop.
+See `tests/fixtures/README.md` for the screening rule and detailed breakdown.
 
 ## What the milestone-0 inventory found
 
@@ -225,7 +280,7 @@ This is expected and must not be reported as a fault by the audit.
 
 The approved plan for building the converter, ticked as milestones ship.
 This survives context loss; conversation memory doesn't. Current status:
-0.4.0 (conversion pipeline complete); 0.5.0–1.0.0 not yet built.
+0.5.0 (batch engine and output control complete); 0.6.0–1.0.0 not yet built.
 
 - [x] **0.1.0** — Scaffold + ingestion. Read-only source walk, hash
       cascade, `manifest.json`, copy `.fpx` into `source-files/`.
@@ -241,15 +296,17 @@ This survives context loss; conversation memory doesn't. Current status:
 - [x] **0.4.0** — Dual output. Deflate TIFF + q95 4:4:4 JPEG, ExifTool
       writes, pyexiv2 read-back validation, filesystem mtime, naming
       scheme. Tier-3 sample batch (50 files) passed all verification gates.
-- [ ] **0.5.0** — Batch engine + audit. CLI with resume-by-hash,
-      `conversion.log`, `audit_report.json`; never aborts on one bad
-      file.
+- [x] **0.5.0** — Batch engine + audit. CLI with resume-by-hash,
+      `conversion.log`, `audit_report.json`, `run-state.json`; never aborts
+      on one bad file. Format and framing decoupled for independent control.
 - [ ] **0.6.0** — QA gallery. `report/index.html`, thumbnails free from
       the embedded DIBs, filters by album and audit status, **plus the
       per-group date-entry affordance the dating strategy requires**.
 - [ ] **1.0.0** — Full dataset run plus tier-4 eyeball verification.
-- [ ] *later* — PyInstaller exe; re-verify 3.14 wheel support first,
-      then add the build-and-attach job to `release.yml`.
+- [ ] **1.1.0 (later)** — Desktop app. A GUI wrapping the CLI. Ships as a
+      single Windows executable alongside the CLI.
+- [ ] *even later* — PyInstaller packaging; re-verify 3.14 wheel support
+      first, then add the build-and-attach job to `release.yml`.
 
 ## Key user-facing behaviours
 

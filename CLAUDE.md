@@ -35,24 +35,28 @@ C:\venvs\fpx\Scripts\python.exe -m ruff check .
 # test (tiers 1 and 2)
 C:\venvs\fpx\Scripts\python.exe -m pytest
 
-# run (0.4.0)
+# run (0.5.0)
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan        # walk source, write manifest
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter ingest      # copy one file per hash
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify      # re-hash the store
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter metadata    # dump .fpx.json sidecars
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter check-dates # album ground-truth report
 C:\venvs\fpx\Scripts\python.exe -m fpx_converter thumbnail   # extract embedded DIBs
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert     # TIFF + JPEG + sidecar
+C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert     # batch run: TIFF + JPEG + audit
 ```
 
 `check-dates` reports by default and only fails under `--strict`; on this
 corpus the import stamp misses 7 of 9 dated albums, which is *why* it is not
 trusted as a capture date, so a failing gate is the expected state rather
-than a regression. `convert` takes `--limit` and `--dry-run`.
+than a regression. `convert` takes `--limit`, `--dry-run`, and `--no-resume`;
+format and framing are independent: `--archive-format`, `--archive-framing`,
+`--sharing-format`, `--sharing-framing`, `--no-archive`, `--no-sharing`.
 
 `scan` takes `--source` to override `FPX_SOURCE_ROOT` without a `.env`.
 Both `--manifest` and `--dest` refuse any path inside the source root — the
-read-only rule is enforced in code, not left to the caller.
+read-only rule is enforced in code, not left to the caller. The batch engine
+never aborts on a bad file and resumes by hash, so a killed run costs the file
+in flight, not the batch.
 
 External tool: **ExifTool** (metadata writer), installed with
 `winget install --id OliverBetz.ExifTool`. It is not a Python package and is
@@ -63,10 +67,10 @@ not in `requirements.txt`. Do not try to fetch it from a URL — see
 
 | Tier | What it is | Gates |
 |------|-----------|-------|
-| 1. Unit | Property-set parser against hand-built byte fixtures; tile-table parsing; JPEG table + tile reassembly; timestamp and offset logic; naming scheme; collision handling. No real photos, no ExifTool, no source archive. | Every push (CI) |
-| 2. e2e | Full pipeline on the 40 committed person-free FPX fixtures → TIFF + JPEG → independent read-back of every tag, plus the chroma oracle and its mutation tests | Any change to the decoder, metadata engine, or output writer |
-| 3. Sample batch | `scripts/tier3_sample.py` — ~50 real files spanning every album, every declared size, both colour spaces and all four transform outcomes: convert, pyexiv2 read-back, pixel stats, both thumbnail oracles, album ground-truth date check. Exits non-zero on any of them and prints its own sample composition | Before merging any branch that touches decode or metadata |
-| 4. Full dataset | Unattended run over all files; audit report shows zero unexplained failures; ~20 files eyeballed in a real photo app for date, orientation, and colour | **1.0.0.** Until it passes, every release stays a pre-release |
+| 1. Unit | Property-set parser against hand-built byte fixtures; tile-table parsing; JPEG table + tile reassembly; timestamp and offset logic; naming scheme; collision handling; batch engine; resume state; output control. No real photos, no ExifTool, no source archive. | Every push (CI) |
+| 2. e2e | Full pipeline on 40 committed person-free FPX fixtures (both colour spaces, six sizes, one crop, one camera name) → TIFF + JPEG → independent read-back of every tag; chroma oracle and four mutation tests (wrong neutral, swapped channels, desaturated, double-converted) | Any change to the decoder, metadata engine, output writer, or batch engine |
+| 3. Sample batch | `scripts/tier3_sample.py` — 50 real files spanning every album, every declared size, both colour spaces and all four transform outcomes: convert, pyexiv2 read-back, pixel stats, both thumbnail oracles, album ground-truth date check. Exits non-zero on any of them and prints its own sample composition | Before merging any branch that touches decode, metadata, or batch logic |
+| 4. Full dataset | Unattended batch run over all files via the batch engine; audit report shows zero unexplained failures; 2 PhotoYCC files eyeballed in a real photo app for colour correctness | **1.0.0.** Until it passes, every release stays a pre-release |
 
 Verify before claiming: tier 1 always; the matching higher tier when its
 trigger applies. **"It decoded" is not "it decoded correctly"** — colour and
@@ -125,8 +129,10 @@ mid-project ideas that aren't in the plan go to HANDOVER.md open items.
       states were never CI-green and were never released. **Shipped
       2026-08-27** after three audit rounds; the third found that the colour
       check added by the second could not detect colour.
-- [ ] **0.5.0 — Batch engine + audit.** CLI with resume-by-hash,
-      `conversion.log`, `audit_report.json`; never aborts on one bad file.
+- [x] **0.5.0 — Batch engine + audit.** CLI with resume-by-hash,
+      `conversion.log`, `audit_report.json`, `run-state.json`; never aborts
+      on one bad file. Output format and framing decoupled for independent
+      control. 36 new person-free archive fixtures for CI PhotoYCC coverage.
 - [ ] **0.6.0 — QA gallery.** `report/index.html`, thumbnails free from the
       embedded DIBs, filters by album and audit status, **plus the per-group
       date-entry affordance the dating strategy requires**.

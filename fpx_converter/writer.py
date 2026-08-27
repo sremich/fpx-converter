@@ -20,6 +20,7 @@ from typing import Any
 
 from PIL import ImageCms
 
+from . import album_dates as album_dates_mod
 from . import config, decoder, layout, metadata, naming, outputs, validator
 
 #: ExifTool is located from `FPX_EXIFTOOL` or from PATH -- never from a
@@ -27,6 +28,11 @@ from . import config, decoder, layout, metadata, naming, outputs, validator
 #: home directory, which meant this module could not be told ExifTool was
 #: missing on the machine that had it installed there: every attempt to test
 #: the missing-tool path silently found the real binary instead.
+
+
+#: Windows' classic path limit. Long-path support is disabled on the machine
+#: this archive lives on, so 260 is the real ceiling and not a formality.
+_MAX_PATH = 259
 
 
 class WriterError(RuntimeError):
@@ -43,6 +49,10 @@ class OutputItemResult:
     fpx_copy_path: Path
     date_source: str
     is_undated: bool
+    #: The EXIF `DateTimeOriginal` actually written, or "" where none was.
+    #: Carried so the audit report and the QA gallery can show what a file
+    #: claims without re-reading a sidecar that may not have been dumped.
+    date_original: str
     validation_ok: bool
     errors: list[str] = field(default_factory=list)
     #: Non-fatal, but the file is not a faithful derivative: an orientation
@@ -62,6 +72,12 @@ class OutputItemResult:
     #: stay for the default pair; this is what a non-default `--*-format` or
     #: `--*-framing` run actually produced.
     written: list[tuple[Path, outputs.OutputSpec]] = field(default_factory=list)
+    #: The `.fpx` copy and its sidecar. Not images and not optional: the
+    #: source copy is not a derivative, it is the thing being preserved. They
+    #: belong in the resume bookkeeping for exactly that reason -- a resume
+    #: that only checked the images restored a deleted TIFF and left the
+    #: sidecar missing, reporting "0 failed" over an incomplete archive.
+    side_artifacts: list[Path] = field(default_factory=list)
 
 
 @functools.lru_cache(maxsize=1)
@@ -130,12 +146,14 @@ def format_date_prefix(ts_dict: dict[str, Any]) -> tuple[str, bool]:
     return "0000-00-00_000000", True
 
 
-def primary_album(entry: dict[str, Any]) -> str:
-    """The album folder an entry is filed under. `Root` when it has none."""
-    for album in entry.get("albums", []):
-        if album:
-            return str(album)
-    return "Root"
+# `primary_album` lived here and returned the FIRST listed album. That is the
+# defect 0.5.0 fixed -- most files belong to both an event folder and a flat
+# dump they were also copied into, and the dump usually came first, which put
+# 52 photographs of one holiday under a folder named after a zip file and cost
+# them the date their real album gave for free. `layout.choose_album` picks the
+# most descriptive one. The old implementation is deleted rather than left
+# unused, because an unused correct-looking function is how a fixed bug gets
+# picked up again.
 
 
 def build_output_relpath(
@@ -341,6 +359,7 @@ def write_single_entry_dual_output(
     stem: str | None = None,
     claimed: set[Path] | None = None,
     specs: tuple[outputs.OutputSpec, ...] = outputs.DEFAULT_SPECS,
+    album_dates: album_dates_mod.AlbumDates | None = None,
 ) -> OutputItemResult:
     """Convert a single .fpx entry to dual output (TIFF and JPEG) with sidecar and tags.
 
@@ -353,7 +372,9 @@ def write_single_entry_dual_output(
     pref_name = entry.get("preferred_name", store_name)
 
     # 1. Extract metadata and decode pixels
-    meta = metadata.extract_fpx_metadata(fpx_path, manifest_entry=entry)
+    meta = metadata.extract_fpx_metadata(
+        fpx_path, manifest_entry=entry, album_dates=album_dates
+    )
     decoded = decoder.decode_fpx(fpx_path, apply_transform=True)
     derived = meta.derived
 
@@ -383,7 +404,9 @@ def write_single_entry_dual_output(
     jpg_path = _first("sharing")
 
     _date_pfx, is_undated = format_date_prefix(derived.get("timestamps", {}))
-    date_source = derived.get("timestamps", {}).get("date_source", "none")
+    stamps = derived.get("timestamps", {})
+    date_source = stamps.get("date_source", "none")
+    date_original = stamps.get("datetime_original_exif") or ""
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -403,6 +426,37 @@ def write_single_entry_dual_output(
                     f"Refusing to overwrite it."
                 )
         claimed.update({p for p, _ in targets} | {fpx_copy_path, sidecar_path})
+
+    # Windows long-path support is disabled on the dev machine, and the
+    # output tree gained a year level plus a most-descriptive album name in
+    # 0.5.0. Past the limit the failure is an opaque FileNotFoundError from
+    # deep inside a save, recorded as a generic per-file error with nothing
+    # pointing at the cause. `CLAUDE.md` makes short paths a rule; this makes
+    # something enforce it.
+    for path, spec in targets:
+        if len(str(path)) > _MAX_PATH:
+            errors.append(
+                f"output path is {len(str(path))} characters, over the {_MAX_PATH} "
+                f"Windows allows without long-path support ({spec.label}). "
+                f"Use a shorter --dest."
+            )
+    if errors:
+        return OutputItemResult(
+            store_name=store_name,
+            preferred_name=pref_name,
+            tif_path=tif_path,
+            jpg_path=jpg_path,
+            sidecar_path=sidecar_path,
+            fpx_copy_path=fpx_copy_path,
+            date_source=date_source,
+            is_undated=is_undated,
+            date_original=date_original,
+            validation_ok=False,
+            errors=errors,
+            warnings=warnings,
+            transform_status=decoded.transform_status,
+            crop_applied=decoded.crop_applied,
+        )
 
     if not dry_run:
         for path, _spec in targets:
@@ -459,10 +513,12 @@ def write_single_entry_dual_output(
         fpx_copy_path=fpx_copy_path,
         date_source=date_source,
         is_undated=is_undated,
+        date_original=date_original,
         validation_ok=len(errors) == 0,
         errors=errors,
         warnings=warnings,
         transform_status=decoded.transform_status,
         crop_applied=decoded.crop_applied,
         written=targets,
+        side_artifacts=[] if dry_run else [fpx_copy_path, sidecar_path],
     )

@@ -9,6 +9,40 @@ commit, then tag.
 ## [Unreleased]
 
 ### Added
+- **Batch engine (milestone 0.5.0).** `convert` now runs the whole corpus
+  unattended, survives any file corruption, and resumes from mid-run after a
+  kill or crash. A run that stops at file 300 of 687 due to one corrupt tile
+  now reports all failures across the corpus and can resume — before this,
+  the same corruption halted the entire conversion. Resumption is keyed on the
+  source SHA-256 (this project's dedup key), so a run interrupted mid-file costs
+  only that file, not the batch. State is saved after every file and discarded
+  if the output specs change, preventing a resumed run from writing files that
+  don't match the command. Ctrl-C still writes state and the audit report before
+  returning — the run is survivable mid-operation. Roughly 146 pixel-identical
+  output pairs are expected and reported as such, not as faults, because dedup
+  keys on the whole file so byte-different sources with identical pixels are
+  both kept deliberately. See `batch.py` and `cli.py` for the implementation;
+  `audit_report.json` is the artifact the 1.0.0 gate reads.
+- **Output format and framing decoupled (milestone 0.5.0).** The archive tree
+  and the sharing tree were welded together: archive meant full-frame Deflate
+  TIFF and sharing meant cropped JPEG, with no way to ask for one without the
+  other. They are now independent axes. `--archive-format` / `--archive-framing`
+  and `--sharing-format` / `--sharing-framing` control each output tree
+  separately. Format is `tiff` (Deflate, lossless) or `jpeg` (q95, 4:4:4).
+  Framing is `full` (every captured pixel) or `cropped` (the Kodak software's
+  intended composition, where a file carries one; 617 files have no crop).
+  Defaults are unchanged (archive full TIFF, sharing cropped JPEG), so existing
+  commands do not change. A full-frame JPEG is now possible, addressing the
+  original ask for "the largest uncropped image"; it is available as
+  `--sharing-framing full` or `--no-archive --sharing-format jpeg
+  --sharing-framing full`. New flags `--no-archive` and `--no-sharing` suppress
+  either tree.
+- **`run-state.json` resume artifact.** Tracks the hash, album, status, and
+  errors for every file in the batch, keyed on source SHA-256. Persists between
+  sessions and is discarded if the output specs change or `--no-resume` is given.
+- **`conversion.log` append-only text log.** Every event is flushed to disk
+  after every file, so a killed run is recoverable without losing visibility
+  into what was written.
 - **36 new test fixtures, and the first CI coverage of colour.** All 687
   distinct files in the archive were screened by eye for people; the 40 that
   contain none are now committed with neutral filenames. Both PhotoYCC files
@@ -27,6 +61,11 @@ commit, then tag.
   drift.
 - `tests/fixtures/README.md`: what each fixture covers, what the set does
   **not** cover, and the screening rule.
+- **`FPX_COARSE_ALBUMS` environment variable.** Demotes an album whose folder
+  name looks day-precise (e.g. a holiday name that could be mistaken for a
+  date) to its bare year, so nothing reaches `DateTimeOriginal`. The demotion
+  goes one way — it can remove a claim, never add one — and does not affect
+  sorting or filing, only the date written to EXIF.
 
 ### Changed
 - **The output tree follows the source folder names, not the dates.** A
@@ -39,6 +78,11 @@ commit, then tag.
   that is 42 of 687 files. That year-month can only come from the import
   stamp, which is not trusted as a capture date, so it is a browsing
   affordance like the filename prefix and never reaches EXIF.
+- **`convert` flag changes.** The command now accepts `--no-resume` (default:
+  resume from prior run), `--archive-format`, `--archive-framing`,
+  `--sharing-format`, `--sharing-framing`, `--no-archive`, and `--no-sharing`
+  to control output independently. `--limit` and `--dry-run` remain unchanged.
+  `--manifest` and `--dest` continue to enforce source-outside containment.
 
 ### Fixed
 - **A file is filed under the most descriptive album it belongs to, not the

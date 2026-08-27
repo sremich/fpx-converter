@@ -55,6 +55,7 @@ class FileRecord:
     status: str  # 'converted' | 'failed' | 'resumed'
     date_source: str = "none"
     is_undated: bool = True
+    date_original: str = ""
     transform_status: str = ""
     crop_applied: tuple[int, int, int, int] | None = None
     outputs: list[str] = field(default_factory=list)
@@ -71,6 +72,7 @@ class FileRecord:
             "status": self.status,
             "date_source": self.date_source,
             "is_undated": self.is_undated,
+            "date_original": self.date_original,
             "transform_status": self.transform_status,
             "crop_applied": list(self.crop_applied) if self.crop_applied else None,
             "outputs": self.outputs,
@@ -94,10 +96,15 @@ def record_from_json(raw: dict[str, Any]) -> FileRecord:
         status="resumed",
         date_source=raw.get("date_source", "none"),
         is_undated=bool(raw.get("is_undated", True)),
+        date_original=raw.get("date_original", ""),
         transform_status=raw.get("transform_status", ""),
         crop_applied=tuple(box) if box else None,  # type: ignore[arg-type]
         outputs=list(raw.get("outputs", [])),
         pixel_sha256=raw.get("pixel_sha256"),
+        # Both lists, not just warnings. Only successful records are stored
+        # today so `errors` is always empty -- but a field that is silently
+        # dropped on the way back is a bug waiting for that to change.
+        errors=list(raw.get("errors", [])),
         warnings=list(raw.get("warnings", [])),
         seconds=float(raw.get("seconds", 0.0)),
     )
@@ -225,9 +232,18 @@ def build_audit_report(
     started: str,
     elapsed: float,
     total_entries: int,
+    manifest_entries: int | None = None,
     interrupted: bool = False,
 ) -> dict[str, Any]:
-    """The artifact the release gate reads. Faults first, then explanation."""
+    """The artifact the release gate reads. Faults first, then explanation.
+
+    `total_entries` is how many entries this run was asked to handle;
+    `manifest_entries` is how many exist. They differ under `--limit`, and the
+    difference is the whole point: without it a three-file run over a 687-file
+    manifest reported `unexplained_failures: 0` and was indistinguishable from
+    a finished archive. `complete` is the flag the 1.0.0 gate reads alongside
+    the failure count.
+    """
     by_status = Counter(r.status for r in records)
     # "Present in the output tree", which is converted plus resumed. The
     # report describes the tree, not this invocation -- a corpus built
@@ -252,14 +268,29 @@ def build_audit_report(
         "output_root": str(output_root),
         "outputs": [spec.label for spec in specs],
         "counts": {
-            "manifest_entries": total_entries,
+            "manifest_entries": (
+                manifest_entries if manifest_entries is not None else total_entries
+            ),
+            "selected": total_entries,
+            "attempted": len(records),
+            # Entries the run never reached: a `--limit`, or an interrupt.
+            # Silence here is how a partial run passes for a whole one.
+            "not_attempted": max(0, total_entries - len(records)),
             "converted": by_status.get("converted", 0),
             "resumed": by_status.get("resumed", 0),
             "failed": by_status.get("failed", 0),
             "with_warnings": sum(1 for r in records if r.warnings),
         },
-        # The number the 1.0.0 gate is actually about.
+        # The number the 1.0.0 gate is actually about -- but only meaningful
+        # beside `complete`. Zero failures over three of 687 files is not a
+        # passing run, it is an unfinished one.
         "unexplained_failures": len(failed),
+        "complete": (
+            not interrupted
+            and len(records) == total_entries
+            and total_entries
+            == (manifest_entries if manifest_entries is not None else total_entries)
+        ),
         "failures": [
             {"store_name": r.store_name, "sha256": r.sha256, "errors": r.errors}
             for r in failed
@@ -312,6 +343,14 @@ def summarise(report: dict[str, Any]) -> str:
     ]
     if report["interrupted"]:
         lines.append("  INTERRUPTED -- rerun to resume where this stopped")
+    if not report.get("complete", True):
+        # Stated plainly, because "0 failed" on a partial run reads as
+        # success to every eye that skims it.
+        untouched = counts["manifest_entries"] - counts.get("attempted", 0)
+        lines.append(
+            f"  PARTIAL RUN -- {untouched} of {counts['manifest_entries']} "
+            "manifest entries were not handled; this is not a finished archive"
+        )
     return "\n".join(lines)
 
 

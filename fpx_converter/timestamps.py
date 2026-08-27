@@ -573,7 +573,8 @@ class ResolvedTimestamps:
     #: How precise the folder name was: 'day' | 'month' | 'season' | 'year' |
     #: 'none'. `datetime_original_exif` is populated only at 'day' or finer.
     folder_precision: str
-    date_source: str  # 'embedded-scan-date' | 'folder' | 'import-stamp' | 'none'
+    date_source: str  # 'owner-supplied' | 'embedded-scan-date' | 'folder' |
+    #                   'import-stamp' | 'none'
     #: Precision of `datetime_original_exif`: 'second' | 'day' | 'none'.
     date_precision: str
     #: Best available ordering key, in descending order of trust: a defensible
@@ -593,8 +594,17 @@ def resolve_file_timestamps(
     primary_album: str,
     default_tz: str = DEFAULT_TZ,
     tz_overrides: dict[str, str] | None = None,
+    owner_date: datetime.date | None = None,
 ) -> ResolvedTimestamps:
-    """Resolve timestamps for one file according to project dating rules."""
+    """Resolve timestamps for one file according to project dating rules.
+
+    `owner_date` is a day somebody typed after looking at the photographs --
+    see `album_dates`. It outranks everything derived from the file, because a
+    person who was there is better evidence than a folder name, and far better
+    than an import stamp that misses the event by up to 223 days. It is
+    recorded as `date_source="owner-supplied"` so an audit can always tell an
+    assertion from a derivation.
+    """
     from .propset import filetime_to_dt
 
     import_dt = filetime_to_dt(import_ft) if import_ft else None
@@ -613,7 +623,18 @@ def resolve_file_timestamps(
     folder_precision = folder_res.precision if folder_res else "none"
     precision = "none"
 
-    if scan_time_dt is not None:
+    if owner_date is not None:
+        # Midnight, for the same reason the folder branch below uses it: a day
+        # is known and an hour is not, and borrowing a clock time from an
+        # unrelated transfer session would dress a known day as a precise
+        # capture moment in every photo app that shows one.
+        original_dt = datetime.datetime(
+            owner_date.year, owner_date.month, owner_date.day, 0, 0, 0
+        )
+        date_src = "owner-supplied"
+        precision = "day"
+        offset_original = get_timezone_offset(original_dt, tz_name)
+    elif scan_time_dt is not None:
         original_dt = scan_time_dt
         date_src = "embedded-scan-date"
         precision = "second"
@@ -635,7 +656,7 @@ def resolve_file_timestamps(
 
     original_exif = (
         format_exif_datetime(original_dt)
-        if date_src in ("embedded-scan-date", "folder")
+        if date_src in ("embedded-scan-date", "folder", "owner-supplied")
         else None
     )
 

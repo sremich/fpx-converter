@@ -19,6 +19,7 @@ from typing import Any
 
 import olefile
 
+from . import album_dates as album_dates_mod
 from . import config, decoder, layout, naming, propset, timestamps
 
 # Standard property set streams present in FlashPix files
@@ -55,6 +56,7 @@ def extract_fpx_metadata(
     manifest_entry: dict[str, Any] | None = None,
     default_tz: str | None = None,
     tz_overrides: dict[str, str] | None = None,
+    album_dates: album_dates_mod.AlbumDates | None = None,
 ) -> ExtractedMetadata:
     """Extract all metadata from an `.fpx` file into a structured ExtractedMetadata.
 
@@ -137,6 +139,7 @@ def extract_fpx_metadata(
         manifest_entry,
         default_tz=default_tz,
         tz_overrides=tz_overrides,
+        album_dates=album_dates,
     )
 
     errors.extend(derived.get("derivation_errors", []))
@@ -272,6 +275,7 @@ def _derive_metadata(
     entry: dict[str, Any] | None,
     default_tz: str = timestamps.DEFAULT_TZ,
     tz_overrides: dict[str, str] | None = None,
+    album_dates: album_dates_mod.AlbumDates | None = None,
 ) -> dict[str, Any]:
     """Derive standard image dimensions, colour space, transforms, and timestamps."""
     derivation_errors: list[str] = []
@@ -465,12 +469,18 @@ def _derive_metadata(
     if primary_album == "Root":
         primary_album = ""
 
+    # A day somebody typed after looking at the photographs outranks anything
+    # derived from the file. Resolved against the album the file is filed
+    # under, which is the one the gallery showed them.
+    owner_date = album_dates.for_album(primary_album) if album_dates and primary_album else None
+
     resolved_ts = timestamps.resolve_file_timestamps(
         import_ft=import_ft,
         scan_time_dt=scan_dt,
         primary_album=primary_album,
         default_tz=default_tz,
         tz_overrides=tz_overrides,
+        owner_date=owner_date,
     )
 
     ts_dict = {

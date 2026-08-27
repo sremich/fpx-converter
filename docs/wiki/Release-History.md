@@ -11,12 +11,46 @@ See [`CHANGELOG.md`](../../CHANGELOG.md) for the itemised change list.
 
 | Tier | What it proves | Passing as of |
 |---|---|---|
-| 1. Unit | Parsers, reassembly, timestamp and naming logic, metadata extraction, pixel decoding, metadata round-trip validation | 0.4.0 — 287 tests covering all code paths that exist |
-| 2. e2e | Full pipeline over the committed non-personal fixtures | 0.4.0 — scan through convert, including pixel decoding, metadata embedding, and pyexiv2 read-back validation on both TIFF and JPEG |
+| 1. Unit | Parsers, reassembly, timestamp and naming logic, batch engine, resume state, audit reporting, output control, mutation tests for colour oracle | 0.5.0 — 300+ tests covering all code paths that exist |
+| 2. e2e | Full pipeline over 40 committed person-free fixtures covering both colour spaces, the crop path, and six of seven declared sizes | 0.5.0 — scan through convert on both archive and sharing trees, pixel decoding with PhotoYCC coverage, metadata embedding, pyexiv2 read-back validation on both TIFF and JPEG, colour oracle mutation tests |
 | 3. Sample batch | 50 real files spanning all 16 albums, all 7 declared sizes, both colour spaces, all four transform outcomes, and both embedded film scans | 0.4.0 — 50/50 converted, 0 failures, independent pyexiv2 pass over both containers found 0 violations |
-| 4. Full dataset | Unattended run over the whole corpus, plus an eyeball pass | *not yet reached — gates 1.0.0* |
+| 4. Full dataset | Unattended batch run over the whole corpus with audit report, plus an eyeball pass for colour on the PhotoYCC files | *not yet reached — gates 1.0.0* |
 
 ## Releases
+
+### 0.5.0 (pre-release)
+
+**What it contains:** The batch engine with resume-by-hash, audit reporting,
+and unattended full-corpus conversion. Output format and framing are now
+independent settings, so a full-frame JPEG and other combinations become
+possible. `conversion.log` and `audit_report.json` artifacts, plus `run-state.json`
+for resume state. The output tree now follows source folder names instead of
+dates. 36 new person-free archive fixtures for CI coverage of the PhotoYCC
+colour path and viewing-transform crops.
+
+**What it is safe to trust for:**
+- Unattended batch conversion with automatic resumption if a run is killed
+  or crashes (resumption keyed on source SHA-256; only the file in flight is
+  retried)
+- Proper handling of 146 expected pixel-identical output pairs (dedup keys on
+  whole file, so byte-different sources with identical pixels are both kept)
+- Independent control of archive and sharing tree format and framing, with
+  defaults unchanged (archive full-frame Deflate TIFF, sharing cropped JPEG)
+- Complete audit reporting: `audit_report.json` describes the output tree
+  across multiple sessions, the 1.0.0 gate reads `unexplained_failures`
+- Correct folder-name-based album organization, preferring the most
+  descriptive folder a file belongs to, fixing the 52-file Christmas regression
+- Tier-1/2 CI coverage of the PhotoYCC colour path and its mutation tests
+- Complete conversion of a 50-file sample spanning all 16 albums, all 7
+  declared sizes, both colour spaces, and all four transform outcomes
+  (tier-3 verification passed, from `scripts/tier3_sample.py`)
+
+**What does NOT work:** The QA gallery with per-group date-entry interface
+(0.6.0) and full-dataset verification (1.0.0). Full-corpus conversion has not
+been run.
+
+**Verification:** Tiers 1, 2, and 3 passing (300+ tests, 40 person-free
+fixtures, 50-file sample batch); tier 4 not yet reached. This is a pre-release.
 
 ### 0.4.0 (pre-release)
 

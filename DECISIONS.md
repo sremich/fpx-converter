@@ -903,3 +903,55 @@ since 0.2.0 and neither of which any tier caught:
 day-precise `DateTimeOriginal` derived from their album name. That is only
 defensible if the name means the day rather than the season around it —
 open with Stevie, and the answer changes 52 files either way.
+
+## 2026-08-27 — The leakage guard exempts phrases built only of ordinary words
+
+**Context.** The guard that keeps album names and human-authored filenames
+out of git works by substring match: it takes every distinctive name from
+the local manifest and refuses to find it in any file `git add -A` would
+sweep up. One album in this archive is an everyday two-word English phrase,
+and it matched those two words occurring as prose in a code comment.
+
+**Decision.** A name whose every token is an ordinary function word or bare
+adverb is not checked. Anything containing a digit is checked whatever its
+words. The exempt list is in `tests/test_environment.py` as
+`_ORDINARY_WORDS`, and it is **frozen**: every word added to it silently
+removes more real names from the guard, so adding one is a decision, not
+housekeeping.
+
+**Why not just reword the comment.** Because the next collision would need
+the next reword, and documentation written to dodge a false positive is
+worse documentation. A guard that cries wolf on ordinary sentences gets
+worked around, and a guard that is worked around is not a guard.
+
+**What it costs, measured.** One name of 122 in this archive is exempted:
+one seven-character, two-ordinary-word human-authored filename. Word-boundary
+matching would not have avoided the collision — the words occur as words. The
+byte-level guard's five-character floor currently drops none.
+
+**What keeps it honest.** `TestTheLeakageGuardsCanActuallyFail` plants a name
+and requires both guards to catch it, in ASCII and in UTF-16LE. Both guards
+were once unable to fail — one listed only the git index, so a brand-new file
+was invisible until the commit that added it, and one read tracked files as
+UTF-8 and skipped every `.fpx`. A guard that cannot fail is indistinguishable
+from no guard.
+
+## 2026-08-27 — Two committed fixtures carry film-lab strings, and that is accepted
+
+**Context.** The two PhotoYCC fixtures carry a photo-lab identifier and a
+film-stock and order code in their property sets, from a real transaction at
+a real lab decades ago. They are committed to a repository intended to become
+public.
+
+**Decision.** Accepted, deliberately. They name no person, no album, no
+place and no date. Film stock and processing equipment are the ordinary
+furniture of scanned-photograph metadata and appear in EXIF everywhere. The
+rule this project enforces is about people and the words people typed about
+their own photographs; a film-stock code is neither.
+
+**Why record it at all.** Because it was found by an audit rather than by
+the guard, and an accident that turns out fine is still an accident. The
+byte-level guard checks album names and filenames, not every string a
+property set can hold — so this class of content is outside what any
+automated check will ever report, and the only control on it is somebody
+looking. It was looked at.

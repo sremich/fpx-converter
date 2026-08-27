@@ -168,8 +168,20 @@ def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) 
             sampling_factors = [(comp[1], comp[2]) for comp in jpg_img.layer]
             assert all(sf == (1, 1) for sf in sampling_factors)
 
-        # 4. Independent pyexiv2 validation call
-        val = validator.validate_dual_output(res.tif_path, res.jpg_path, exp_info)
+        # 4. Independent pyexiv2 validation call.
+        #
+        # The expectation carries the declared size, because the validator
+        # now refuses to pass an output it could not size-check at all -- a
+        # check that silently does not run makes an unverified file
+        # indistinguishable from a verified one. Real callers always have
+        # this; a test that omitted it was exercising a path the pipeline
+        # never takes.
+        expected = dict(exp_info)
+        expected["image_dimensions"] = {
+            "declared_width": exp_info["width"],
+            "declared_height": exp_info["height"],
+        }
+        val = validator.validate_dual_output(res.tif_path, res.jpg_path, expected)
         assert val.ok, f"pyexiv2 validation failed on {filename}: {val.errors}"
 
         # 5. Assert mtime set on all files
@@ -302,7 +314,17 @@ def test_validator_rejects_a_subsampled_jpeg(tmp_path: Path) -> None:
     decoded.image.save(good_jpg, format="JPEG", quality=95, subsampling=0)  # 4:4:4
     decoded.image.save(bad_jpg, format="JPEG", quality=95, subsampling=2)  # 4:2:0
 
-    expected: dict = {"camera": {}, "timestamps": {}, "iptc_keywords": []}
+    expected: dict = {
+        "camera": {},
+        "timestamps": {},
+        "iptc_keywords": [],
+        # Present because every real caller has it, and the validator reports
+        # an output it could not size-check rather than passing it.
+        "image_dimensions": {
+            "declared_width": decoded.image.width,
+            "declared_height": decoded.image.height,
+        },
+    }
 
     good = validator.validate_dual_output(tif_path, good_jpg, expected)
     assert good.ok, good.errors

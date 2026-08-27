@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from fpx_converter import config
 from fpx_converter.config import (
     ConfigError,
     Settings,
@@ -132,3 +133,60 @@ class TestAlbumTimezoneOverrides:
         default_tz, overrides = timezone_settings(env_file)
         assert default_tz == "America/Denver"
         assert overrides == {"beach trip": "Pacific/Honolulu"}
+
+
+class TestAlbumListSettings:
+    """`FPX_NON_DESCRIPTIVE_ALBUMS` and `FPX_COARSE_ALBUMS`.
+
+    Both decide something irreversible about an archive -- where photographs
+    are filed, and whether a capture date is claimed for them -- and both live
+    in `.env` because album names are personal content. A malformed value that
+    was silently ignored would change the answer with nothing to show for it,
+    so every refusal here is deliberate.
+    """
+
+    @staticmethod
+    def _env(tmp_path, body: str):
+        path = tmp_path / ".env"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_an_absent_setting_is_an_empty_set_not_an_error(self, tmp_path) -> None:
+        env = self._env(tmp_path, "FPX_DEFAULT_TZ=UTC\n")
+        assert config.extra_non_descriptive_albums(env) == frozenset()
+        assert config.coarse_albums(env) == frozenset()
+
+    def test_names_are_lowercased_and_stripped_for_matching(self, tmp_path) -> None:
+        env = self._env(tmp_path, 'FPX_COARSE_ALBUMS=["  Winterfest 1994 ", "A Day Out"]\n')
+        assert config.coarse_albums(env) == frozenset({"winterfest 1994", "a day out"})
+
+    def test_malformed_json_is_refused_loudly(self, tmp_path) -> None:
+        env = self._env(tmp_path, 'FPX_COARSE_ALBUMS=["unterminated\n')
+        with pytest.raises(config.ConfigError, match="not valid JSON"):
+            config.coarse_albums(env)
+
+    def test_the_wrong_shape_is_refused(self, tmp_path) -> None:
+        env = self._env(tmp_path, 'FPX_NON_DESCRIPTIVE_ALBUMS={"a": 1}\n')
+        with pytest.raises(config.ConfigError, match="list of strings"):
+            config.extra_non_descriptive_albums(env)
+
+    def test_a_list_of_non_strings_is_refused(self, tmp_path) -> None:
+        env = self._env(tmp_path, "FPX_COARSE_ALBUMS=[1994]\n")
+        with pytest.raises(config.ConfigError, match="list of strings"):
+            config.coarse_albums(env)
+
+    def test_blank_entries_are_dropped_rather_than_matching_everything(
+        self, tmp_path
+    ) -> None:
+        """An empty string is a substring of every album name."""
+        env = self._env(tmp_path, 'FPX_COARSE_ALBUMS=["", "  ", "Winterfest 1994"]\n')
+        assert config.coarse_albums(env) == frozenset({"winterfest 1994"})
+
+    def test_the_two_settings_are_independent(self, tmp_path) -> None:
+        env = self._env(
+            tmp_path,
+            'FPX_COARSE_ALBUMS=["Winterfest 1994"]\n'
+            'FPX_NON_DESCRIPTIVE_ALBUMS=["Dump Folder"]\n',
+        )
+        assert config.coarse_albums(env) == frozenset({"winterfest 1994"})
+        assert config.extra_non_descriptive_albums(env) == frozenset({"dump folder"})
