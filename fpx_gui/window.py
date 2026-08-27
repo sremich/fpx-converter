@@ -72,6 +72,18 @@ def _field_label(text: str) -> QLabel:
     return label
 
 
+def _report_stamp(path: Path) -> int | None:
+    """`st_mtime_ns` of the audit report, or None if there is not one.
+
+    Compared either side of a run to answer one question: did *this* run write
+    a report? A file that is missing both times, or untouched, means no.
+    """
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -81,6 +93,8 @@ class MainWindow(QMainWindow):
         self._worker: PipelineWorker | None = None
         self._tracker = progress.ProgressTracker()
         self._last_options: options_mod.ConvertOptions | None = None
+        #: `st_mtime_ns` of the audit report as the run started, or None.
+        self._report_stamp: int | None = None
         self._reviewing = False
 
         root = QWidget()
@@ -347,6 +361,11 @@ class MainWindow(QMainWindow):
         self.log.clear()
         self._tracker = progress.ProgressTracker()
         self._last_options = options
+        # Stamped before the run so that afterwards we can tell a report this
+        # run wrote from one that was already lying there. Without this a
+        # failed run over a previously-converted destination read the old
+        # report and announced a clean finish.
+        self._report_stamp = _report_stamp(options.dest / batch.REPORT_FILENAME)
         self.progress_bar.setRange(0, 0)  # indeterminate until the total is known
         self._say("Starting…", "")
         self._append(f"Writing: {', '.join(spec.label for spec in specs)}")
@@ -428,7 +447,19 @@ class MainWindow(QMainWindow):
         options = self._last_options
         if options is None:  # pragma: no cover - only reachable before a run
             return
-        result = summary.load_summary(options.dest / batch.REPORT_FILENAME)
+        report_path = options.dest / batch.REPORT_FILENAME
+        if _report_stamp(report_path) == self._report_stamp:
+            # Nothing was written this run, so anything on disk belongs to a
+            # previous one. Reporting it would be the worst kind of wrong: a
+            # confident success, phrased for somebody with no other way to
+            # check.
+            self._append(
+                "This run wrote no audit report, so there is nothing to summarise. "
+                "Any report already in that folder is from an earlier run."
+            )
+            result = summary.MISSING_REPORT
+        else:
+            result = summary.load_summary(report_path)
         self.progress_bar.setValue(100 if result.finished_cleanly else self.progress_bar.value())
         self._say(result.headline, result.severity, "  ".join(result.lines))
 
@@ -455,6 +486,8 @@ class MainWindow(QMainWindow):
             "finish writing its report…"
         )
         self._say("Stopping…", summary.WARN)
+        # Returns at once; the window keeps painting and `_on_done` reports
+        # the ending when the child has actually stopped.
         worker.cancel()
 
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802 -- Qt signature
@@ -470,4 +503,10 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self._cancel()
+            # Here, and only here, the wait is the right thing: once this
+            # window is gone nothing is left watching the converter, so it has
+            # to be stopped before the window goes.
+            worker = self._worker
+            if worker is not None:
+                worker.cancel(wait=True)
         event.accept()

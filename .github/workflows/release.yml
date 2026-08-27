@@ -85,3 +85,68 @@ jobs:
             --generate-notes \
             $PRERELEASE
           echo "Release created. REMINDER: tick the /release skill's checklist."
+
+  # The exe is the whole point of 1.1.0: somebody who does not use a terminal
+  # cannot be asked to install Python first. Runs after `verify` so a failing
+  # suite blocks the artifact too, and after `release` so there is something
+  # to attach it to. Windows-only by nature -- PyInstaller does not
+  # cross-compile.
+  package:
+    needs: [verify, release]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-gui.txt
+
+      - name: Install ExifTool
+        # The smoke test below converts real fixtures, which needs it.
+        run: choco install exiftool -y --no-progress
+
+      - name: Install dependencies
+        # requirements-gui.txt starts with `-r requirements.txt` and carries
+        # the pinned PyInstaller, so there is no separate install and no
+        # floating version. PySide6 is deliberately absent from
+        # requirements.txt: the CLI does not need a GUI toolkit to run.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-gui.txt
+
+      - name: Build the standalone executable
+        run: python -m PyInstaller --noconfirm packaging/fpx-converter.spec
+
+      - name: The bundle must carry VERSION
+        # `unknown` here means VERSION did not make it into the bundle, which
+        # would ship an exe that cannot say what it is.
+        shell: bash
+        run: |
+          printed="$(./dist/fpx-converter.exe --run-cli --version)"
+          echo "$printed"
+          case "$printed" in
+            *unknown*) echo "::error::VERSION is not in the bundle"; exit 1;;
+          esac
+          grep -qF "$(cat VERSION)" <<<"$printed"
+
+      - name: The bundle must actually convert
+        # The check that matters. `--version` cannot see a missing pyexiv2
+        # binary or Pillow plugin; a real conversion can. Two fixtures is
+        # enough to exercise decode, both writers and the ExifTool round trip.
+        env:
+          FPX_REQUIRE_EXIFTOOL: "1"
+        shell: bash
+        run: |
+          ./dist/fpx-converter.exe --run-cli scan \
+            --source tests/fixtures --manifest smoke/m.json
+          ./dist/fpx-converter.exe --run-cli convert \
+            --manifest smoke/m.json --store tests/fixtures \
+            --dest smoke/out --limit 2
+          test -f smoke/out/audit_report.json
+
+      - name: Attach the executable to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${env:GITHUB_REF_NAME}" dist/fpx-converter.exe --clobber

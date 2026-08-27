@@ -25,3 +25,11 @@ pytest-qt==4.5.0
 
 # Builds the single-file Windows executable. See packaging/build.md.
 pyinstaller==6.22.2
+
+# What PyInstaller actually consults to decide which binaries and data files
+# land in the exe -- including the pyexiv2 extension and the Pillow plugins,
+# whose absence a `--version` call cannot detect. It is a transitive
+# dependency, but it is the one that decides the contents of the shipped
+# artifact, so it is pinned like a direct one: an unpinned build toolchain
+# means the same commit cannot be rebuilt into the same executable.
+pyinstaller-hooks-contrib==2026.7

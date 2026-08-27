@@ -50,6 +50,41 @@ def _fill(window, source: Path, dest: Path) -> None:  # noqa: ANN001
     window.dest_edit.setText(str(dest))
 
 
+def _stamp(dest: Path) -> int | None:
+    """What `_start_convert` records before a run."""
+    from fpx_gui.window import _report_stamp
+
+    return _report_stamp(dest / "audit_report.json")
+
+
+def _write_clean_report(dest: Path, *, converted: int) -> Path:
+    """An audit report describing a complete, successful run."""
+    import json
+
+    path = dest / "audit_report.json"
+    path.write_text(
+        json.dumps(
+            {
+                "complete": True,
+                "interrupted": False,
+                "unexplained_failures": 0,
+                "counts": {
+                    "manifest_entries": converted,
+                    "selected": converted,
+                    "attempted": converted,
+                    "not_attempted": 0,
+                    "converted": converted,
+                    "resumed": 0,
+                    "failed": 0,
+                    "with_warnings": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 class TestTheControlsComeFromTheCli:
     def test_the_format_menus_are_built_from_outputs_formats(self, window) -> None:  # noqa: ANN001
         """Not from strings typed into the window."""
@@ -225,6 +260,51 @@ class TestWhatItSaysWhenItIsOver:
         window._last_options = window.current_options()
         window._on_done(0, "")
         assert window._headline.property("severity") == summary.ERROR
+
+    def test_an_earlier_runs_report_is_never_read_as_this_runs_success(
+        self, window, folders  # noqa: ANN001
+    ) -> None:
+        """The finding, and the worst-phrased bug in the window.
+
+        `_on_done` loaded whatever `audit_report.json` was in the destination
+        without asking whether this run wrote it. Convert into a folder that
+        was converted successfully once before, have any step fail, and the
+        window announced "Finished -- all N photos converted" to the one
+        audience with no other way to check.
+        """
+        source, dest = folders
+        dest.mkdir(parents=True, exist_ok=True)
+        _write_clean_report(dest, converted=687)
+
+        _fill(window, source, dest)
+        window._last_options = window.current_options()
+        # As `_start_convert` does: stamp the report before the run.
+        window._report_stamp = _stamp(dest)
+
+        # The run fails and writes nothing. The old report is untouched.
+        window._on_done(1, "")
+
+        assert window._headline.property("severity") == summary.ERROR, (
+            "a previous run's report was reported as this run's success"
+        )
+        assert "687" not in window._headline.text()
+        assert "earlier run" in window.log.toPlainText()
+
+    def test_a_report_this_run_wrote_is_read_normally(
+        self, window, folders  # noqa: ANN001
+    ) -> None:
+        """The guard must not refuse the ordinary case."""
+        source, dest = folders
+        dest.mkdir(parents=True, exist_ok=True)
+        _fill(window, source, dest)
+        window._last_options = window.current_options()
+        window._report_stamp = _stamp(dest)  # nothing there yet
+
+        _write_clean_report(dest, converted=4)
+        window._on_done(0, "")
+
+        assert window._headline.property("severity") != summary.ERROR
+        assert "4" in window._headline.text()
 
 
 class TestTheProgressBar:

@@ -250,6 +250,13 @@ archive, so they are rules, not preferences.
   a caption permanently.
 - **Do not normalise doubled file extensions.** Files differing only by a
   repeated extension can be genuinely different pixels.
+- **The desktop app wraps the CLI; it never reimplements it.** Every
+  conversion the window starts is `fpx_converter` running as a child process
+  with the arguments a person would have typed. Nothing in `fpx_gui` decodes a
+  pixel, writes a tag, or decides where a file lands, and the read-only rule
+  reaches it as a *call* to `config.ensure_outside_source` rather than a
+  second implementation of it. Two tier-2 tests fail if that call stops
+  happening, and they were verified by mutation rather than trusted.
 - **Keep every path short.** Windows long-path support is disabled on the
   dev machine; deep paths corrupt installs and writes.
 

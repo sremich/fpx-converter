@@ -1054,3 +1054,97 @@ knows which, and the tool cannot tell from the name.
 **Consequence.** The setting is deliberately one-way: it can take a date
 claim away, never add one. Adding one is what `album-dates.json` is for, and
 that route requires a person to type a specific day.
+
+## 2026-08-27 — Cancelling a run needs two mechanisms, not one
+
+**Decision.** The GUI's Cancel sends `CTRL_BREAK_EVENT` *and* writes a stop
+file (`convert --stop-file`). Neither alone is sufficient.
+
+**Why.** The plan was the signal alone: a child created with
+`CREATE_NEW_PROCESS_GROUP` receives `CTRL_BREAK_EVENT`, `interrupt_on_break`
+turns it into `KeyboardInterrupt`, and the batch engine's existing handling
+saves state and still writes `audit_report.json`. Three measurements broke it:
+
+- `CREATE_NO_WINDOW` does not merely hide a window, it gives the child a
+  **new console**. A process can only be signalled through a console it
+  *shares* with the sender, so passing it silently degraded every Cancel to a
+  kill.
+- `GetConsoleWindow()` — the usual "do I have a console" idiom — returns 0
+  inside any pseudo-console, so Windows Terminal and VS Code both took the
+  wrong branch. `GetConsoleProcessList` answers correctly.
+- **A console-less parent cannot deliver the signal at all.** `AttachConsole`
+  against the child fails with `ERROR_INVALID_HANDLE` whether the child was
+  made with `CREATE_NO_WINDOW` or `CREATE_NEW_CONSOLE`. That is exactly the
+  packaged windowed exe.
+
+**Consequence.** The stop file is a marker checked between photos, raising the
+same `KeyboardInterrupt` down the same path, so a cancelled run is
+`interrupted: true`, `complete: false`, with the report written. The signal is
+still sent first because it lands mid-photo rather than at the next boundary;
+the file is what makes the guarantee true. Verified in all three
+configurations — terminal, console-less parent, built exe.
+
+**And the stop file is a path this program deletes**, so it goes through
+`ensure_outside_source` like every other write target. It shipped without that
+guard for one audit round: a stop file inside the archive destroyed a source
+photograph while the run reported success, and `scan`'s `verify_unchanged`
+could not see it because that check belongs to an earlier command.
+
+## 2026-08-27 — A hard stop has to take the process tree
+
+**Decision.** When the grace period expires, the fallback is `taskkill /F /T`,
+not `terminate()` on the handle we hold.
+
+**Why.** A one-file PyInstaller executable is a bootloader whose child is the
+real program. Terminating the process we launched would leave a conversion
+running with nothing watching it, still writing into the destination.
+
+**Consequence.** A hard stop is reported as `HARD_STOPPED` and said out loud
+in the window, because it is the one ending with no trustworthy record of
+itself.
+
+## 2026-08-27 — Cancel does not run on the GUI thread
+
+**Decision.** The Cancel button starts the cancellation on its own thread and
+returns at once. Only closing the window waits for it.
+
+**Why.** Stopping politely means waiting for the engine to finish the photo it
+is on, save state and write the report — up to 20 seconds. Doing that on the
+Qt thread froze the window for the whole of it, immediately after the person
+pressed the button. Windows retitles a frozen window "(Not Responding)", which
+reads as a crash, and the remedy people reach for is Task Manager — the one
+ending that leaves no audit report. The freeze was therefore a direct cause of
+the outcome the entire cancellation design exists to prevent.
+
+**Consequence.** `closeEvent` still waits, because there the alternative is
+worse: once the window is gone, nothing is watching the converter. The worker
+also waits for the cancel to finish classifying the ending before it emits
+`done`, so a run that stopped politely is never reported as one that was
+killed.
+
+## 2026-08-27 — `ingest` belongs to the review page, not to Convert
+
+**Decision.** The GUI runs `ingest` when somebody asks for the review page,
+not as part of a conversion.
+
+**Why.** The gallery reads thumbnails from a flat `store/<store_name>` layout,
+which neither the nested source tree nor the nested output tree provides.
+Putting `ingest` in the Convert pipeline would copy the whole archive a second
+time on every run, and nothing in the conversion needs it.
+
+**Consequence.** The review button pays that cost instead, and `ingest`
+re-hashes and skips, so pressing it again costs a read rather than a copy.
+
+## 2026-08-27 — The version file is shipped inside the bundle
+
+**Decision.** The PyInstaller spec adds `VERSION` as bundle data rather than
+writing the version into the spec.
+
+**Why.** `fpx_converter.__init__` reads `VERSION` from beside the package,
+which inside a bundle is the bundle root. A literal in the spec would have
+been a second source of truth for the one value this project insists has
+exactly one.
+
+**Consequence.** `fpx-converter.exe --run-cli --version` prints the contents
+of `VERSION`, and CI fails the build if it prints `unknown` — which is what a
+bundle missing that file would print.

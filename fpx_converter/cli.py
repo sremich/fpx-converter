@@ -13,6 +13,7 @@ Commands (the version lives in `VERSION`; `--version` prints it):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import json
 import sys
@@ -313,6 +314,18 @@ def cmd_thumbnail(args: argparse.Namespace) -> int:
     return 0
 
 
+def _remove_stop_file(path: Path) -> None:
+    """Delete the stop marker, and never let that end the run.
+
+    `unlink` raises `PermissionError` on Windows for a file an indexer or a
+    virus scanner has open for a moment, and for a path that turns out to be a
+    directory. Both were able to escape the loop from the one code path whose
+    entire purpose is making sure the audit report still gets written.
+    """
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+
+
 def cmd_convert(args: argparse.Namespace) -> int:
     """Convert the manifest, resuming what is done and never stopping on one file."""
     manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
@@ -401,9 +414,15 @@ def cmd_convert(args: argparse.Namespace) -> int:
     # one ending that leaves no audit report at all.
     stop_file = Path(args.stop_file) if args.stop_file else None
     if stop_file is not None:
+        # Guarded like every other path this command writes to, and for a
+        # sharper reason than most: both uses below are deletes, so a stop
+        # file inside the archive would destroy a source photograph and the
+        # run would report success. `verify_unchanged` cannot catch it -- it
+        # belongs to `scan`, which ran earlier.
+        stop_file = config.ensure_outside_source(stop_file, source_root, "stop file")
         # A marker left behind by an earlier run would cancel this one before
         # it converted anything, which would look exactly like a crash.
-        stop_file.unlink(missing_ok=True)
+        _remove_stop_file(stop_file)
 
     with batch.ConversionLog(dest / batch.LOG_FILENAME, echo=echo) as log:
         labels = ", ".join(s.label for s in specs)
@@ -420,7 +439,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
                     # broken out of, so it takes the same road an interrupt
                     # takes and the report is written the same way.
                     log.write("STOP requested")
-                    stop_file.unlink(missing_ok=True)
+                    _remove_stop_file(stop_file)
                     raise KeyboardInterrupt
                 record = _handle_entry(
                     entry=entry,

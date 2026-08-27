@@ -8,7 +8,11 @@ a cancelled run write its audit report instead of dying where it stands.
 from __future__ import annotations
 
 import signal
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from fpx_converter import batch
 
@@ -73,6 +77,37 @@ class TestCtrlBreakBecomesAnInterrupt:
 
         `interrupt_on_break` being correct and never called is the same as not
         having it, and nothing else in a run would notice.
+
+        Asked of a real child process rather than of the source text. The
+        first version of this grepped `__main__.py` for the call, which would
+        have passed just as well with the call commented out, unreachable, or
+        inside an `if False:` -- and this project has already shipped one test
+        that could not fail.
         """
-        source = Path(batch.__file__).with_name("__main__.py").read_text(encoding="utf-8")
-        assert "interrupt_on_break()" in source
+        if not hasattr(signal, "SIGBREAK"):  # pragma: no cover - not Windows
+            pytest.skip("SIGBREAK exists only on Windows")
+
+        probe = "\n".join(
+            [
+                "import signal, sys, runpy",
+                "sys.argv = ['fpx_converter', '--version']",
+                "before = signal.getsignal(signal.SIGBREAK)",
+                "try:",
+                "    runpy.run_module('fpx_converter', run_name='__main__')",
+                "except SystemExit:",
+                "    pass",
+                "after = signal.getsignal(signal.SIGBREAK)",
+                "print('HANDLER-INSTALLED' if after is not before else 'HANDLER-ABSENT')",
+            ]
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            cwd=Path(batch.__file__).parent.parent,
+            timeout=120,
+        )
+        assert "HANDLER-INSTALLED" in result.stdout, (
+            "the entry point did not install the Ctrl+Break handler; "
+            f"stdout={result.stdout!r} stderr={result.stderr[-400:]!r}"
+        )

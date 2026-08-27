@@ -46,24 +46,57 @@ class PipelineWorker(QObject):
         self._cancel_status = ""
         self._cancelling = False
         self._lock = threading.Lock()
+        #: Set once a cancel has finished deciding how the run ended, so
+        #: `_run` does not report the ending before `cancel` knows it.
+        self._cancel_settled = threading.Event()
+        self._cancel_thread: threading.Thread | None = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def cancel(self) -> None:
+    def cancel(self, *, wait: bool = False) -> None:
         """Ask the running step to stop, and stop the pipeline after it.
+
+        Returns immediately by default. Stopping a run politely means waiting
+        for the engine to finish the photo it is on, save its state and write
+        its report -- up to `runner.GRACE_SECONDS` -- and doing that on the
+        Qt thread froze the window for the whole of it, right after the person
+        pressed Cancel. A window that stops repainting reads as a crash, and
+        the crash remedy is Task Manager, which is the one ending that leaves
+        no audit report.
+
+        `wait=True` is for closing the window, where blocking briefly is the
+        lesser evil: the alternative is a converter still running with nothing
+        watching it.
 
         Safe to call when nothing is running: `CliProcess.cancel` says so and
         the flag stops any step that has not started yet.
         """
         with self._lock:
+            already = self._cancel_thread
             self._cancelling = True
-            process = self._process
-        if process is not None:
-            status = process.cancel(stop_file=self._stop_file)
-            if status != runner.NOT_RUNNING:
-                self._cancel_status = status
+        if already is None:
+            thread = threading.Thread(target=self._do_cancel, daemon=True)
+            with self._lock:
+                self._cancel_thread = thread
+            thread.start()
+        else:
+            thread = already
+        if wait:
+            thread.join(timeout=runner.GRACE_SECONDS + 15.0)
+
+    def _do_cancel(self) -> None:
+        """The blocking half, off the Qt thread."""
+        try:
+            with self._lock:
+                process = self._process
+            if process is not None:
+                status = process.cancel(stop_file=self._stop_file)
+                if status != runner.NOT_RUNNING:
+                    self._cancel_status = status
+        finally:
+            self._cancel_settled.set()
 
     def _run(self) -> None:
         code = 0
@@ -87,4 +120,12 @@ class PipelineWorker(QObject):
                     self._process = None
             if code != 0:
                 break
+        with self._lock:
+            cancelling = self._cancelling
+        if cancelling:
+            # The child usually dies before `cancel` has finished classifying
+            # how it died. Reporting first would lose the difference between a
+            # run that stopped politely -- report written -- and one that had
+            # to be killed.
+            self._cancel_settled.wait(timeout=runner.GRACE_SECONDS + 15.0)
         self.done.emit(code, self._cancel_status)
