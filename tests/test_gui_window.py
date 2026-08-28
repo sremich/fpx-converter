@@ -535,7 +535,7 @@ class TestTheNamingAndFolderControls:
 
 
 class TestTheWindowOpensReadable:
-    """Stevie opened 1.2.0 and found the cards squashed into slivers: three
+    """Someone opened 1.2.0 and found the cards squashed into slivers: three
     radio buttons collapsed to underscores, the naming card empty, the
     placeholder text in the folder fields sliced in half. Making the window
     bigger fixed it, which is the tell.
