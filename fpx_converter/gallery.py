@@ -6,7 +6,7 @@ Two jobs, and the second is the one the project actually needs.
 and by audit status, so a person can see 687 photographs at once instead of
 reading a JSON report. Failures and warnings come first.
 
-**Date the albums.** `CLAUDE.md` is blunt that there is no capture date
+**Date the albums.** `docs/DATES.md` is blunt that there is no capture date
 anywhere in this corpus and that a folder naming a year or a season does not
 date a photograph. That leaves most of the archive with no
 `DateTimeOriginal` -- correctly, because nothing in the files knows one. But

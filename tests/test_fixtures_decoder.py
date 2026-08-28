@@ -1,10 +1,10 @@
 """Tier-2: end-to-end pixel decoding over real committed `.fpx` fixtures.
 
-Fixtures are images containing **no people**: the Kodak stock samples that
-shipped with Picture Easy, plus archive photographs confirmed person-free by
-eye and renamed to a neutral stem. Never add a photograph with a person in
-it, and never keep a filename somebody typed -- `CLAUDE.md` treats filenames
-as the archive's captions.
+No fixture contains an identifiable person: sixteen files of unknown origin
+plus twenty-one archive photographs screened by eye and renamed to a neutral
+stem. Never add a photograph with a recognisable person in it, and never keep
+a filename somebody typed -- this project treats filenames as the archive's
+captions. See `tests/fixtures/LICENSE.md` for the exact screening standard.
 
 `EXPECTED_FIXTURES` below pins the originals in detail. The parametrised
 tests run over everything in the directory, so a fixture added later is
@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from fixture_coverage import NO_CROPPED_FIXTURE_REASON
 
 from fpx_converter import decoder, thumbnail
 
@@ -148,7 +149,7 @@ with Image.open(fpx_path) as im:
 
 
 #: Greyscale correlation against the file's own embedded DIB. Measured, not
-#: guessed: 39 of the 40 fixtures score 0.957 or better and most exceed 0.99.
+#: guessed: 36 of the 37 fixtures score 0.957 or better and most exceed 0.99.
 GEOMETRY_FLOOR = 0.95
 
 #: One exception, recorded rather than explained away. `starfish.fpx` scores
@@ -194,8 +195,9 @@ def test_every_fixture_agrees_with_its_own_thumbnail_geometry(path: Path) -> Non
     assert corr >= floor, f"{path.name} geometry correlation {corr:.3f} < {floor}"
 
 
-def test_the_cropped_fixture_crops_and_the_crop_is_the_right_box() -> None:
-    """First committed cover for the crop branch.
+@pytest.mark.skip(reason=NO_CROPPED_FIXTURE_REASON)
+def test_a_cropped_fixture_crops_and_the_crop_is_the_right_box() -> None:
+    """The committed cover for the crop branch. Kept, skipped, not deleted.
 
     Both of this project's crop defects shipped because no fixture carried a
     viewing transform: 53 files cropped where 70 should have been, then 14
@@ -203,8 +205,16 @@ def test_the_cropped_fixture_crops_and_the_crop_is_the_right_box() -> None:
     you whether it crops -- the box is the authority -- so this asserts the
     box does something, and that doing it moves the image *towards* the
     thumbnail rather than away.
+
+    It ran against `feeder-crop.fpx` until 2026-08-27, when that file was
+    deleted for containing a person; see `NO_CROPPED_FIXTURE_REASON`. The body
+    below no longer names a fixture, so restoring this test is deleting one
+    decorator -- and `test_fixtures_colour.py` goes red to tell you to, the
+    moment a cropped fixture is committed again.
     """
-    path = FIXTURES / "feeder-crop.fpx"
+    candidates = [p for p in _all_fixtures() if decoder.decode_fpx(p).crop_applied]
+    assert candidates, "no cropped fixture: this test should still be skipped"
+    path = candidates[0]
     decoded = decoder.decode_fpx(path)
 
     assert decoded.crop_applied is not None, "the crop fixture stopped carrying a crop"

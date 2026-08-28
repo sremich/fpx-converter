@@ -28,6 +28,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from fixture_coverage import NO_CROPPED_FIXTURE_REASON
 from PIL import Image
 
 from fpx_converter import decoder, oracles, thumbnail
@@ -50,8 +51,12 @@ def _chroma_metrics(path: Path, image: Image.Image | None = None) -> dict[str, f
     `cropped_image()`, not `image`. The embedded DIB is written to the
     *cropped* framing, so comparing it against the full frame lines up two
     different pictures and reads as a colour fault: on the cropped fixture
-    that scores 0.42 and 0.15, well under the 0.5 gate. Tier 3 made this
-    exact mistake and false-positived on all nine of its cropped files.
+    this directory used to hold it scored 0.42 and 0.15, well under the 0.5
+    gate. Tier 3 made this exact mistake and false-positived on all nine of
+    its cropped files. No committed fixture is cropped any more (see
+    `NO_CROPPED_FIXTURE_REASON`), so nothing here would catch the mistake
+    being made again -- which is a reason to keep the call, not to simplify
+    it.
     """
     decoded = decoder.decode_fpx(path).cropped_image() if image is None else image
     return oracles.chroma_agreement(decoded, thumbnail.extract_thumbnail(path))
@@ -86,12 +91,39 @@ def test_the_fixture_set_still_covers_what_it_was_chosen_to_cover() -> None:
     colour_spaces = {d.colour_space for d in profiles}
     assert "PhotoYCC" in colour_spaces, "no PhotoYCC fixture: the colour path is untested"
     assert "NIF_RGB" in colour_spaces
-    assert any(d.crop_applied is not None for d in profiles), (
-        "no cropped fixture: the crop path is untested"
-    )
+    # The crop branch used to be asserted here too. It is not any more, and
+    # `test_no_fixture_carries_a_crop_which_is_a_known_regression` below says
+    # why -- read that before adding a crop assertion back to this list.
     # Sizes are read per file, never assumed -- so more than one has to exist
     # or nothing would catch a hardcoded 1152x864.
     assert len({(d.declared_width, d.declared_height) for d in profiles}) >= 4
+
+
+def test_no_fixture_carries_a_crop_which_is_a_known_regression() -> None:
+    """The inverted guard, standing where the crop-coverage guard stood.
+
+    This used to read `assert any(d.crop_applied is not None ...)` with the
+    message "no cropped fixture: the crop path is untested", and it existed to
+    stop that cover being deleted one file at a time. Then the thing it
+    guarded against was done deliberately: the only cropped fixture contained
+    a person and had to go. See `NO_CROPPED_FIXTURE_REASON`.
+
+    So it is inverted rather than deleted. It records the state the fixture
+    set is really in -- which is the state `tests/fixtures/README.md` and the
+    two skipped crop tests describe -- and it goes red the moment a cropped
+    fixture is committed again, at which point the cover is restored rather
+    than this expectation quietly flipped.
+    """
+    cropped = sorted(p.name for p in _fixture_paths() if decoder.decode_fpx(p).crop_applied)
+    assert not cropped, (
+        f"a cropped fixture is back ({', '.join(cropped)}). Restore the crop "
+        f"coverage instead of only updating this test: drop the skip on "
+        f"test_a_cropped_fixture_crops_and_the_crop_is_the_right_box in "
+        f"tests/test_fixtures_decoder.py and on "
+        f"test_a_full_frame_sharing_output_is_the_declared_size in "
+        f"tests/test_cli_convert.py, invert this assertion back, and update "
+        f"tests/fixtures/README.md. Context: {NO_CROPPED_FIXTURE_REASON}"
+    )
 
 
 class TestTheOracleCanActuallyFail:

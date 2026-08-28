@@ -79,7 +79,29 @@ class TestSettings:
         monkeypatch.setenv("FPX_SOURCE_ROOT", str(wanted))
         assert Settings.load(env_file).source_root == wanted.resolve()
 
-    def test_default_timezone_when_unset(
+    def test_default_timezone_when_unset_is_this_machines_own(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Not the zone the tool was written in.
+
+        It shipped `America/Chicago` as the silent default, so a first run in
+        London stamped US Central onto every photograph -- and an
+        `OffsetTime*` is written exactly as confidently when it is wrong.
+        """
+        from fpx_converter import timestamps
+
+        for key in [k for k in __import__("os").environ if k.startswith("FPX_")]:
+            monkeypatch.delenv(key, raising=False)
+        source = tmp_path / "src"
+        source.mkdir()
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"FPX_SOURCE_ROOT={source}\n", encoding="utf-8")
+        detected = timestamps.system_timezone()
+        if detected is None:
+            pytest.skip("this machine's zone could not be identified")
+        assert Settings.load(env_file).default_tz == detected
+
+    def test_a_configured_timezone_beats_the_machine(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         for key in [k for k in __import__("os").environ if k.startswith("FPX_")]:
@@ -87,8 +109,194 @@ class TestSettings:
         source = tmp_path / "src"
         source.mkdir()
         env_file = tmp_path / ".env"
-        env_file.write_text(f"FPX_SOURCE_ROOT={source}\n", encoding="utf-8")
-        assert Settings.load(env_file).default_tz == "America/Chicago"
+        env_file.write_text(
+            f"FPX_SOURCE_ROOT={source}\nFPX_DEFAULT_TZ=Asia/Tokyo\n", encoding="utf-8"
+        )
+        assert Settings.load(env_file).default_tz == "Asia/Tokyo"
+
+
+class TestTheWorkRoot:
+    """Where default paths hang off, for somebody who did not clone the repo.
+
+    `Path(__file__).parent.parent` is the repository in a checkout and
+    `site-packages` in a `pip install`, and roughly nineteen CLI defaults were
+    built on it -- so a first run aimed a manifest, an ingested photo store
+    and two output trees at the inside of a virtual environment.
+    """
+
+    @staticmethod
+    def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("FPX_WORK_DIR", raising=False)
+        config.set_work_dir(None)
+
+    def test_a_checkout_still_uses_the_checkout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The developer's `output/` and `source-files/` do not move."""
+        self._clear(monkeypatch)
+        monkeypatch.setattr(config, "is_source_checkout", lambda path: True)
+        assert config.work_root() == config.PACKAGE_ROOT
+
+    def test_an_installed_copy_uses_the_working_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._clear(monkeypatch)
+        monkeypatch.setattr(config, "is_source_checkout", lambda path: False)
+        monkeypatch.chdir(tmp_path)
+        assert config.work_root() == tmp_path
+        assert config.manifest_path() == tmp_path / "source-files" / "manifest.json"
+        assert config.fpx_store_dir() == tmp_path / "source-files" / "fpx"
+
+    def test_never_the_package_directory_when_it_is_not_a_checkout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The defect itself: nothing may default to inside site-packages."""
+        self._clear(monkeypatch)
+        monkeypatch.setattr(config, "is_source_checkout", lambda path: False)
+        monkeypatch.chdir(tmp_path)
+        for path in (
+            config.work_root(),
+            config.manifest_path(),
+            config.fpx_store_dir(),
+            config.output_root_default(),
+        ):
+            assert config.PACKAGE_ROOT not in path.parents
+            assert path != config.PACKAGE_ROOT
+
+    def test_the_environment_variable_and_the_flag_both_win(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._clear(monkeypatch)
+        monkeypatch.setenv("FPX_WORK_DIR", str(tmp_path / "from-env"))
+        assert config.work_root() == tmp_path / "from-env"
+        config.set_work_dir(tmp_path / "from-flag")
+        try:
+            assert config.work_root() == tmp_path / "from-flag"
+        finally:
+            config.set_work_dir(None)
+
+    def test_a_marker_beside_the_package_is_what_makes_it_a_checkout(
+        self, tmp_path: Path
+    ) -> None:
+        assert not config.is_source_checkout(tmp_path)
+        (tmp_path / "VERSION").write_text("1.2.3\n", encoding="utf-8")
+        assert config.is_source_checkout(tmp_path)
+
+
+class TestWhereTheEnvFileIsLookedFor:
+    """The working directory first, not the package folder only.
+
+    It read `REPO_ROOT/.env` and nothing else, so an installed copy looked for
+    settings in a directory the person running it has never seen.
+    """
+
+    def test_the_working_directory_comes_first(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("FPX_DEFAULT_TZ", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("FPX_DEFAULT_TZ=Asia/Tokyo\n", encoding="utf-8")
+        assert config.load_env()["FPX_DEFAULT_TZ"] == "Asia/Tokyo"
+
+    def test_then_the_user_config_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("FPX_DEFAULT_TZ", raising=False)
+        empty = tmp_path / "cwd"
+        empty.mkdir()
+        monkeypatch.chdir(empty)
+        user_dir = tmp_path / "config"
+        user_dir.mkdir()
+        (user_dir / ".env").write_text("FPX_DEFAULT_TZ=Europe/Paris\n", encoding="utf-8")
+        monkeypatch.setattr(config, "user_config_dir", lambda: user_dir)
+        assert config.load_env()["FPX_DEFAULT_TZ"] == "Europe/Paris"
+
+    def test_the_search_order_is_first_hit_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("FPX_DEFAULT_TZ", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("FPX_DEFAULT_TZ=Asia/Tokyo\n", encoding="utf-8")
+        user_dir = tmp_path / "config"
+        user_dir.mkdir()
+        (user_dir / ".env").write_text("FPX_DEFAULT_TZ=Europe/Paris\n", encoding="utf-8")
+        monkeypatch.setattr(config, "user_config_dir", lambda: user_dir)
+        assert config.load_env()["FPX_DEFAULT_TZ"] == "Asia/Tokyo"
+
+    def test_an_explicit_env_file_replaces_the_search(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("FPX_DEFAULT_TZ", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("FPX_DEFAULT_TZ=Asia/Tokyo\n", encoding="utf-8")
+        chosen = tmp_path / "elsewhere.env"
+        chosen.write_text("FPX_DEFAULT_TZ=Europe/Paris\n", encoding="utf-8")
+        config.set_env_file(chosen)
+        try:
+            assert config.load_env()["FPX_DEFAULT_TZ"] == "Europe/Paris"
+        finally:
+            config.set_env_file(None)
+
+    def test_an_env_file_that_is_not_there_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="does not exist"):
+            config.set_env_file(tmp_path / "nope.env")
+
+    def test_the_environment_still_beats_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("FPX_DEFAULT_TZ=Asia/Tokyo\n", encoding="utf-8")
+        monkeypatch.setenv("FPX_DEFAULT_TZ", "Europe/Paris")
+        assert config.load_env()["FPX_DEFAULT_TZ"] == "Europe/Paris"
+
+
+class TestTheDefaultOutputRoot:
+    def test_fpx_output_root_is_finally_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It was parsed into `Settings` and used by nothing for six releases."""
+        monkeypatch.setenv("FPX_OUTPUT_ROOT", str(tmp_path / "converted"))
+        assert config.output_root_default() == tmp_path / "converted"
+
+    def test_without_it_the_output_sits_under_the_work_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("FPX_OUTPUT_ROOT", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("", encoding="utf-8")
+        config.set_work_dir(tmp_path)
+        try:
+            assert config.output_root_default() == tmp_path / "output"
+        finally:
+            config.set_work_dir(None)
+
+
+class TestWhichTimezoneAnswers:
+    """`--timezone`, then `FPX_DEFAULT_TZ`, then the machine."""
+
+    def test_the_flag_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FPX_DEFAULT_TZ", "Asia/Tokyo")
+        assert config.resolve_default_timezone("Europe/London") == "Europe/London"
+
+    def test_then_the_configured_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FPX_DEFAULT_TZ", "Asia/Tokyo")
+        assert config.resolve_default_timezone(None) == "Asia/Tokyo"
+
+    def test_blank_is_not_an_answer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FPX_DEFAULT_TZ", "Asia/Tokyo")
+        assert config.resolve_default_timezone("   ") == "Asia/Tokyo"
+
+    def test_an_unidentifiable_machine_is_refused_rather_than_guessed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fpx_converter import timestamps
+
+        monkeypatch.delenv("FPX_DEFAULT_TZ", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("", encoding="utf-8")
+        monkeypatch.setattr(timestamps, "system_timezone", lambda: None)
+        with pytest.raises(ConfigError, match="time zone could not be identified"):
+            config.resolve_default_timezone(None)
 
 
 class TestAlbumTimezoneOverrides:

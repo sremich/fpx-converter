@@ -53,9 +53,10 @@ jobs:
         run: python -m ruff check .
 
       - name: Run tests
-        # Tiers 1 and 2. Tier 2 uses the four committed non-personal Kodak
-        # fixtures; tiers 3 and 4 need the personal corpus and never run
-        # here. See CLAUDE.md.
+        # Tiers 1 and 2. Tier 2 uses the committed fixtures, every one of
+        # which was confirmed person-free by eye -- see
+        # tests/fixtures/LICENSE.md for what they are and who made them.
+        # Tiers 3 and 4 need the personal corpus and never run here.
         #
         # FPX_REQUIRE_EXIFTOOL turns "ExifTool is missing" from a skip into
         # a failure. If the install step above ever silently stops working,
@@ -95,3 +96,45 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           FPX_REQUIRE_EXIFTOOL: "1"
         run: python -m pytest
+
+  # The guard the working-tree ones were not. `test_environment.py` has two
+  # leakage checks and both list `git ls-files --cached --others`: the tree as
+  # it is now. Neither has ever read history, which is how a child's name and
+  # two album names sat in five commits across five releases with every check
+  # green. Deleting a file does not remove it from a clone.
+  #
+  # Runs on ubuntu because it is git and Python and nothing else. The rest of
+  # this workflow is on Windows because the product is a Windows tool; a
+  # history scan is not the product.
+  history:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole point of the job, and the easiest thing to get wrong:
+          # actions/checkout fetches ONE commit by default, and a history scan
+          # over one commit passes by having looked at nothing.
+          # `history_leak_guard.py` refuses a shallow clone rather than
+          # calling it clean, so removing this line fails loudly instead of
+          # going quietly green -- but it should not be removed.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Scan all reachable history for personal content
+        # Where the needles live, and why not in the repository: a guard whose
+        # source contains the strings it guards is itself the leak. So the
+        # literal needles come from a repository SECRET, the guard prints a
+        # digest rather than the needle when it hits (CI logs on a public repo
+        # are public), and the file-shape layer -- photographs, sidecars, run
+        # output -- is committed because it is structural and contains nothing
+        # personal.
+        #
+        # Deliberately NOT --require-needles: an unset secret leaves the shape
+        # layer running, which is the half a fork needs most. See the module
+        # docstring in the guard.
+        env:
+          FPX_LEAK_NEEDLES: ${{ secrets.FPX_LEAK_NEEDLES }}
+        run: python scripts/history_leak_guard.py --repo .

@@ -1,7 +1,7 @@
-# --- Local-only context (OneDrive-synced, never on GitHub) ---
-# CLAUDE.md and DECISIONS.md are COMMITTED (public-safe) so clones,
-# worktrees, and CI/cloud agent sessions aren't blind. Only the roaming
-# machine-state file and raw inputs stay local.
+# --- Local-only context (never on GitHub) ---
+# The photographs, everything derived from them, and the working notes that
+# name them stay local. The design reasoning that used to live in CLAUDE.md
+# and DECISIONS.md is public now, distilled into ARCHITECTURE.md and docs/.
 /source-files/*
 !/source-files/.gitkeep
 /HANDOVER.md
@@ -31,6 +31,14 @@ conversion.log
 # --- Test fixtures are the ONE exception ---
 # Non-personal, committed FPX fixtures for tier-1/2 tests live here.
 !/tests/fixtures/**
+
+# --- Documentation screenshots ---
+# Screenshots of the application window, for README.md and docs/. Narrow on
+# purpose: only *.png, only directly inside docs/images/, and nothing else
+# above is weakened. A photograph cannot reach the repository through this --
+# .fpx, .tif, .jpg and every other image rule still apply everywhere, and the
+# leakage guards in tests/test_environment.py list untracked files too.
+!/docs/images/*.png
 
 # --- Secrets and runtime data ---
 .env
@@ -74,3 +82,10 @@ desktop.ini
 # guards list untracked files and would otherwise scan a whole second
 # checkout.
 .claude/worktrees/
+
+# PyInstaller licence-guard scratch builds
+/build-*/
+/dist-*/
+
+# Wiki content staged for the separate GitHub wiki repo, never part of this one
+/wiki-staging/

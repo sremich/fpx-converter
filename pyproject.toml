@@ -1,8 +1,44 @@
 [project]
 name = "fpx-converter"
 description = "Batch-converts Kodak FlashPix (.fpx) photos to archival TIFF and shareable JPEG, preserving every recoverable property."
+readme = "README.md"
 requires-python = ">=3.14"
 dynamic = ["version"]
+
+# PEP 639: an SPDX expression plus the files that back it. `license-files`
+# names LICENSE and the LGPL/GPL texts the packaged desktop app has to carry
+# -- see THIRD-PARTY-NOTICES.md. Note that a `License ::` trove classifier is
+# deliberately absent: PEP 639 makes it an error to give both, and the SPDX
+# expression is the machine-readable one.
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSES/*.txt"]
+
+authors = [{ name = "Stevie Remich" }]
+
+keywords = ["flashpix", "fpx", "kodak", "exif", "xmp", "tiff", "photo-archive"]
+
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: End Users/Desktop",
+  "Natural Language :: English",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+  "Topic :: System :: Archiving",
+  "Topic :: Utilities",
+]
+
+# No email address is published for this project. Every contact route below is
+# a GitHub URL on purpose; see SECURITY.md and CONTRIBUTING.md.
+[project.urls]
+Homepage = "https://github.com/sremich/fpx-converter"
+Repository = "https://github.com/sremich/fpx-converter"
+Issues = "https://github.com/sremich/fpx-converter/issues"
+Changelog = "https://github.com/sremich/fpx-converter/blob/main/CHANGELOG.md"
 
 # The version lives ONLY in the VERSION file. Nothing here duplicates it --
 # it is declared dynamic and read from that file, so there is exactly one

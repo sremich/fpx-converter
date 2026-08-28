@@ -1,6 +1,6 @@
 """Dates a person supplied for an album, after looking at the photographs.
 
-This is the missing half of the dating strategy. `CLAUDE.md` says there is no
+This is the missing half of the dating strategy. `ARCHITECTURE.md` says there is no
 capture date anywhere in this corpus, that a folder naming a year or a season
 does not date a photograph, and that `DateTimeOriginal` is written only where
 a date is independently defensible. That leaves most of the archive with no

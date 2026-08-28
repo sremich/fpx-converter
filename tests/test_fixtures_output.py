@@ -1,6 +1,15 @@
-"""Tier-2: end-to-end dual output generation and pyexiv2 validation over committed fixtures.
+"""Tier-2: end-to-end dual output generation and tag validation over committed fixtures.
 
-The four fixtures are non-personal Kodak stock sample images. Never add personal photos.
+No fixture contains an identifiable person. Never add personal photos.
+
+Three parsers, not two. ExifTool writes; `fpx_converter.validator` reads the
+tags back with Pillow, which is the shipped half of the "validate with a
+different tool than the one that wrote" rule; and these tests re-read the same
+files a third time with `pyexiv2`, whose parser is exiv2's own. `pyexiv2` is a
+**dev-only** dependency and is deliberately not importable from the package --
+it is GPL-3.0 and would relicense the published executable. Here, at test
+time, it costs nothing and catches anything Pillow and ExifTool might agree on
+wrongly.
 """
 
 from __future__ import annotations
@@ -10,6 +19,7 @@ from pathlib import Path
 
 import pyexiv2
 import pytest
+from conftest import TEST_DEFAULT_TZ
 from PIL import Image
 
 from fpx_converter import validator, writer
@@ -118,9 +128,16 @@ EXPECTED_FIXTURE_DERIVED = {
 
 
 @needs_exiftool
-def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) -> None:
+def test_dual_output_on_all_fixtures_and_validates_the_tags(tmp_path: Path) -> None:
     output_root = tmp_path / "output"
     source_root = FIXTURES
+    #: `EXPECTED_FIXTURE_DERIVED` names `-06:00`, which is only the answer in
+    #: US Central. The default zone is this machine's own from 1.3.0, so the
+    #: zone the expectations were written for has to be named rather than
+    #: assumed -- otherwise this test asserts where the developer lives. The
+    #: name lives in `conftest.py`, which pins the same zone for the whole
+    #: suite; re-typing it here is how two copies start disagreeing.
+    expectation_tz = TEST_DEFAULT_TZ
 
     for filename, exp_info in EXPECTED_FIXTURE_DERIVED.items():
         fpx_path = FIXTURES / filename
@@ -143,6 +160,7 @@ def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) 
             source_root=source_root,
             source_copy=True,
             sidecar=True,
+            default_tz=expectation_tz,
         )
 
         assert res.validation_ok, f"Validation failed for {filename}: {res.errors}"
@@ -172,7 +190,7 @@ def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) 
             sampling_factors = [(comp[1], comp[2]) for comp in jpg_img.layer]
             assert all(sf == (1, 1) for sf in sampling_factors)
 
-        # 4. Independent pyexiv2 validation call.
+        # 4. Independent validation call: ExifTool wrote, Pillow reads back.
         #
         # The expectation carries the declared size, because the validator
         # now refuses to pass an output it could not size-check at all -- a
@@ -186,7 +204,7 @@ def test_dual_output_on_all_fixtures_and_validates_with_pyexiv2(tmp_path: Path) 
             "declared_height": exp_info["height"],
         }
         val = validator.validate_dual_output(res.tif_path, res.jpg_path, expected)
-        assert val.ok, f"pyexiv2 validation failed on {filename}: {val.errors}"
+        assert val.ok, f"read-back validation failed on {filename}: {val.errors}"
 
         # 5. Assert mtime set on all files
         mtime_tif = os.stat(res.tif_path).st_mtime
@@ -220,7 +238,8 @@ def test_dual_output_with_dated_entry_and_caption(tmp_path: Path) -> None:
     assert res.jpg_path.name == "2001-07-04_000000_Summer Sky Over Beach.jpg"
     assert res.tif_path.parent.name == "4th of July 2001"
 
-    # Read back with pyexiv2 to verify DateTimeOriginal and Caption/Title
+    # A third parser on the same file: pyexiv2 (dev-only, never shipped)
+    # re-reads DateTimeOriginal and the caption that Pillow just agreed on.
     with pyexiv2.Image(str(res.jpg_path)) as meta:
         exif = meta.read_exif()
         xmp = meta.read_xmp()

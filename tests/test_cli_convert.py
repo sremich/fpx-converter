@@ -18,9 +18,11 @@ import json
 from pathlib import Path
 
 import pytest
+from fixture_coverage import NO_CROPPED_FIXTURE_REASON
 from PIL import Image
 
-from fpx_converter import batch
+from fpx_converter import batch, decoder
+from fpx_converter import writer as writer_mod
 from fpx_converter.cli import main
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -82,7 +84,7 @@ class TestArtifacts:
     def test_a_partial_run_says_so_rather_than_reporting_success(
         self, converted: tuple[Path, Path]
     ) -> None:
-        """`--limit 4` over 40 entries is not a finished archive.
+        """`--limit 4` over 37 entries is not a finished archive.
 
         Before this, the report recorded the slice as the manifest size, so
         four converted files produced `unexplained_failures: 0` and looked
@@ -242,19 +244,41 @@ class TestOutputFlags:
         assert _convert(manifest, dest, "--no-archive", "--no-sharing") == 1
         assert not dest.exists() or not list(dest.rglob("*.tif"))
 
+    @pytest.mark.skip(reason=NO_CROPPED_FIXTURE_REASON)
     def test_a_full_frame_sharing_output_is_the_declared_size(
         self, converted: tuple[Path, Path]
     ) -> None:
+        """Kept, skipped, not deleted -- see `NO_CROPPED_FIXTURE_REASON`.
+
+        `--sharing-framing full` can only be *observed* against a file that
+        carries a crop: for every other file the cropped frame and the full
+        frame are the same picture, so a version of this test that ran over
+        the fixture set as it now stands would pass whether or not the flag
+        reached the writer. It ran against `feeder-crop.fpx` until that file
+        was deleted on 2026-08-27 for containing a person.
+
+        The body finds the cropped fixture rather than naming one, so
+        restoring the cover is deleting the decorator above.
+        """
         manifest, dest = converted
+        cropped = next(
+            (p for p in sorted(FIXTURES.glob("*.fpx"))
+             if decoder.decode_fpx(p).crop_applied is not None),
+            None,
+        )
+        assert cropped is not None, "no cropped fixture: this test should still be skipped"
+        decoded = decoder.decode_fpx(cropped)
         assert main(
             ["convert", "--manifest", str(manifest), "--store", str(FIXTURES),
              "--dest", str(dest), "--sharing-framing", "full"]
         ) == 0
         crop_fixture = next(
-            p for p in (dest / "sharing").rglob("*feeder-crop.jpg")
+            p for p in (dest / "sharing").rglob(f"*{cropped.stem}.jpg")
         )
         with Image.open(crop_fixture) as image:
-            assert image.size == (1152, 864), "the full-frame flag did not reach the writer"
+            assert image.size == (decoded.declared_width, decoded.declared_height), (
+                "the full-frame flag did not reach the writer"
+            )
 
 
 def _unreachable_sources(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -431,3 +455,177 @@ class TestAskingForMoreThanLastTime:
 
         _convert(manifest, dest, *EXTRAS)
         assert _report(dest)["counts"]["resumed"] == SAMPLE
+
+
+class TestExifToolIsResolvedOnceBeforeTheRun:
+    """A missing ExifTool is a fact about the machine, not about a photograph.
+
+    It used to be discovered per file, so a first-time user without it got
+    every image written to disk, every one of them reported failed, and a
+    resume state that recorded nothing -- so the next run did the whole thing
+    again. One refusal before anything is written is the entire fix.
+    """
+
+    @staticmethod
+    def _no_exiftool(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(writer_mod, "resolve_exiftool_path", lambda *_a, **_k: None)
+
+    def test_the_run_refuses_instead_of_starting(
+        self,
+        converted: tuple[Path, Path],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        manifest, dest = converted
+        self._no_exiftool(monkeypatch)
+        assert _convert(manifest, dest) == 1
+        assert "ExifTool was not found" in capsys.readouterr().err
+
+    def test_nothing_at_all_is_written(
+        self, converted: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manifest, dest = converted
+        self._no_exiftool(monkeypatch)
+        _convert(manifest, dest)
+        assert not dest.exists() or not list(dest.rglob("*.tif"))
+        assert not (dest / batch.REPORT_FILENAME).is_file()
+
+    def test_it_says_what_to_type_on_each_platform(
+        self,
+        converted: tuple[Path, Path],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        manifest, dest = converted
+        self._no_exiftool(monkeypatch)
+        _convert(manifest, dest)
+        err = capsys.readouterr().err
+        for command in (
+            "winget install --id OliverBetz.ExifTool",
+            "brew install exiftool",
+            "apt install libimage-exiftool-perl",
+        ):
+            assert command in err
+
+    def test_a_dry_run_does_not_need_it(
+        self, converted: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing is written, so nothing needs tagging."""
+        manifest, dest = converted
+        self._no_exiftool(monkeypatch)
+        assert _convert(manifest, dest, "--dry-run") == 0
+
+    def test_the_resolved_path_reaches_the_writer(
+        self, converted: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Otherwise it is looked up again for every photograph in the run."""
+        seen: list[object] = []
+        real = writer_mod.write_single_entry_dual_output
+
+        def spy(*args: object, **kwargs: object):
+            seen.append(kwargs.get("exiftool_path"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(writer_mod, "write_single_entry_dual_output", spy)
+        manifest, dest = converted
+        _convert(manifest, dest, "--limit", "1")
+        assert seen and all(isinstance(path, str) and path for path in seen)
+
+
+class TestTheTimezoneIsSettledBeforeTheRun:
+    """A zone nobody can resolve is one message, not 687 failed files.
+
+    `get_timezone_offset` raises for a name it cannot resolve, and the batch
+    engine catches per file -- so before 1.3.0 a run outside the United
+    States recorded every single file as failed, with the real reason
+    repeated once per photograph in the error column.
+    """
+
+    def test_a_nonsense_zone_stops_the_run(
+        self, converted: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        manifest, dest = converted
+        assert _convert(manifest, dest, "--timezone", "Nowhere/AtAll") == 1
+        assert "no UTC offset known" in capsys.readouterr().err
+        assert not (dest / batch.REPORT_FILENAME).is_file()
+
+    def test_a_non_us_zone_converts_and_records_its_offset(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        manifest, dest = converted
+        assert _convert(manifest, dest, "--timezone", "Europe/London", "--sidecar") == 0
+        sidecars = list(dest.rglob("*.fpx.json"))
+        assert sidecars
+        stamps = json.loads(sidecars[0].read_text(encoding="utf-8"))
+        stamps = stamps["derived_metadata"]["timestamps"]
+        assert stamps["timezone_name"] == "Europe/London"
+        assert stamps["offset_time_digitized"] in ("+00:00", "+01:00")
+
+    def test_the_chosen_zone_is_named_in_the_output(
+        self, converted: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        manifest, dest = converted
+        _convert(manifest, dest, "--timezone", "Asia/Tokyo")
+        assert "time zone: Asia/Tokyo" in capsys.readouterr().out
+
+
+class TestAnAssumedColourSpaceIsVisible:
+    """The fallback stays; the silence does not.
+
+    This project shipped two PhotoYCC files converted as though they were
+    RGB -- solidly green, 42% of their pixels clipped to zero -- past every
+    automated check it had. A colour decision nobody can see afterwards is
+    the one thing this pipeline must not make quietly.
+    """
+
+    @staticmethod
+    def _undeclared(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every file looks as though it declared no colour space."""
+        real = decoder.classify_colour_space
+        monkeypatch.setattr(
+            decoder,
+            "classify_colour_space",
+            lambda blob, index=0: real(None, index),
+        )
+
+    def test_it_reaches_the_audit_report(
+        self, converted: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manifest, dest = converted
+        self._undeclared(monkeypatch)
+        assert _convert(manifest, dest) == 0
+        report = _report(dest)
+        assert report["counts"]["with_warnings"] == SAMPLE
+        warned = {w["store_name"] for w in report["warnings"]}
+        assert len(warned) == SAMPLE
+        assert any(
+            "colour-space-assumed" in line
+            for entry in report["warnings"]
+            for line in entry["warnings"]
+        )
+
+    def test_it_reaches_the_conversion_log(
+        self, converted: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manifest, dest = converted
+        self._undeclared(monkeypatch)
+        _convert(manifest, dest)
+        text = (dest / batch.LOG_FILENAME).read_text(encoding="utf-8")
+        assert text.count("WARN") >= SAMPLE
+        assert "colour-space-assumed" in text
+
+    def test_the_conversion_still_succeeds(
+        self, converted: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A warning, not a failure: 99.7% of this corpus really is NIF RGB."""
+        manifest, dest = converted
+        self._undeclared(monkeypatch)
+        _convert(manifest, dest)
+        assert _report(dest)["counts"]["failed"] == 0
+
+    def test_a_file_that_declares_its_colour_space_warns_about_nothing(
+        self, converted: tuple[Path, Path]
+    ) -> None:
+        manifest, dest = converted
+        _convert(manifest, dest)
+        assert _report(dest)["counts"]["with_warnings"] == 0

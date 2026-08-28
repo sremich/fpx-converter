@@ -16,7 +16,7 @@ year folders.
       undated/                   <- no usable date at all
 
 The point is that a folder name somebody typed is evidence and a folder name
-a tool generated is not. `CLAUDE.md` already says filenames are the only
+a tool generated is not. `ARCHITECTURE.md` already says filenames are the only
 human-authored content in this archive; folder names are the same thing one
 level up, and they outrank any date we could derive.
 """

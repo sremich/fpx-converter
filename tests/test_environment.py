@@ -114,16 +114,70 @@ def test_the_release_workflow_looks_for_the_file_the_spec_builds() -> None:
 
 
 def test_runtime_dependencies_import() -> None:
-    """pyexiv2 is a compiled extension; an import failure here is unrecoverable."""
+    """The packages a conversion actually needs, all importable.
+
+    `pyexiv2` is deliberately absent from this list. It was a runtime
+    dependency until 2026-08-27 and is now a test-only one: it is GPL-3.0 and
+    bundles GPL Exiv2, so shipping it inside the executable would have
+    relicensed the whole binary. Asserting it here would assert the opposite
+    of the rule the packaging now enforces.
+
+    `defusedxml` replaces it in the load-bearing sense. Pillow's `getxmp()`
+    does not fail without it -- it warns and returns an empty dict, which is
+    indistinguishable from "this file carries no XMP". Three of the ten tags
+    the validator checks would quietly become checks that cannot fail.
+    """
+    import defusedxml
     import numpy
     import olefile
     import PIL
-    import pyexiv2
 
     assert numpy.__version__
     assert olefile.__version__
     assert PIL.__version__
-    assert pyexiv2.__version__
+    assert defusedxml.__version__
+
+
+def test_pyexiv2_is_a_test_dependency_and_is_never_shipped() -> None:
+    """The GPL stays out of the executable, and this states where it may live.
+
+    pyexiv2 earns its place as a *third* independent parser in tier-2 tests --
+    ExifTool writes, Pillow reads back, exiv2 confirms. What it may not do is
+    reach `requirements.txt`, because `packaging/fpx-converter.spec` builds
+    the shipped binary from that file.
+    """
+    def pinned(filename: str) -> set[str]:
+        """The distributions a file actually requires.
+
+        Comments are not requirements -- `requirements.txt` carries a line
+        explaining where pyexiv2 went, and a check that read raw text would
+        fire on the explanation for the very rule it enforces.
+        """
+        text = (REPO_ROOT / filename).read_text(encoding="utf-8")
+        names = set()
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            names.add(re.split(r"[=<>!~\[ ]", line, maxsplit=1)[0].lower())
+        return names
+
+    runtime = pinned("requirements.txt")
+    dev = pinned("requirements-dev.txt")
+    assert runtime, "requirements.txt parsed to nothing -- this check would pass vacuously"
+
+    assert "pyexiv2" not in runtime, (
+        "pyexiv2 is back in requirements.txt -- it is GPL-3.0 and bundles GPL "
+        "Exiv2, and the shipped exe is built from this file"
+    )
+    assert "pyexiv2" in dev, (
+        "pyexiv2 has left requirements-dev.txt -- the tier-2 tests lose their "
+        "third independent parser"
+    )
+    assert "defusedxml" in runtime, (
+        "defusedxml must be a runtime pin: without it Pillow's getxmp() warns "
+        "and returns {}, and the XMP checks stop being able to fail"
+    )
 
 
 def test_installed_versions_match_the_pins() -> None:
@@ -150,8 +204,14 @@ def test_installed_versions_match_the_pins() -> None:
 def test_no_personal_data_is_tracked() -> None:
     """The one rule that must never regress: no personal image lands in git.
 
-    Fixtures under tests/fixtures/ are the single sanctioned exception -- they
-    are Kodak stock sample images, not family photos.
+    Fixtures under tests/fixtures/ are the single sanctioned exception, and
+    the exception is about *people*, not about provenance: every committed
+    fixture was confirmed person-free by eye. Who made them is a separate
+    question with a separate answer -- 16 are of origin this project cannot
+    establish and 21 are the owner's own camera output -- and that answer
+    lives in `tests/fixtures/LICENSE.md` rather than being restated here,
+    where a copy would go stale exactly as the "Kodak stock samples" claim
+    did.
     """
     import subprocess
 
@@ -194,11 +254,64 @@ def test_no_personal_data_is_tracked() -> None:
             or path.lower().startswith(personal_trees)
         )
         and not path.startswith("tests/fixtures/")
+        # Screenshots of this application's own window. They are pictures of
+        # software, not of anybody's life, and the documentation is close to
+        # useless without them -- a lay reader cannot tell from prose alone
+        # that this is a program you click rather than type at.
+        #
+        # The exception is deliberately narrow: `.png` only, directly inside
+        # `docs/images/`, no subdirectories. `.gitignore` carves exactly the
+        # same shape. Widening either -- another suffix, a nested path, a
+        # second directory -- reopens the hole this rule exists to close, so
+        # `test_the_screenshot_exception_stays_narrow` below pins it.
+        and not _is_app_screenshot(path)
         # A placeholder that keeps an empty local-only tree in the checkout
         # holds no content at all.
         and not path.endswith("/.gitkeep")
     ]
     assert not offenders, f"personal media is tracked in git: {offenders}"
+
+
+def _is_app_screenshot(path: str) -> bool:
+    """A `.png` sitting directly in `docs/images/`, and nothing else."""
+    prefix = "docs/images/"
+    return (
+        path.startswith(prefix)
+        and path.lower().endswith(".png")
+        and "/" not in path[len(prefix) :]
+    )
+
+
+def test_the_screenshot_exception_stays_narrow() -> None:
+    """The screenshot carve-out must not become a general image amnesty.
+
+    `test_no_personal_data_is_tracked` lets pictures of the application's own
+    window into the repository. That is the second sanctioned exception to
+    "no photographs in git", after the committed fixtures, and every widening
+    of such an exception starts as a reasonable-looking special case. This
+    test states the exact shape so that widening it has to be deliberate.
+    """
+    assert _is_app_screenshot("docs/images/main-window.png")
+
+    # A photograph does not become publishable by being renamed into the
+    # screenshot directory.
+    assert not _is_app_screenshot("docs/images/holiday.jpg")
+    assert not _is_app_screenshot("docs/images/scan.tiff")
+    # Nor by hiding one level down.
+    assert not _is_app_screenshot("docs/images/album/child.png")
+    # Nor by sitting in a directory whose name merely starts the same way.
+    assert not _is_app_screenshot("docs/images-archive/child.png")
+    assert not _is_app_screenshot("docs/photos/child.png")
+
+    # And the files actually committed under it are all screenshots.
+    tracked = subprocess.run(
+        ["git", "ls-files", "docs/images"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert tracked, "no screenshots committed: the documentation lost its images"
+    assert all(_is_app_screenshot(p) for p in tracked), (
+        f"something other than an app screenshot is in docs/images: {tracked}"
+    )
 
 
 def test_ci_requires_exiftool_and_installs_it() -> None:
@@ -280,7 +393,7 @@ def test_no_personal_name_from_the_archive_is_tracked_in_git() -> None:
     entries = manifest.get("entries", [])
 
     personal = {a for e in entries for a in e.get("albums", []) if a}
-    # Human-authored filenames too, not only albums. `CLAUDE.md` bans
+    # Human-authored filenames too, not only albums. `ARCHITECTURE.md` bans
     # "personal filenames, album names, or photo captions", and it also says
     # filenames ARE the captions -- "the only human-authored content in the
     # archive". A guard that covered albums alone left 109 of the 611 stems
@@ -303,9 +416,10 @@ def test_no_personal_name_from_the_archive_is_tracked_in_git() -> None:
         # trusted from the flag.
         if _CAMERA_NAME.fullmatch(stem):
             continue
-        # A committed fixture is the sanctioned exception: Kodak stock
-        # samples, not family photos. Some of them are also in the archive,
-        # which is why their names appear in both places.
+        # A committed fixture is the sanctioned exception: images with no
+        # person in them, whatever their origin -- see
+        # tests/fixtures/LICENSE.md for who made them. Some are also in the
+        # archive, which is why their names appear in both places.
         if stem.lower() in fixture_stems:
             continue
         personal.add(stem)
@@ -343,7 +457,7 @@ def test_no_personal_name_from_the_archive_is_tracked_in_git() -> None:
 
     assert not offenders, (
         "album names or human-authored filenames from the archive are committed "
-        f"to git (CLAUDE.md forbids this): {sorted(offenders)}"
+        f"to git (ARCHITECTURE.md forbids this): {sorted(offenders)}"
     )
 
 
@@ -404,7 +518,7 @@ def test_no_personal_name_is_buried_inside_a_committed_binary() -> None:
 
     assert not offenders, (
         "a committed fixture carries a personal name inside its bytes "
-        f"(CLAUDE.md forbids this): {sorted(set(offenders))}"
+        f"(ARCHITECTURE.md forbids this): {sorted(set(offenders))}"
     )
 
 
@@ -471,3 +585,65 @@ class TestTheLeakageGuardsCanActuallyFail:
         needle = self.PLANTED.lower().encode("ascii")
         for path in sorted((REPO_ROOT / "tests" / "fixtures").glob("*.fpx")):
             assert needle not in path.read_bytes().lower()
+
+
+def test_the_timezone_database_is_pinned_and_present() -> None:
+    """`zoneinfo` finds nothing on Windows without the `tzdata` wheel.
+
+    Without it every zone outside the small offline table raises, and that
+    exception is caught per file by the batch engine -- so a run anywhere
+    outside the United States records every photograph in the archive as
+    failed.
+    """
+    import zoneinfo
+    from importlib.metadata import version as installed_version
+
+    requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "tzdata==" in requirements, "tzdata is no longer pinned"
+    assert installed_version("tzdata")
+    assert zoneinfo.ZoneInfo("Europe/London")
+
+
+def test_historical_daylight_saving_is_available_for_this_corpus() -> None:
+    """1998-2002 dates need 1998-2002 rules.
+
+    The US moved DST from the first Sunday in April to the second Sunday in
+    March in 2007. A tz database is only worth depending on if it carries the
+    older rule, and an OS call that extrapolates today's schedule backwards
+    does not.
+    """
+    import datetime
+    import zoneinfo
+
+    when = datetime.datetime(2001, 3, 15, 12, 0, tzinfo=zoneinfo.ZoneInfo("America/Chicago"))
+    assert when.utcoffset() == datetime.timedelta(hours=-6)
+
+
+def test_env_example_documents_only_settings_the_code_reads() -> None:
+    """A setting nobody reads is worse than a missing one.
+
+    `FPX_LOG_LEVEL` and `FPX_WORKERS` sat in this file for three releases,
+    documented as controls, read by no code at all -- so a person who set
+    either watched it do nothing and had no way to find out why.
+    """
+    import re
+
+    documented = set(
+        re.findall(
+            r"^#?\s*(FPX_[A-Z_]+)=",
+            (REPO_ROOT / ".env.example").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    )
+    assert documented, "the .env.example scan found nothing -- this check is vacuous"
+
+    read_by_code = set()
+    for path in sorted((REPO_ROOT / "fpx_converter").glob("*.py")):
+        read_by_code.update(
+            re.findall(r"[\"'](FPX_[A-Z_]+)[\"']", path.read_text(encoding="utf-8"))
+        )
+
+    assert documented <= read_by_code, (
+        f"documented in .env.example and read by nothing: "
+        f"{sorted(documented - read_by_code)}"
+    )

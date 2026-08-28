@@ -45,11 +45,27 @@ def _echo_line(line: str) -> None:
     print(line, flush=True)
 
 
+def _scan_source(args: argparse.Namespace) -> Path:
+    """Where `scan` reads from: the argument, else `FPX_SOURCE_ROOT`.
+
+    Positional first, because `fpx-converter scan ./photos` is what somebody
+    types the first time and `.env` is a convenience for the second. `--source`
+    stays as a spelling of the same thing.
+    """
+    given = args.source or getattr(args, "source_arg", None)
+    if given:
+        path = Path(given).expanduser()
+        if not path.is_dir():
+            raise config.ConfigError(
+                f"No such folder: {path}. Give the folder holding the .fpx photos."
+            )
+        return path.resolve()
+    return config.Settings.load().source_root
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
-    source_root = (
-        Path(args.source).resolve() if args.source else config.Settings.load().source_root
-    )
-    requested = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    source_root = _scan_source(args)
+    requested = Path(args.manifest) if args.manifest else config.manifest_path()
     manifest_path = config.ensure_outside_source(requested, source_root, "manifest path")
 
     if args.resample < 0:
@@ -114,7 +130,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
-    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    manifest_path = Path(args.manifest) if args.manifest else config.manifest_path()
     if not manifest_path.is_file():
         print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
         return 1
@@ -131,7 +147,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         return 1
 
     dest = config.ensure_outside_source(
-        Path(args.dest) if args.dest else config.FPX_STORE_DIR,
+        Path(args.dest) if args.dest else config.fpx_store_dir(),
         source_root,
         "ingest destination",
     )
@@ -149,12 +165,12 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    manifest_path = Path(args.manifest) if args.manifest else config.manifest_path()
     if not manifest_path.is_file():
         print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
         return 1
     manifest = manifest_mod.load(manifest_path)
-    dest = Path(args.dest) if args.dest else config.FPX_STORE_DIR
+    dest = Path(args.dest) if args.dest else config.fpx_store_dir()
     problems = ingest_mod.verify_store(manifest, dest_dir=dest)
     if not problems:
         print(f"All {len(manifest['entries'])} ingested copies match the manifest.")
@@ -166,26 +182,29 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_metadata(args: argparse.Namespace) -> int:
-    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    manifest_path = Path(args.manifest) if args.manifest else config.manifest_path()
     if not manifest_path.is_file():
         print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
         return 1
 
     manifest = manifest_mod.load(manifest_path)
     source_root = Path(manifest["source_root"])
-    store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
+    store_dir = Path(args.store) if args.store else config.fpx_store_dir()
 
-    output_base = Path(args.dest) if args.dest else (config.REPO_ROOT / "output" / "sidecars")
+    output_base = Path(args.dest) if args.dest else config.work_root() / "output" / "sidecars"
     dest = config.ensure_outside_source(output_base, source_root, "sidecar destination")
 
     verb = "Would dump" if args.dry_run else "Dumping"
     print(f"{verb} {len(manifest['entries'])} sidecars -> {dest}")
+    default_tz, tz_overrides = config.timezone_settings(explicit_tz=args.timezone)
     report = metadata_mod.dump_sidecars(
         manifest,
         fpx_dir=store_dir,
         output_dir=dest,
         source_root=source_root,
         dry_run=args.dry_run,
+        default_tz=default_tz,
+        tz_overrides=tz_overrides,
     )
     print(f"  written {report.written} sidecars")
     if report.failures:
@@ -196,15 +215,16 @@ def cmd_metadata(args: argparse.Namespace) -> int:
 
 
 def cmd_check_dates(args: argparse.Namespace) -> int:
-    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    manifest_path = Path(args.manifest) if args.manifest else config.manifest_path()
     if not manifest_path.is_file():
         print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
         return 1
 
     manifest = manifest_mod.load(manifest_path)
     source_root = Path(manifest["source_root"])
-    store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
+    store_dir = Path(args.store) if args.store else config.fpx_store_dir()
 
+    default_tz, tz_overrides = config.timezone_settings(explicit_tz=args.timezone)
     timestamps_by_hash: dict[str, datetime.datetime] = {}
     for entry in manifest["entries"]:
         sha = entry["sha256"]
@@ -214,7 +234,12 @@ def cmd_check_dates(args: argparse.Namespace) -> int:
             if alt.is_file():
                 fpx_path = alt
         if fpx_path.is_file():
-            meta = metadata_mod.extract_fpx_metadata(fpx_path, manifest_entry=entry)
+            meta = metadata_mod.extract_fpx_metadata(
+                fpx_path,
+                manifest_entry=entry,
+                default_tz=default_tz,
+                tz_overrides=tz_overrides,
+            )
             ts_iso = meta.derived["timestamps"].get("import_datetime")
             if ts_iso:
                 timestamps_by_hash[sha] = datetime.datetime.fromisoformat(ts_iso)
@@ -263,17 +288,17 @@ def cmd_check_dates(args: argparse.Namespace) -> int:
 
 
 def cmd_thumbnail(args: argparse.Namespace) -> int:
-    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    manifest_path = Path(args.manifest) if args.manifest else config.manifest_path()
     if not manifest_path.is_file():
         print(f"No manifest at {manifest_path} — run `scan` first.", file=sys.stderr)
         return 1
 
     manifest = manifest_mod.load(manifest_path)
     source_root = Path(manifest["source_root"])
-    store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
+    store_dir = Path(args.store) if args.store else config.fpx_store_dir()
 
     output_base = (
-        Path(args.dest) if args.dest else (config.REPO_ROOT / "output" / "thumbnails")
+        Path(args.dest) if args.dest else config.work_root() / "output" / "thumbnails"
     )
     dest = config.ensure_outside_source(output_base, source_root, "thumbnail destination")
 
@@ -379,16 +404,16 @@ def cmd_convert(args: argparse.Namespace) -> int:
     # every entry, because a Cancel arriving during that work is still a
     # Cancel of this run. `_stop_requested` compares against it.
     run_started = time.time()
-    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    manifest_path = Path(args.manifest) if args.manifest else config.manifest_path()
     if not manifest_path.is_file():
         print(f"No manifest at {manifest_path} - run `scan` first.", file=sys.stderr)
         return 1
 
     manifest = manifest_mod.load(manifest_path)
     source_root = Path(manifest["source_root"])
-    store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
+    store_dir = Path(args.store) if args.store else config.fpx_store_dir()
 
-    output_base = Path(args.dest) if args.dest else (config.REPO_ROOT / "output")
+    output_base = Path(args.dest) if args.dest else config.output_root_default()
     dest = config.ensure_outside_source(output_base, source_root, "conversion destination")
 
     try:
@@ -423,6 +448,30 @@ def cmd_convert(args: argparse.Namespace) -> int:
     except name_template_mod.TemplateError as exc:
         print(f"{exc}", file=sys.stderr)
         return 1
+
+    # The zone, resolved and *proved* once. `get_timezone_offset` raises for a
+    # name it cannot resolve, and that exception is caught per file by the
+    # engine -- so a zone nobody can resolve used to be recorded as every
+    # single file failing, with the real reason repeated 687 times in the
+    # error column.
+    try:
+        default_tz, tz_overrides = config.timezone_settings(explicit_tz=args.timezone)
+        timestamps_mod.get_timezone_offset(datetime.datetime(2001, 7, 4, 12, 0, 0), default_tz)
+    except timestamps_mod.UnknownTimezoneError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+    print(f"  time zone: {default_tz}")
+
+    # ExifTool, resolved once. A missing ExifTool is a fact about this machine
+    # and not about any one photograph: discovering it per file wrote every
+    # image to disk, reported all of them failed, and left the resume state
+    # empty so the next run did it again.
+    exiftool_bin: str | None = None
+    if not args.dry_run:
+        exiftool_bin = writer_mod.resolve_exiftool_path(args.exiftool)
+        if exiftool_bin is None:
+            print(writer_mod.exiftool_missing_message(), file=sys.stderr)
+            return 1
 
     all_entries = manifest.get("entries", [])
     entries = all_entries[: args.limit] if args.limit and args.limit > 0 else all_entries
@@ -531,6 +580,10 @@ def cmd_convert(args: argparse.Namespace) -> int:
                     name_template=args.name_template,
                     folder_scheme=args.folder_scheme,
                     folder_template=args.folder_template,
+                    exiftool_path=exiftool_bin,
+                    default_tz=default_tz,
+                    tz_overrides=tz_overrides,
+                    max_path=args.max_path,
                 )
                 records.append(record)
         except KeyboardInterrupt:
@@ -590,6 +643,10 @@ def _handle_entry(
     name_template: str | None = None,
     folder_scheme: str = layout.BY_ALBUM,
     folder_template: str | None = None,
+    exiftool_path: str | None = None,
+    default_tz: str | None = None,
+    tz_overrides: dict[str, str] | None = None,
+    max_path: int | None = None,
 ) -> batch.FileRecord:
     """One manifest entry: resume it, convert it, or record why it failed.
 
@@ -632,6 +689,10 @@ def _handle_entry(
             name_template=name_template,
             folder_scheme=folder_scheme,
             folder_template=folder_template,
+            exiftool_path=exiftool_path,
+            default_tz=default_tz,
+            tz_overrides=tz_overrides,
+            max_path=max_path,
         )
     except KeyboardInterrupt:
         raise
@@ -688,6 +749,10 @@ def _convert_one(
     name_template: str | None = None,
     folder_scheme: str = layout.BY_ALBUM,
     folder_template: str | None = None,
+    exiftool_path: str | None = None,
+    default_tz: str | None = None,
+    tz_overrides: dict[str, str] | None = None,
+    max_path: int | None = None,
 ) -> batch.FileRecord:
     sha, store_name = entry["sha256"], entry["store_name"]
     fpx_path = _resolve_fpx_path(entry, store_dir, source_root)
@@ -715,6 +780,10 @@ def _convert_one(
         name_template=name_template,
         folder_scheme=folder_scheme,
         folder_template=folder_template,
+        exiftool_path=exiftool_path,
+        default_tz=default_tz,
+        tz_overrides=tz_overrides,
+        max_path=max_path,
     )
     # Everything this entry put on disk, images and source copy alike. The
     # resume check tests all of them, so a deleted sidecar brings the file
@@ -782,7 +851,7 @@ def _album_dates_path(args: argparse.Namespace, manifest_path: Path) -> Path:
 
 def cmd_gallery(args: argparse.Namespace) -> int:
     """Build the QA review page from a completed run."""
-    dest = Path(args.dest) if args.dest else (config.REPO_ROOT / "output")
+    dest = Path(args.dest) if args.dest else config.output_root_default()
     report_path = Path(args.report) if args.report else dest / batch.REPORT_FILENAME
     if not report_path.is_file():
         print(
@@ -791,8 +860,8 @@ def cmd_gallery(args: argparse.Namespace) -> int:
         return 1
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    store_dir = Path(args.store) if args.store else config.FPX_STORE_DIR
-    manifest_path = Path(args.manifest) if args.manifest else config.MANIFEST_PATH
+    store_dir = Path(args.store) if args.store else config.fpx_store_dir()
+    manifest_path = Path(args.manifest) if args.manifest else config.manifest_path()
 
     try:
         existing = album_dates_mod.load(_album_dates_path(args, manifest_path))
@@ -833,6 +902,25 @@ def cmd_gallery(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_timezone_argument(parser: argparse.ArgumentParser) -> None:
+    """`--timezone`, on every command that resolves a timestamp.
+
+    The zone decides the `OffsetTime*` recorded beside every timestamp
+    written. It used to come only from `FPX_DEFAULT_TZ`, defaulting to the
+    zone the tool happened to be written in -- so a first run anywhere else
+    stamped US Central onto every photograph, and nothing downstream could
+    tell that from a right answer.
+    """
+    parser.add_argument(
+        "--timezone",
+        metavar="ZONE",
+        help="IANA time zone the photographs were taken in, e.g. Europe/London. "
+        "This never shifts a stored timestamp -- they are already local "
+        "wall-clock time -- it only says which UTC offset to record beside "
+        "them. Defaults to FPX_DEFAULT_TZ, then to this machine's own zone.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fpx-converter",
@@ -840,11 +928,34 @@ def build_parser() -> argparse.ArgumentParser:
         "The source archive is read-only and is never modified.",
     )
     parser.add_argument("--version", action="version", version=f"fpx-converter {__version__}")
+    parser.add_argument(
+        "--env-file",
+        metavar="PATH",
+        help="read settings from this .env instead of searching the working "
+        "directory, your config directory and the package folder",
+    )
+    parser.add_argument(
+        "--work-dir",
+        metavar="PATH",
+        help="where the default manifest, store and output/ live (default: the "
+        "current directory, or the checkout when running from one)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # 1. scan
     p_scan = sub.add_parser("scan", help="walk the source tree read-only and write the manifest")
-    p_scan.add_argument("--source", help="override FPX_SOURCE_ROOT")
+    p_scan.add_argument(
+        "source_arg",
+        nargs="?",
+        metavar="SOURCE",
+        help="the folder holding the .fpx photos, read-only (defaults to "
+        "FPX_SOURCE_ROOT if one is configured)",
+    )
+    p_scan.add_argument(
+        "--source",
+        help="the same thing as the positional SOURCE, kept because existing "
+        "commands and documentation use it",
+    )
     p_scan.add_argument("--manifest", help="where to write the manifest")
     p_scan.add_argument("--progress-every", type=int, default=100, metavar="N")
     p_scan.add_argument(
@@ -883,6 +994,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_meta.add_argument("--store", help="path to ingested .fpx store directory")
     p_meta.add_argument("--dest", help="output directory for sidecars")
     p_meta.add_argument("--dry-run", action="store_true")
+    _add_timezone_argument(p_meta)
     p_meta.set_defaults(func=cmd_metadata)
 
     # 5. check-dates
@@ -897,6 +1009,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="exit non-zero when any album's import stamps disagree with its "
         "folder name (the gate; off by default because failing is expected here)",
     )
+    _add_timezone_argument(p_dates)
     p_dates.set_defaults(func=cmd_check_dates)
 
     # 6. thumbnail
@@ -1018,6 +1131,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON file of album -> YYYY-MM-DD dates you supplied via the gallery "
              "(default: album-dates.json beside the manifest)",
     )
+    _add_timezone_argument(p_conv)
+    p_conv.add_argument(
+        "--exiftool",
+        metavar="PATH",
+        help="the ExifTool executable to use, if it is not on PATH (the same "
+             "thing as FPX_EXIFTOOL in .env)",
+    )
+    p_conv.add_argument(
+        "--max-path",
+        type=int,
+        metavar="N",
+        help="refuse an output path longer than N characters; 0 turns the check "
+             f"off. Default: {writer_mod.WINDOWS_MAX_PATH} on Windows, where long-path "
+             "support is off by default, and no limit anywhere else",
+    )
     p_conv.set_defaults(func=cmd_convert)
 
     # 8. gallery
@@ -1046,7 +1174,40 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        # Before anything reads configuration or resolves a default path.
+        config.set_env_file(getattr(args, "env_file", None))
+        config.set_work_dir(getattr(args, "work_dir", None))
         return int(args.func(args))
     except (config.ConfigError, config.SourceWriteRefused) as exc:
-        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"{exc}", file=sys.stderr)
         return 1
+    except timestamps_mod.UnknownTimezoneError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+    except PermissionError as exc:
+        # The commonest way a default path goes wrong for somebody who is not
+        # the author: `pip install` put the package somewhere unwritable, or
+        # the destination belongs to another user. A traceback out of
+        # `mkdir` says none of that.
+        where = exc.filename or "a path this command needed"
+        print(
+            f"Permission denied writing to {where}. Choose somewhere you can "
+            f"write with --dest (or --work-dir for the manifest and store).",
+            file=sys.stderr,
+        )
+        return 1
+    except OSError as exc:
+        where = getattr(exc, "filename", None)
+        detail = f" ({where})" if where else ""
+        print(f"{exc.strerror or exc}{detail}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        # Only reachable outside `convert`, which handles its own so it can
+        # still write the audit report.
+        print("Interrupted.", file=sys.stderr)
+        return 1
+    finally:
+        # A process-wide setting must not leak between calls, and `main` is
+        # called directly by the tests as well as by `__main__`.
+        config.set_env_file(None)
+        config.set_work_dir(None)

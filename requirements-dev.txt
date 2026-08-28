@@ -3,3 +3,17 @@
 
 pytest==9.1.1
 ruff==0.16.4
+
+# DEV ONLY -- never shipped, never imported by `fpx_converter`.
+#
+# `pyexiv2` is GPL-3.0 and bundles a GPL-2.0-or-later `exiv2.dll`. Importing
+# it from the package would make the PyInstaller-built .exe a derivative of
+# GPL code and relicense a project that ships Apache-2.0, so it moved out of
+# requirements.txt when the read-back validator switched to Pillow.
+#
+# It stays here because it is a genuinely useful *third* opinion in the
+# tests: ExifTool writes, `fpx_converter.validator` reads back with Pillow,
+# and the tier-2 and tier-3 tests re-read the same files with exiv2's own
+# parser. Three independent parsers agreeing is worth more than two -- but
+# only at test time. A tier-1 test fails if `fpx_converter` ever imports it.
+pyexiv2==2.16.0

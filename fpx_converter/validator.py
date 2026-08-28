@@ -1,8 +1,29 @@
-"""Independent pyexiv2 validation engine for dual output files (TIFF and JPEG).
+"""Independent Pillow validation engine for output files (TIFF and JPEG).
 
-Enforces the binding rule: Validate with a different tool than the one that wrote.
-ExifTool writes tags; pyexiv2 independently reads back and validates tags on both
-TIFF and JPEG formats.
+Enforces the binding rule: **validate with a different tool than the one that
+wrote.** ExifTool writes the tags; this module reads them back with Pillow,
+which shares no code with ExifTool -- a different parser, a different
+language, a different author. A tag that ExifTool believes it wrote and
+Pillow cannot find is a failure, which is the whole point of the rule.
+
+This used to read back with `pyexiv2`. It no longer does, and it must not
+again: `pyexiv2` is GPL-3.0 and bundles a GPL-2.0-or-later `exiv2.dll`, so
+importing it from the shipped package would relicense the Windows executable.
+`pyexiv2` is still installed for development (`requirements-dev.txt`) and the
+tier-2 and tier-3 tests still use it as a *third* opinion on the same files --
+that is a test-time dependency and is never packaged. `tests/test_validator.py`
+has a test that fails if this module ever imports it again.
+
+The one place the independence is thinner than it looks is the geometry: the
+images themselves are written with Pillow and re-opened with Pillow, so the
+size and format checks in `_check_image_file` are a same-tool round trip. That
+was true before this change too. The *tag* chain -- the part the binding rule
+is about -- is genuinely two tools.
+
+Reading XMP needs `defusedxml` (Pillow's `getxmp` uses it and otherwise
+returns an empty dict with only a warning). A silently empty XMP dict would
+turn every XMP check into a check that cannot fail, so `_read_tags` refuses
+it: a file carrying an XMP packet that will not parse is an error, not a pass.
 """
 
 from __future__ import annotations
@@ -11,13 +32,43 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import pyexiv2
-from PIL import Image
+from PIL import Image, IptcImagePlugin
 
 from . import outputs
 
 # TIFF compression tag 259 constants: 8 = Adobe Deflate, 32946 = PKZIP Deflate
 DEFLATE_COMPRESSION_TAGS = {8, 32946}
+
+#: IFD0 tags, in the pyexiv2-style names the checks below are written against.
+#: Keeping the key names means the checks and their error messages did not
+#: have to change when the reader did.
+_IFD0_TAGS: dict[int, str] = {
+    271: "Exif.Image.Make",
+    272: "Exif.Image.Model",
+    305: "Exif.Image.Software",
+}
+
+#: Pointer from IFD0 to the Exif sub-IFD, where the timestamps live.
+_EXIF_IFD_POINTER = 0x8769
+
+_EXIF_IFD_TAGS: dict[int, str] = {
+    36867: "Exif.Photo.DateTimeOriginal",  # 0x9003
+    36868: "Exif.Photo.DateTimeDigitized",  # 0x9004
+    36881: "Exif.Photo.OffsetTimeOriginal",  # 0x9011
+    36882: "Exif.Photo.OffsetTimeDigitized",  # 0x9012
+}
+
+#: IIM dataset numbers within IPTC record 2 (Application2).
+_IPTC_KEYWORDS = (2, 25)
+
+
+class MetadataReadbackError(RuntimeError):
+    """A tag store was present but could not be read back.
+
+    Raised rather than returning an empty dict: an unreadable store that
+    reads as "no tags" makes every tag check pass vacuously, which is the
+    exact shape of the two defects this project has already shipped.
+    """
 
 
 @dataclass
@@ -25,6 +76,194 @@ class ValidationResult:
     ok: bool
     errors: list[str] = field(default_factory=list)
 
+
+def _text(value: Any) -> Any:
+    """One EXIF/IPTC scalar as the checks expect it: a `str`, NUL-trimmed.
+
+    Only the NUL padding EXIF ASCII fields carry is removed. Whitespace is
+    left alone -- a caption is human-authored text and trimming it here would
+    silently compare something other than what was written.
+    """
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return value.rstrip("\x00")
+    return value
+
+
+def _read_exif(img: Image.Image) -> dict[str, Any]:
+    """The six EXIF tags this project writes, keyed by their pyexiv2 names.
+
+    Absent tags are absent from the dict rather than present-and-`None`: the
+    undated-photo check asks whether `Exif.Photo.DateTimeOriginal` *exists*,
+    and a `None` placeholder would answer "yes" for every file.
+    """
+    exif = img.getexif()
+    out: dict[str, Any] = {}
+    for tag, name in _IFD0_TAGS.items():
+        if tag in exif:
+            out[name] = _text(exif[tag])
+    sub = exif.get_ifd(_EXIF_IFD_POINTER)
+    for tag, name in _EXIF_IFD_TAGS.items():
+        if tag in sub:
+            out[name] = _text(sub[tag])
+    return out
+
+
+def _xmp_packet_present(img: Image.Image) -> bool:
+    """Whether the file carries an XMP packet at all.
+
+    JPEG keeps it in an APP1 segment, which Pillow surfaces as `info["xmp"]`;
+    TIFF keeps it in tag 700 (XMLPacket).
+    """
+    if img.info.get("xmp"):
+        return True
+    tags = getattr(img, "tag_v2", None)
+    return bool(tags is not None and tags.get(700))
+
+
+def _rdf_descriptions(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+    """The `rdf:Description` blocks out of Pillow's parsed XMP tree.
+
+    ExifTool writes one block per schema, so this is normally a list; a file
+    with a single block gives a bare dict.
+    """
+    rdf = (parsed.get("xmpmeta") or {}).get("RDF") or {}
+    desc = rdf.get("Description")
+    if isinstance(desc, dict):
+        return [desc]
+    if isinstance(desc, list):
+        return [d for d in desc if isinstance(d, dict)]
+    return []
+
+
+def _bag_items(value: Any) -> list[str]:
+    """`dc:subject` as a flat list of strings.
+
+    Pillow collapses a one-item `rdf:Bag` to a bare string, so a single-album
+    photo and a multi-album one arrive in different shapes.
+    """
+    if isinstance(value, dict):
+        container = value.get("Bag") or value.get("Seq") or value.get("Alt") or {}
+        value = container.get("li") if isinstance(container, dict) else container
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [v if isinstance(v, str) else str(v.get("text", v)) for v in value]
+    return [str(value)]
+
+
+def _alt_default(value: Any) -> str | None:
+    """The `x-default` alternative out of an `rdf:Alt`, e.g. `dc:title`."""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return None
+    container = value.get("Alt")
+    items = container.get("li") if isinstance(container, dict) else value.get("li")
+    if isinstance(items, dict):
+        items = [items]
+    if isinstance(items, str):
+        return items
+    if not isinstance(items, list):
+        return None
+    fallback: str | None = None
+    for item in items:
+        if isinstance(item, str):
+            fallback = fallback if fallback is not None else item
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if item.get("lang") == "x-default":
+            return text
+        if fallback is None:
+            fallback = text
+    return fallback
+
+
+def _read_xmp(img: Image.Image) -> dict[str, Any]:
+    """`Xmp.dc.subject` and `Xmp.dc.title` in the shapes the checks expect.
+
+    The title comes back as pyexiv2 shaped it, `{'lang="x-default"': text}`,
+    so `_validate_xmp_tags` did not have to learn a second layout.
+    """
+    try:
+        parsed = img.getxmp()
+    except Exception as exc:  # noqa: BLE001 -- any parse failure, uniformly
+        raise MetadataReadbackError(f"the XMP packet could not be parsed: {exc}") from exc
+    if not parsed and _xmp_packet_present(img):
+        # The quiet failure mode: Pillow's `getxmp` returns `{}` and merely
+        # warns when defusedxml is missing. Every XMP check would then pass
+        # without checking anything.
+        raise MetadataReadbackError(
+            "an XMP packet is present but parsed to nothing -- Pillow needs "
+            "defusedxml to read XMP, and without it every XMP check would "
+            "pass without checking"
+        )
+
+    out: dict[str, Any] = {}
+    subject: list[str] = []
+    for desc in _rdf_descriptions(parsed):
+        if "subject" in desc:
+            subject.extend(_bag_items(desc["subject"]))
+        if "title" in desc:
+            title = _alt_default(desc["title"])
+            if title is not None:
+                out["Xmp.dc.title"] = {'lang="x-default"': title}
+    if subject:
+        out["Xmp.dc.subject"] = subject
+    return out
+
+
+def _read_iptc(img: Image.Image) -> dict[str, Any]:
+    """`Iptc.Application2.Keywords` from the IIM block.
+
+    Pillow finds it in the Photoshop APP13 segment of a JPEG and in TIFF tag
+    33723. A single keyword arrives as bare `bytes` rather than a list.
+    """
+    info = IptcImagePlugin.getiptcinfo(img)
+    if not info:
+        return {}
+    raw = info.get(_IPTC_KEYWORDS)
+    if raw is None:
+        return {}
+    values = raw if isinstance(raw, list) else [raw]
+    keywords = []
+    for value in values:
+        if isinstance(value, bytes):
+            try:
+                keywords.append(value.decode("utf-8"))
+            except UnicodeDecodeError:
+                keywords.append(value.decode("latin-1"))
+        else:
+            keywords.append(str(value))
+    return {"Iptc.Application2.Keywords": keywords}
+
+
+def _read_tags(path: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """`(exif, xmp, iptc)` for one output file, in one open.
+
+    `getiptcinfo` reads from the open image, so all three come from the same
+    handle rather than three separate opens.
+    """
+    with Image.open(path) as img:
+        return _read_exif(img), _read_xmp(img), _read_iptc(img)
+
+
+def _validate_tags_on(path: Path, expected: dict[str, Any], errors: list[str]) -> None:
+    """Read one file back and run every tag check against it."""
+    fmt = path.suffix.upper()
+    try:
+        exif, xmp, iptc = _read_tags(path)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"{fmt} metadata readback failed on {path.name}: {exc}")
+        return
+    _validate_exif_tags(exif, expected, fmt, errors)
+    _validate_xmp_tags(xmp, expected, fmt, errors)
+    _validate_iptc_tags(iptc, expected, fmt, errors)
 
 
 def _declared_sizes(
@@ -157,14 +396,7 @@ def validate_outputs(
 
     # Tags, read back with a different tool than the one that wrote them.
     for path, _spec in targets:
-        fmt = path.suffix.upper()
-        try:
-            with pyexiv2.Image(str(path)) as meta:
-                _validate_exif_tags(meta.read_exif(), expected_derived, fmt, errors)
-                _validate_xmp_tags(meta.read_xmp(), expected_derived, fmt, errors)
-                _validate_iptc_tags(meta.read_iptc(), expected_derived, fmt, errors)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{fmt} pyexiv2 readback failed on {path.name}: {exc}")
+        _validate_tags_on(path, expected_derived, errors)
 
     return ValidationResult(ok=len(errors) == 0, errors=errors)
 
@@ -201,14 +433,7 @@ def validate_dual_output(
         jpg_size = jpg_img.size
     if jpg_size != tuple(expected_jpeg_size):
         errors.append(f"{jpg_path.name} is {jpg_size}, expected {tuple(expected_jpeg_size)}")
-    fmt = jpg_path.suffix.upper()
-    try:
-        with pyexiv2.Image(str(jpg_path)) as meta:
-            _validate_exif_tags(meta.read_exif(), expected_derived, fmt, errors)
-            _validate_xmp_tags(meta.read_xmp(), expected_derived, fmt, errors)
-            _validate_iptc_tags(meta.read_iptc(), expected_derived, fmt, errors)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"{fmt} pyexiv2 readback failed on {jpg_path.name}: {exc}")
+    _validate_tags_on(jpg_path, expected_derived, errors)
     return ValidationResult(ok=len(errors) == 0, errors=errors)
 
 

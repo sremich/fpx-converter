@@ -310,7 +310,15 @@ def _derive_metadata(
     }
 
     # Colour Space
+    #
+    # The fallback to NIF RGB is unchanged -- 99.7% of this corpus is NIF RGB
+    # and refusing an undeclared file would fail conversions that are almost
+    # certainly right -- but it is no longer silent. `colour_space_assumed`
+    # travels into the sidecar, the conversion log and the audit report, so a
+    # file whose colour was guessed can be found afterwards instead of being
+    # indistinguishable from one whose colour was read.
     col_blob = _get_prop_decoded(psets, img_contents_stream, "Res0_SubimageColor")
+    decoded_space, colour_assumed, colour_note = decoder.classify_colour_space(col_blob, 0)
     if isinstance(col_blob, dict) and col_blob.get("blob_type") == "SubimageColor":
         colour_dict = {
             "colour_space": col_blob.get("colour_space", "UNKNOWN"),
@@ -325,6 +333,12 @@ def _derive_metadata(
             "channel_count": 3,
             "channel_ids": ["0x00030000", "0x00030001", "0x00030002"],
         }
+    #: What the decoder will actually treat the pixels as, and whether it had
+    #: to assume it. `colour_space` above stays the file's own word for it --
+    #: "UNKNOWN" included -- so the sidecar keeps saying what was read.
+    colour_dict["decoded_as"] = decoded_space
+    colour_dict["colour_space_assumed"] = colour_assumed
+    colour_dict["colour_space_note"] = colour_note
 
     # Viewing Transform
     matrix_16 = _get_prop_decoded(psets, transform_stream, "SpatialOrientationMatrix")
@@ -575,7 +589,7 @@ def dump_sidecars(
     output_dir: Path,
     source_root: Path,
     dry_run: bool = False,
-    default_tz: str = timestamps.DEFAULT_TZ,
+    default_tz: str | None = None,
     tz_overrides: dict[str, str] | None = None,
 ) -> SidecarDumpReport:
     """Extract metadata and write `.fpx.json` sidecars for all entries in manifest."""

@@ -1,7 +1,7 @@
 """Tier-2: metadata extraction and sidecar dump over real committed `.fpx` fixtures.
 
-The four fixtures are non-personal Kodak stock sample images that shipped with
-Picture Easy. Never add personal photos here.
+The fixtures contain no identifiable person. Never add personal photos here.
+See `tests/fixtures/LICENSE.md` for provenance and the screening standard.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import TEST_DEFAULT_TZ
 
 from fpx_converter import metadata, scan
 
@@ -120,7 +121,7 @@ def test_sidecar_dump_end_to_end_over_fixtures(tmp_path: Path) -> None:
     )
     assert report.ok
     # Every fixture, not just the four pinned in detail below: a sidecar that
-    # silently failed to write for 36 of 40 files would still satisfy a count
+    # silently failed to write for 33 of 37 files would still satisfy a count
     # taken from the detail table.
     assert report.written == report.total_entries
     assert report.written >= len(EXPECTED_FIXTURE_DETAILS)
@@ -159,10 +160,19 @@ def test_env_timezone_overrides_reach_the_extracted_metadata(
     fpx = FIXTURES / "Clouds01.fpx"
 
     monkeypatch.delenv("FPX_TZ_OVERRIDES", raising=False)
-    monkeypatch.delenv("FPX_DEFAULT_TZ", raising=False)
+    # Set rather than deleted, and set to something the suite is not already
+    # running in. The default zone is this machine's own from 1.3.0 --
+    # shipping `America/Chicago` as the silent default stamped US Central
+    # onto every photograph of anyone who ran this anywhere else -- so an
+    # assertion about the zone has to name it out loud. `conftest.py` pins
+    # `TEST_DEFAULT_TZ` for the whole suite; asserting *that* zone here would
+    # pass whether or not extraction ever read the variable, which is the
+    # test the deleted version was. A different zone is the real one.
+    assert TEST_DEFAULT_TZ != "Asia/Tokyo"
+    monkeypatch.setenv("FPX_DEFAULT_TZ", "Asia/Tokyo")
     plain = metadata.extract_fpx_metadata(fpx, manifest_entry=entry)
-    assert plain.derived["timestamps"]["timezone_name"] == "America/Chicago"
-    assert plain.derived["timestamps"]["offset_time_digitized"] == "-06:00"
+    assert plain.derived["timestamps"]["timezone_name"] == "Asia/Tokyo"
+    assert plain.derived["timestamps"]["offset_time_digitized"] == "+09:00"
 
     monkeypatch.setenv("FPX_TZ_OVERRIDES", '{"sample images":"America/New_York"}')
     overridden = metadata.extract_fpx_metadata(fpx, manifest_entry=entry)

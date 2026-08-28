@@ -125,9 +125,9 @@ class TestTimezoneOffsets:
     def test_unknown_timezone_is_refused_not_guessed(self) -> None:
         dt = datetime.datetime(2001, 6, 15, 12, 0, 0)
         with pytest.raises(timestamps.UnknownTimezoneError):
-            timestamps.get_timezone_offset(dt, "Europe/London")
-        with pytest.raises(timestamps.UnknownTimezoneError):
             timestamps.get_timezone_offset(dt, "America/Chicgao")  # typo
+        with pytest.raises(timestamps.UnknownTimezoneError):
+            timestamps.get_timezone_offset(dt, "Somewhere/Made_Up")
 
     def test_known_non_default_zones_resolve(self) -> None:
         summer = datetime.datetime(2001, 7, 4, 12, 0, 0)
@@ -138,6 +138,176 @@ class TestTimezoneOffsets:
         # Hawaii keeps standard time year round.
         assert timestamps.get_timezone_offset(summer, "Pacific/Honolulu") == "-10:00"
         assert timestamps.get_timezone_offset(winter, "Pacific/Honolulu") == "-10:00"
+
+
+class TestZonesOutsideTheUnitedStates:
+    """The whole world, not seven US zones plus UTC.
+
+    Every zone here raised `UnknownTimezoneError` before 1.3.0, and that
+    exception is caught per file by the batch engine -- so a run in London,
+    Tokyo or Sydney recorded *every file in the archive* as failed, with the
+    real reason repeated once per photograph in the error column. Anyone who
+    did not hit that hit the other half of it instead: the default zone was
+    `America/Chicago`, so a first run anywhere stamped US Central onto
+    everything and said nothing.
+    """
+
+    SUMMER = datetime.datetime(2001, 7, 15, 12, 0, 0)
+    WINTER = datetime.datetime(2001, 1, 15, 12, 0, 0)
+
+    @pytest.mark.parametrize(
+        ("zone", "summer", "winter"),
+        [
+            ("Europe/London", "+01:00", "+00:00"),   # BST / GMT
+            ("Europe/Paris", "+02:00", "+01:00"),    # CEST / CET
+            ("Asia/Tokyo", "+09:00", "+09:00"),      # no DST, ever
+            ("Australia/Sydney", "+10:00", "+11:00"),  # southern hemisphere
+            ("America/Phoenix", "-07:00", "-07:00"),  # Arizona keeps standard
+            ("America/Chicago", "-05:00", "-06:00"),
+        ],
+    )
+    def test_a_date_inside_and_outside_dst(
+        self, zone: str, summer: str, winter: str
+    ) -> None:
+        assert timestamps.get_timezone_offset(self.SUMMER, zone) == summer
+        assert timestamps.get_timezone_offset(self.WINTER, zone) == winter
+
+    def test_a_half_hour_offset_survives_the_formatting(self) -> None:
+        """`±HH:00` was hardcoded. India is +05:30 and Adelaide +09:30."""
+        assert timestamps.get_timezone_offset(self.SUMMER, "Asia/Kolkata") == "+05:30"
+        assert timestamps.get_timezone_offset(self.WINTER, "Australia/Adelaide") == "+10:30"
+
+    @pytest.mark.parametrize("spelling", ["europe/london", "EUROPE/LONDON", "Europe/London"])
+    def test_casing_does_not_decide_whether_a_zone_is_known(self, spelling: str) -> None:
+        """`zoneinfo` keys are case-sensitive; the people typing them are not."""
+        assert timestamps.get_timezone_offset(self.SUMMER, spelling) == "+01:00"
+
+
+class TestHistoricalDaylightSaving:
+    """1998-2002 dates need 1998-2002 rules, not today's.
+
+    The US moved DST from the first Sunday in April to the second Sunday in
+    March in 2007. A table built from today's schedule -- or an OS call that
+    extrapolates today's rule backwards, which is what Windows does -- puts
+    every US photograph taken between mid-March and early April of these
+    years an hour out. `zoneinfo` carries the historical rules, and this is
+    the test that says so.
+    """
+
+    def test_march_2001_in_chicago_is_still_standard_time(self) -> None:
+        # Under the post-2007 rule this would already be CDT (-05:00).
+        when = datetime.datetime(2001, 3, 15, 12, 0, 0)
+        assert timestamps.get_timezone_offset(when, "America/Chicago") == "-06:00"
+
+    def test_dst_began_on_the_first_sunday_in_april_2001(self) -> None:
+        # 2001-04-01 was that Sunday.
+        assert (
+            timestamps.get_timezone_offset(
+                datetime.datetime(2001, 3, 31, 12, 0, 0), "America/Chicago"
+            )
+            == "-06:00"
+        )
+        assert (
+            timestamps.get_timezone_offset(
+                datetime.datetime(2001, 4, 2, 12, 0, 0), "America/Chicago"
+            )
+            == "-05:00"
+        )
+
+    def test_and_ended_on_the_last_sunday_in_october(self) -> None:
+        # 2001-10-28. Under the post-2007 rule it would run to 4 November.
+        assert (
+            timestamps.get_timezone_offset(
+                datetime.datetime(2001, 10, 27, 12, 0, 0), "America/Chicago"
+            )
+            == "-05:00"
+        )
+        assert (
+            timestamps.get_timezone_offset(
+                datetime.datetime(2001, 11, 1, 12, 0, 0), "America/Chicago"
+            )
+            == "-06:00"
+        )
+
+    def test_london_kept_the_eu_schedule_throughout(self) -> None:
+        # BST ran from the last Sunday in March (2001-03-25) to the last in
+        # October, and still does -- which is why London is the wrong zone to
+        # test the historical machinery with on its own.
+        assert (
+            timestamps.get_timezone_offset(
+                datetime.datetime(2001, 3, 24, 12, 0, 0), "Europe/London"
+            )
+            == "+00:00"
+        )
+        assert (
+            timestamps.get_timezone_offset(
+                datetime.datetime(2001, 3, 26, 12, 0, 0), "Europe/London"
+            )
+            == "+01:00"
+        )
+
+
+class TestTheMachinesOwnZone:
+    def test_it_is_a_zone_the_converter_can_resolve(self) -> None:
+        """Whatever it answers has to be usable, or the default is a trap."""
+        detected = timestamps.system_timezone()
+        if detected is None:
+            pytest.skip("this machine's zone could not be identified")
+        assert timestamps.resolve_zone_key(detected) is not None
+        timestamps.get_timezone_offset(datetime.datetime(2001, 7, 4, 12, 0, 0), detected)
+
+    def test_the_tz_environment_variable_is_honoured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TZ", "Asia/Tokyo")
+        assert timestamps.system_timezone() == "Asia/Tokyo"
+
+    def test_a_nonsense_tz_variable_does_not_become_the_answer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Better no answer than a guessed one -- the caller can ask."""
+        monkeypatch.setenv("TZ", "Not/AZone")
+        detected = timestamps.system_timezone()
+        assert detected != "Not/AZone"
+
+    def test_every_windows_name_it_maps_resolves(self) -> None:
+        """A typo in that table is a silently wrong offset, not an error."""
+        when = datetime.datetime(2001, 7, 4, 12, 0, 0)
+        for windows_name, iana in timestamps._WINDOWS_TO_IANA.items():
+            assert timestamps.resolve_zone_key(iana) is not None, (
+                f"{windows_name} maps to {iana}, which is not a zone"
+            )
+            timestamps.get_timezone_offset(when, iana)
+
+
+class TestTheOfflineFallbackTable:
+    """What is left when no tz database is installed at all.
+
+    It answers US zones only, because `_is_us_dst` is a US schedule: applied
+    to `Europe/London` it would be wrong twice a year, and wrong twice a year
+    is indistinguishable from right once written.
+    """
+
+    @staticmethod
+    def _without_a_database(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(timestamps, "_zoneinfo_keys", dict)
+
+    def test_us_zones_still_resolve(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._without_a_database(monkeypatch)
+        summer = datetime.datetime(2001, 7, 15, 12, 0, 0)
+        winter = datetime.datetime(2001, 1, 15, 12, 0, 0)
+        assert timestamps.get_timezone_offset(summer, "America/Chicago") == "-05:00"
+        assert timestamps.get_timezone_offset(winter, "America/Chicago") == "-06:00"
+        assert timestamps.get_timezone_offset(summer, "UTC") == "+00:00"
+
+    def test_everything_else_is_refused_rather_than_answered_with_a_us_rule(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._without_a_database(monkeypatch)
+        with pytest.raises(timestamps.UnknownTimezoneError):
+            timestamps.get_timezone_offset(
+                datetime.datetime(2001, 7, 15, 12, 0, 0), "Europe/London"
+            )
 
 
 class TestTimestampResolution:

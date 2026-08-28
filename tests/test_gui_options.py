@@ -478,3 +478,137 @@ class TestTheNamingAndFolderPatterns:
                     folder_template="../{album}",
                 )
             )
+
+
+class TestTheTimezoneReachesTheCommandLine:
+    """The one question this window cannot answer for the person using it.
+
+    The zone decides the `OffsetTime*` recorded beside every timestamp a run
+    writes. Nothing downstream can tell a wrong offset from a right one, and
+    the converter's own default zone is a property of whoever built it -- so a
+    window with no control at all quietly stamped somebody else's zone onto
+    every photograph it converted.
+    """
+
+    def test_the_choices_come_from_the_converter_not_from_a_list_here(self) -> None:
+        """A second list would eventually offer a zone the converter refuses."""
+        from fpx_converter import timestamps
+
+        offered = set(options_mod.known_timezones())
+        assert offered, "the window would offer an empty menu"
+        known = set(getattr(timestamps, "KNOWN_TIMEZONES", timestamps._TZ_OFFSETS))
+        assert known <= offered, "the window hides zones the converter can resolve"
+        # Every one of them really does resolve, which is what makes the menu
+        # honest rather than decorative.
+        import datetime
+
+        when = datetime.datetime(2002, 7, 4, 12, 0, 0)
+        for zone in offered:
+            timestamps.get_timezone_offset(when, zone)
+
+    def test_a_chosen_zone_is_passed_through(self, folders) -> None:
+        source, dest = folders
+        args = options_mod.convert_args(
+            ConvertOptions(source=source, dest=dest, timezone="america/denver")
+        )
+        assert "--timezone" in args
+        assert args[args.index("--timezone") + 1] == "america/denver"
+
+    def test_an_unanswered_zone_says_nothing_rather_than_guessing(self, folders) -> None:
+        """An empty box must not become a plausible-looking zone.
+
+        The converter then applies whatever it applies, and it is the thing
+        that gets to decide -- but nothing here invents an answer, because a
+        guessed zone is written exactly as confidently as a chosen one.
+        """
+        source, dest = folders
+        args = options_mod.convert_args(ConvertOptions(source=source, dest=dest))
+        assert "--timezone" not in args
+
+    def test_surrounding_space_is_not_passed_as_a_zone(self, folders) -> None:
+        source, dest = folders
+        args = options_mod.convert_args(
+            ConvertOptions(source=source, dest=dest, timezone="   ")
+        )
+        assert "--timezone" not in args
+
+    def test_a_recognised_machine_zone_is_offered_and_an_unknown_one_is_not(self) -> None:
+        assert options_mod.detect_timezone("Central Standard Time") == "america/chicago"
+        assert options_mod.detect_timezone("Pacific Standard Time") == "america/los_angeles"
+        # Not only the American ones. The front end's own table had eight
+        # rows, all of them US, so this control opened empty on every machine
+        # outside the United States -- the one place a wrong offset is most
+        # likely and least visible.
+        assert options_mod.detect_timezone("GMT Standard Time") == "europe/london"
+        assert options_mod.detect_timezone("Tokyo Standard Time") == "asia/tokyo"
+        assert options_mod.detect_timezone("India Standard Time") == "asia/kolkata"
+        # A name in no table produces nothing at all -- not the nearest
+        # neighbour, and not the converter's default. The lookup is exact and
+        # there is deliberately no fuzzy step.
+        assert options_mod.detect_timezone("Middle Earth Standard Time") == ""
+        assert options_mod.detect_timezone("") == ""
+
+    def test_the_windows_table_is_the_converters_and_not_a_second_copy(self) -> None:
+        """One map. A front-end copy drifts the moment the real one is fixed."""
+        from fpx_converter import timestamps
+
+        offered = set(options_mod.known_timezones())
+        assert len(options_mod._WINDOWS_ZONE_NAMES) > 100
+        for windows_name, iana in timestamps._WINDOWS_TO_IANA.items():
+            # A row this machine's tz database cannot resolve is dropped
+            # rather than offered, so it is not evidence of drift.
+            if iana.lower() not in offered:
+                continue
+            assert options_mod.detect_timezone(windows_name) == iana.lower()
+
+    def test_everything_it_detects_is_something_it_offers(self) -> None:
+        """Otherwise the box opens pre-filled with a value not in its own menu."""
+        offered = set(options_mod.known_timezones())
+        for windows_name in options_mod._WINDOWS_ZONE_NAMES:
+            assert options_mod.detect_timezone(windows_name) in offered
+
+
+class TestTheReviewPageSaysWhatItIsAboutToCopy:
+    """Pressing it runs `ingest`, which copies one `.fpx` per distinct photo.
+
+    That is a reasonable thing for the button to do and an unreasonable thing
+    for it to do quietly -- in a window where keeping the originals is an
+    option a person has to tick on purpose.
+    """
+
+    def test_the_notice_names_the_folder_and_a_size(self, folders) -> None:
+        source, dest = folders
+        (source / "one.fpx").write_bytes(b"x" * 4096)
+        (source / "two.fpx").write_bytes(b"y" * 2048)
+        options = ConvertOptions(source=source, dest=dest)
+
+        notice = options_mod.review_copy_notice(options)
+        assert str(options.store) in notice, "it does not say where the copies go"
+        assert "KB" in notice, "it does not say how much space this needs"
+        assert "only read from" in notice
+
+    def test_the_size_counts_the_fpx_files_and_nothing_else(self, folders) -> None:
+        source, _dest = folders
+        (source / "one.fpx").write_bytes(b"x" * 1000)
+        (source / "notes.txt").write_bytes(b"z" * 9_000_000)
+        nested = source / "more"
+        nested.mkdir()
+        (nested / "two.fpx").write_bytes(b"y" * 500)
+
+        size, capped = options_mod.source_size(source)
+        assert size == 1500
+        assert not capped
+
+    def test_a_huge_tree_is_estimated_rather_than_walked_to_the_end(self, folders) -> None:
+        """A directory walk in the window's own thread has to be bounded."""
+        source, _dest = folders
+        for index in range(5):
+            (source / f"{index}.fpx").write_bytes(b"x" * 10)
+        size, capped = options_mod.source_size(source, limit=2)
+        assert capped
+        assert size == 20
+
+    def test_sizes_are_written_for_a_person(self) -> None:
+        assert options_mod.describe_bytes(0) == "0 bytes"
+        assert options_mod.describe_bytes(2048) == "2.0 KB"
+        assert options_mod.describe_bytes(3 * 1024**3) == "3.0 GB"

@@ -366,3 +366,83 @@ def test_no_subcommand_is_an_error() -> None:
         main([])
     assert exc.value.code != 0
 
+
+
+class TestScanTakesTheSourceAsAnArgument:
+    """`fpx-converter scan ./photos` -- the first thing anybody types.
+
+    It used to be `--source`, with `FPX_SOURCE_ROOT` in a `.env` file as the
+    only other way to say it, so a fresh install with no configuration
+    refused to do anything at all.
+    """
+
+    def test_a_positional_source_is_scanned(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "m.json"
+        argv = ["scan", str(FIXTURES), "--manifest", str(manifest), "--progress-every", "0"]
+        assert main(argv) == 0
+        assert manifest.is_file()
+
+    def test_the_option_spelling_still_works(self, tmp_path: Path) -> None:
+        """Existing commands and documentation use `--source`."""
+        manifest = tmp_path / "m.json"
+        assert main(scan_argv(FIXTURES, manifest)) == 0
+        assert manifest.is_file()
+
+    def test_a_folder_that_is_not_there_is_a_sentence_not_a_traceback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        argv = ["scan", str(tmp_path / "nope"), "--manifest", str(tmp_path / "m.json")]
+        assert main(argv) == 1
+        assert "No such folder" in capsys.readouterr().err
+
+    def test_with_nothing_at_all_it_says_what_to_type(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.delenv("FPX_SOURCE_ROOT", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("", encoding="utf-8")
+        assert main(["scan", "--manifest", str(tmp_path / "m.json")]) == 1
+        err = capsys.readouterr().err
+        assert "fpx-converter scan" in err
+        assert "convenience rather than a requirement" in err
+
+
+class TestTheWorkDirectoryReachesTheDefaults:
+    def test_work_dir_moves_the_default_manifest(self, tmp_path: Path) -> None:
+        """Without it the default sits beside the package -- `site-packages`
+        for anybody who installed this rather than cloning it."""
+        work = tmp_path / "work"
+        work.mkdir()
+        assert main(["--work-dir", str(work), "scan", str(FIXTURES), "--progress-every", "0"]) == 0
+        assert (work / "source-files" / "manifest.json").is_file()
+
+    def test_the_setting_does_not_survive_the_call(self, tmp_path: Path) -> None:
+        """It is process-wide state, and `main` is called more than once."""
+        from fpx_converter import config
+
+        work = tmp_path / "work"
+        work.mkdir()
+        main(["--work-dir", str(work), "scan", str(FIXTURES), "--progress-every", "0"])
+        assert config._work_dir_override is None
+
+    def test_env_file_points_the_settings_somewhere_explicit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.delenv("FPX_SOURCE_ROOT", raising=False)
+        chosen = tmp_path / "settings.env"
+        chosen.write_text(f"FPX_SOURCE_ROOT={FIXTURES}\n", encoding="utf-8")
+        argv = [
+            "--env-file", str(chosen),
+            "scan",
+            "--manifest", str(tmp_path / "m.json"),
+            "--progress-every", "0",
+        ]
+        assert main(argv) == 0
+        assert str(FIXTURES) in capsys.readouterr().out
+
+    def test_an_env_file_that_is_not_there_is_a_sentence(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        argv = ["--env-file", str(tmp_path / "nope.env"), "scan", str(FIXTURES)]
+        assert main(argv) == 1
+        assert "does not exist" in capsys.readouterr().err

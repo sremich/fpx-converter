@@ -25,7 +25,11 @@ from __future__ import annotations
 import calendar
 import datetime
 import functools
+import os
 import re
+import sys
+import time
+import zoneinfo
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,12 +39,19 @@ from . import config
 # Timezone & Formatting Helpers
 # =============================================================================
 
+#: The zone used when nothing else says otherwise.
+#:
+#: A *last resort*, not a preference. `system_timezone()` reads the machine's
+#: own zone and `config.resolve_default_timezone` prefers it, so this is
+#: reached only where the machine cannot be asked. It stays a US zone because
+#: the archive that paid for this tool is a US one; every path that can do
+#: better does.
 DEFAULT_TZ = "America/Chicago"
 
 #: Album-name -> timezone overrides are **not** hardcoded here.
 #:
 #: The override keys are album folder names, and album names are personal
-#: content this repository does not carry (see CLAUDE.md). They live in
+#: content this repository does not carry (see ARCHITECTURE.md). They live in
 #: `.env` as `FPX_TZ_OVERRIDES`, parsed by `config.parse_album_tz_overrides`,
 #: and reach this module as the `overrides` argument. An empty map means every
 #: album takes the default zone, which is the correct behaviour for a
@@ -52,14 +63,18 @@ class UnknownTimezoneError(ValueError):
     """Raised for a timezone name this module cannot resolve an offset for."""
 
 
-#: Canonical zone name -> (standard offset hours, daylight offset hours).
+#: Offline fallback: canonical zone name -> (standard hours, daylight hours).
 #:
-#: Hand-rolled rather than `zoneinfo`: Windows ships no system tz database,
-#: `tzdata` is not among this project's pinned dependencies, and an archival
-#: run should not acquire one silently. The trade is that this table knows
-#: only the zones listed here -- so anything else is an error, never a
-#: silent fallback to Central. A wrong `OffsetTime*` is indistinguishable
-#: from a right one once written.
+#: `zoneinfo` is the authority now -- it carries the *historical* rules, and
+#: this corpus is 1998-2002, where the US switched on the first Sunday in
+#: April rather than the second Sunday in March. This table is what remains
+#: when `zoneinfo` finds no database at all: a `tzdata` wheel that failed to
+#: install, or a stripped runtime. It knows only the zones listed here, and
+#: anything else is an error rather than a silent fallback to Central --
+#: a wrong `OffsetTime*` is indistinguishable from a right one once written.
+#:
+#: Its US DST schedule (`_is_us_dst`) is the reason it may only ever be used
+#: for US zones: applied to `Europe/London` it would be wrong twice a year.
 #:
 #: Keyed on the exact zone name, not on substrings: `Pacific/Honolulu`
 #: contains "pacific" but is nowhere near US Pacific time, and a substring
@@ -133,20 +148,81 @@ def get_album_timezone(
     return default_tz
 
 
+@functools.lru_cache(maxsize=1)
+def _zoneinfo_keys() -> dict[str, str]:
+    """Lowercased IANA name -> the exact key `zoneinfo` wants.
+
+    `zoneinfo` keys are case-sensitive, and everything that reaches this
+    module -- a `.env` line, a `--timezone` argument, a dropdown value -- is
+    typed by a person. An empty map means no tz database is installed, which
+    is the one case the offline table below still has to cover.
+    """
+    try:
+        return {key.lower(): key for key in zoneinfo.available_timezones()}
+    except Exception:  # noqa: BLE001 -- no database at all is a valid state
+        return {}
+
+
+#: Every zone an offset can be resolved for, lowercased.
+#:
+#: Read by the desktop front end so its menu cannot drift from what the
+#: converter accepts. With a tz database present this is the whole IANA set;
+#: without one it is the handful of zones the offline table covers.
+KNOWN_TIMEZONES: frozenset[str] = frozenset(_zoneinfo_keys()) | frozenset(_TZ_OFFSETS)
+
+
+def resolve_zone_key(tz_name: str) -> str | None:
+    """The exact `zoneinfo` key for a name somebody typed, or `None`.
+
+    Accepts any casing, spaces in place of underscores, and the informal
+    aliases in `_TZ_ALIASES`.
+    """
+    cleaned = tz_name.strip().replace(" ", "_")
+    if not cleaned:
+        return None
+    lowered = cleaned.lower()
+    keys = _zoneinfo_keys()
+    for candidate in (lowered, _TZ_ALIASES.get(lowered, "")):
+        if candidate and candidate in keys:
+            return keys[candidate]
+    return None
+
+
+def _format_offset(delta: datetime.timedelta) -> str:
+    """A `timedelta` as the `±HH:MM` string EXIF `OffsetTime*` wants."""
+    total_minutes = round(delta.total_seconds() / 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    hours, minutes = divmod(abs(total_minutes), 60)
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+
 def get_timezone_offset(dt: datetime.datetime, tz_name: str) -> str:
     """Return the UTC offset (`±HH:MM`) to record for a naive local datetime.
 
     This selects which `OffsetTime*` value is written. It does **not** convert
     the wall-clock digits -- stored FILETIMEs in this corpus are already local
     time, and shifting them would be the bug this project exists to avoid.
+    The datetime is attached to the zone, never moved into it.
 
-    Raises `UnknownTimezoneError` for a zone this module has no offsets for,
-    rather than guessing. See `_TZ_OFFSETS`.
+    Resolved through `zoneinfo`, so the answer uses the rules that were in
+    force on that date: a photograph from July 2001 in a US zone gets the
+    first-Sunday-in-April schedule and not today's second-Sunday-in-March one.
+
+    Raises `UnknownTimezoneError` for a zone that cannot be resolved, rather
+    than guessing -- see `_TZ_OFFSETS`.
     """
     tz_clean = tz_name.strip().lower().replace(" ", "_")
     if tz_clean in ("utc", "gmt", "etc/utc", "etc/gmt"):
         return "+00:00"
 
+    key = resolve_zone_key(tz_name)
+    if key is not None:
+        offset = dt.replace(tzinfo=zoneinfo.ZoneInfo(key)).utcoffset()
+        if offset is not None:
+            return _format_offset(offset)
+
+    # No tz database on this machine. The offline table covers US zones only,
+    # and `_is_us_dst` is a US schedule, so nothing else may be answered here.
     canonical = _TZ_ALIASES.get(tz_clean, tz_clean)
     offsets = _TZ_OFFSETS.get(canonical)
     if offsets is not None:
@@ -156,11 +232,227 @@ def get_timezone_offset(dt: datetime.datetime, tz_name: str) -> str:
         return f"{sign}{abs(h):02d}:00"
 
     raise UnknownTimezoneError(
-        f"no UTC offset known for timezone {tz_name!r}. This project resolves "
-        f"offsets from a small built-in table (US zones plus UTC) because "
-        f"Windows ships no tz database; add the zone to _TZ_OFFSETS rather "
-        f"than letting a wrong offset be written."
+        f"no UTC offset known for timezone {tz_name!r}. Give an IANA name such "
+        f"as 'Europe/London' or 'America/Chicago' -- with --timezone, or as "
+        f"FPX_DEFAULT_TZ. Refused rather than guessed: a wrong OffsetTime is "
+        f"indistinguishable from a right one once it is written."
     )
+
+
+#: Windows zone key name (lowercased) -> IANA zone, from the CLDR
+#: `windowsZones` primary-territory mapping.
+#:
+#: Windows does not use IANA names, and Python reports the Windows one. Only
+#: an exact match is used: a near miss would be a wrong `OffsetTime*` written
+#: as confidently as a right one, so a name that is not here produces no
+#: answer at all and the caller has to be told to say which zone it is.
+_WINDOWS_TO_IANA: dict[str, str] = {
+    "dateline standard time": "Etc/GMT+12",
+    "utc-11": "Etc/GMT+11",
+    "aleutian standard time": "America/Adak",
+    "hawaiian standard time": "Pacific/Honolulu",
+    "marquesas standard time": "Pacific/Marquesas",
+    "alaskan standard time": "America/Anchorage",
+    "utc-09": "Etc/GMT+9",
+    "pacific standard time (mexico)": "America/Tijuana",
+    "utc-08": "Etc/GMT+8",
+    "pacific standard time": "America/Los_Angeles",
+    "us mountain standard time": "America/Phoenix",
+    "mountain standard time (mexico)": "America/Chihuahua",
+    "mountain standard time": "America/Denver",
+    "yukon standard time": "America/Whitehorse",
+    "central america standard time": "America/Guatemala",
+    "central standard time": "America/Chicago",
+    "easter island standard time": "Pacific/Easter",
+    "central standard time (mexico)": "America/Mexico_City",
+    "canada central standard time": "America/Regina",
+    "sa pacific standard time": "America/Bogota",
+    "eastern standard time (mexico)": "America/Cancun",
+    "eastern standard time": "America/New_York",
+    "haiti standard time": "America/Port-au-Prince",
+    "cuba standard time": "America/Havana",
+    "us eastern standard time": "America/Indiana/Indianapolis",
+    "turks and caicos standard time": "America/Grand_Turk",
+    "paraguay standard time": "America/Asuncion",
+    "atlantic standard time": "America/Halifax",
+    "venezuela standard time": "America/Caracas",
+    "central brazilian standard time": "America/Cuiaba",
+    "sa western standard time": "America/La_Paz",
+    "pacific sa standard time": "America/Santiago",
+    "newfoundland standard time": "America/St_Johns",
+    "tocantins standard time": "America/Araguaina",
+    "e. south america standard time": "America/Sao_Paulo",
+    "sa eastern standard time": "America/Cayenne",
+    "argentina standard time": "America/Argentina/Buenos_Aires",
+    "greenland standard time": "America/Nuuk",
+    "montevideo standard time": "America/Montevideo",
+    "magallanes standard time": "America/Punta_Arenas",
+    "saint pierre standard time": "America/Miquelon",
+    "bahia standard time": "America/Bahia",
+    "utc-02": "Etc/GMT+2",
+    "azores standard time": "Atlantic/Azores",
+    "cape verde standard time": "Atlantic/Cape_Verde",
+    "utc": "Etc/UTC",
+    "gmt standard time": "Europe/London",
+    "greenwich standard time": "Atlantic/Reykjavik",
+    "sao tome standard time": "Africa/Sao_Tome",
+    "morocco standard time": "Africa/Casablanca",
+    "w. europe standard time": "Europe/Berlin",
+    "central europe standard time": "Europe/Budapest",
+    "romance standard time": "Europe/Paris",
+    "central european standard time": "Europe/Warsaw",
+    "w. central africa standard time": "Africa/Lagos",
+    "jordan standard time": "Asia/Amman",
+    "gtb standard time": "Europe/Bucharest",
+    "middle east standard time": "Asia/Beirut",
+    "egypt standard time": "Africa/Cairo",
+    "e. europe standard time": "Europe/Chisinau",
+    "syria standard time": "Asia/Damascus",
+    "west bank standard time": "Asia/Hebron",
+    "south africa standard time": "Africa/Johannesburg",
+    "fle standard time": "Europe/Kyiv",
+    "israel standard time": "Asia/Jerusalem",
+    "south sudan standard time": "Africa/Juba",
+    "kaliningrad standard time": "Europe/Kaliningrad",
+    "sudan standard time": "Africa/Khartoum",
+    "libya standard time": "Africa/Tripoli",
+    "namibia standard time": "Africa/Windhoek",
+    "arabic standard time": "Asia/Baghdad",
+    "turkey standard time": "Europe/Istanbul",
+    "arab standard time": "Asia/Riyadh",
+    "belarus standard time": "Europe/Minsk",
+    "russian standard time": "Europe/Moscow",
+    "e. africa standard time": "Africa/Nairobi",
+    "volgograd standard time": "Europe/Volgograd",
+    "iran standard time": "Asia/Tehran",
+    "arabian standard time": "Asia/Dubai",
+    "astrakhan standard time": "Europe/Astrakhan",
+    "azerbaijan standard time": "Asia/Baku",
+    "russia time zone 3": "Europe/Samara",
+    "mauritius standard time": "Indian/Mauritius",
+    "saratov standard time": "Europe/Saratov",
+    "georgian standard time": "Asia/Tbilisi",
+    "caucasus standard time": "Asia/Yerevan",
+    "afghanistan standard time": "Asia/Kabul",
+    "west asia standard time": "Asia/Tashkent",
+    "qyzylorda standard time": "Asia/Qyzylorda",
+    "ekaterinburg standard time": "Asia/Yekaterinburg",
+    "pakistan standard time": "Asia/Karachi",
+    "india standard time": "Asia/Kolkata",
+    "sri lanka standard time": "Asia/Colombo",
+    "nepal standard time": "Asia/Kathmandu",
+    "central asia standard time": "Asia/Almaty",
+    "bangladesh standard time": "Asia/Dhaka",
+    "omsk standard time": "Asia/Omsk",
+    "myanmar standard time": "Asia/Yangon",
+    "se asia standard time": "Asia/Bangkok",
+    "altai standard time": "Asia/Barnaul",
+    "w. mongolia standard time": "Asia/Hovd",
+    "north asia standard time": "Asia/Krasnoyarsk",
+    "n. central asia standard time": "Asia/Novosibirsk",
+    "tomsk standard time": "Asia/Tomsk",
+    "china standard time": "Asia/Shanghai",
+    "north asia east standard time": "Asia/Irkutsk",
+    "singapore standard time": "Asia/Singapore",
+    "w. australia standard time": "Australia/Perth",
+    "taipei standard time": "Asia/Taipei",
+    "ulaanbaatar standard time": "Asia/Ulaanbaatar",
+    "aus central w. standard time": "Australia/Eucla",
+    "transbaikal standard time": "Asia/Chita",
+    "tokyo standard time": "Asia/Tokyo",
+    "north korea standard time": "Asia/Pyongyang",
+    "korea standard time": "Asia/Seoul",
+    "yakutsk standard time": "Asia/Yakutsk",
+    "cen. australia standard time": "Australia/Adelaide",
+    "aus central standard time": "Australia/Darwin",
+    "e. australia standard time": "Australia/Brisbane",
+    "aus eastern standard time": "Australia/Sydney",
+    "west pacific standard time": "Pacific/Port_Moresby",
+    "tasmania standard time": "Australia/Hobart",
+    "vladivostok standard time": "Asia/Vladivostok",
+    "lord howe standard time": "Australia/Lord_Howe",
+    "bougainville standard time": "Pacific/Bougainville",
+    "russia time zone 10": "Asia/Srednekolymsk",
+    "magadan standard time": "Asia/Magadan",
+    "norfolk standard time": "Pacific/Norfolk",
+    "sakhalin standard time": "Asia/Sakhalin",
+    "central pacific standard time": "Pacific/Guadalcanal",
+    "russia time zone 11": "Asia/Kamchatka",
+    "new zealand standard time": "Pacific/Auckland",
+    "utc+12": "Etc/GMT-12",
+    "fiji standard time": "Pacific/Fiji",
+    "chatham islands standard time": "Pacific/Chatham",
+    "utc+13": "Etc/GMT-13",
+    "tonga standard time": "Pacific/Tongatapu",
+    "samoa standard time": "Pacific/Apia",
+    "line islands standard time": "Pacific/Kiritimati",
+}
+
+
+def _windows_zone_name() -> str | None:
+    """The machine's Windows time-zone key name, or `None`.
+
+    The registry is asked first because it holds the canonical English name;
+    `time.tzname` is translated on a non-English Windows and would then match
+    nothing.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
+        ) as handle:
+            value, _kind = winreg.QueryValueEx(handle, "TimeZoneKeyName")
+        if isinstance(value, str) and value.strip():
+            return value.strip().rstrip("\x00")
+    except (ImportError, OSError):
+        pass
+    return time.tzname[0] if time.tzname and time.tzname[0] else None
+
+
+def system_timezone() -> str | None:
+    """The IANA name of this machine's own time zone, or `None`.
+
+    `None` is a real answer and not a failure to try: it means the machine
+    could not be asked, and the caller has to make somebody say which zone it
+    is rather than stamping every photograph with a guess.
+    """
+    env_tz = os.environ.get("TZ", "").strip()
+    if env_tz and resolve_zone_key(env_tz):
+        return resolve_zone_key(env_tz)
+
+    if os.name == "nt" or sys.platform == "win32":
+        windows_name = _windows_zone_name()
+        if windows_name:
+            mapped = _WINDOWS_TO_IANA.get(windows_name.strip().lower())
+            if mapped and resolve_zone_key(mapped):
+                return resolve_zone_key(mapped)
+            direct = resolve_zone_key(windows_name)
+            if direct:
+                return direct
+        return None
+
+    # POSIX: /etc/localtime is normally a symlink into the zoneinfo tree, and
+    # Debian-family systems also write the name into /etc/timezone.
+    try:
+        link = os.readlink("/etc/localtime")
+    except OSError:
+        link = ""
+    if "zoneinfo/" in link:
+        candidate = link.split("zoneinfo/", 1)[1]
+        if resolve_zone_key(candidate):
+            return resolve_zone_key(candidate)
+    try:
+        with open("/etc/timezone", encoding="utf-8") as handle:
+            candidate = handle.read().strip()
+    except OSError:
+        candidate = ""
+    if candidate and resolve_zone_key(candidate):
+        return resolve_zone_key(candidate)
+    return None
 
 
 def format_exif_datetime(dt: datetime.datetime | None) -> str | None:

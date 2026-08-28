@@ -12,10 +12,26 @@
 # than letting a transitive dependency choose it.
 -r requirements-dev.txt
 
-# The toolkit. PySide6 is a metapackage over PySide6-Essentials and
-# PySide6-Addons; the .spec excludes the modules the window does not use, so
-# the packaged exe does not carry WebEngine, 3D, Multimedia and the rest.
-PySide6==6.11.2
+# The toolkit, and deliberately NOT the `PySide6` metapackage.
+#
+# `PySide6` pulls in PySide6-Addons as well as PySide6-Essentials, and some
+# Qt Addons modules are offered under **GPLv3 only** rather than LGPLv3. This
+# project publishes an Apache-2.0 executable, so those modules must not be
+# reachable. The .spec used to keep them out by naming each one in `excludes`,
+# which is a denylist: it fails open the day Qt adds a module, renames one, or
+# a hook pulls one in behind an import nobody read.
+#
+# Installing Essentials alone removes the GPL-only surface by construction --
+# what is not installed cannot be analysed, hooked, or bundled. The window
+# imports QtCore, QtGui and QtWidgets, all of which are Essentials, and the
+# exe drops from about 67 MB to roughly half that.
+#
+# `shiboken6` is the binding layer underneath and is a dependency of
+# PySide6-Essentials; it is pinned here rather than left floating because it
+# is bundled into the published artifact, and because the licence notice in
+# `fpx_gui/notices.py` names its version.
+PySide6-Essentials==6.11.2
+shiboken6==6.11.2
 
 # Widget-test plumbing: a managed QApplication per session and widget cleanup.
 # Only tests/test_gui_window.py needs it, and that file skips cleanly when it
@@ -27,8 +43,8 @@ pytest-qt==4.5.0
 pyinstaller==6.22.2
 
 # What PyInstaller actually consults to decide which binaries and data files
-# land in the exe -- including the pyexiv2 extension and the Pillow plugins,
-# whose absence a `--version` call cannot detect. It is a transitive
+# land in the exe -- the Qt plugins and the Pillow plugins, whose absence a
+# `--version` call cannot detect. It is a transitive
 # dependency, but it is the one that decides the contents of the shipped
 # artifact, so it is pinned like a direct one: an unpinned build toolchain
 # means the same commit cannot be rebuilt into the same executable.
