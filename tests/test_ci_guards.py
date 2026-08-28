@@ -63,10 +63,30 @@ class TestACleanHistoryPasses:
         assert history_guard.check_history(repo, needles=[PLANTED]) == []
 
     def test_the_projects_own_history_is_clean_by_shape(self) -> None:
-        """The check as CI will actually run it, against the real repository."""
+        """The check as CI will actually run it, against the real repository.
+
+        Skipped on a shallow clone rather than run against one. `actions/checkout`
+        fetches a single commit by default, and the `test` and `gui` jobs have no
+        reason to pay for the full history -- so in those jobs this would fail
+        every time, not because anything leaked but because there was nothing to
+        look at. The guard refusing a shallow clone is the behaviour we want; it
+        is asserted directly in `TestItRefusesToScanNothing` below.
+
+        The real scan of the real history is the dedicated `history` job, which
+        sets `fetch-depth: 0` precisely so this check means something there.
+        """
         root = Path(__file__).resolve().parent.parent
         if not (root / ".git").exists():
             pytest.skip("not a git checkout")
+        shallow = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if shallow == "true":
+            pytest.skip(
+                "shallow clone: the full-history scan is the `history` CI job, "
+                "which sets fetch-depth: 0"
+            )
         assert history_guard.check_history(root, needles=[]) == []
 
 

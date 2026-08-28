@@ -5,7 +5,7 @@
 # etc." So: one file, no interpreter, no Qt install, no pip.
 #
 # Build it with `pyinstaller packaging/fpx-converter.spec` -- see
-# packaging/build.md. ExifTool is NOT bundled and cannot be: it is a separate
+# docs/BUILD.md. ExifTool is NOT bundled and cannot be: it is a separate
 # program with its own licence, installed with winget. See THIRD-PARTY-NOTICES.md.
 #
 # The exe wears two hats. Launched normally it is the window; launched with

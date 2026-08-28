@@ -14,8 +14,9 @@ quietly, and then on 2026-08-27 it was made to disappear on purpose: a
 full-resolution review of all 40 committed fixtures ahead of the repository
 going public found a person -- a figure standing behind the shrubs in the
 upper-right background -- in `feeder01.fpx`, `feeder02.fpx` and
-`feeder-crop.fpx`. `CLAUDE.md`'s no-people rule outranks any coverage, so all
-three were removed and the loss was accepted knowingly.
+`feeder-crop.fpx`. The no-people rule -- stated exactly in
+`tests/fixtures/LICENSE.md` -- outranks any coverage, so all three were
+removed and the loss was accepted knowingly.
 
 `feeder-crop.fpx` was the only fixture in the repository carrying a
 viewing-transform crop.

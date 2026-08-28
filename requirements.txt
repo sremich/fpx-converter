@@ -3,8 +3,8 @@
 # metadata writer is a correctness risk, not a convenience one.
 #
 # Every pin below publishes a cp314 win_amd64 wheel (verified 2026-08-26).
-# ExifTool is NOT a Python package -- see docs/REQUIREMENTS.md section 6 and
-# the README for how it is installed.
+# ExifTool is NOT a Python package -- see the README and docs/GUIDE.md for
+# how it is installed.
 
 # Nothing here may be copyleft: these are the packages PyInstaller bundles
 # into the published Windows executable, and the project ships Apache-2.0.

@@ -39,7 +39,7 @@ shiboken6==6.11.2
 # requirements-dev.txt alone.
 pytest-qt==4.5.0
 
-# Builds the single-file Windows executable. See packaging/build.md.
+# Builds the single-file Windows executable. See docs/BUILD.md.
 pyinstaller==6.22.2
 
 # What PyInstaller actually consults to decide which binaries and data files
