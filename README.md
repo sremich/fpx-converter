@@ -62,12 +62,19 @@ Get-FileHash fpx-converter-<version>.exe
 ```
 
 and compare the result against the contents of the published `.sha256` file.
+`Get-FileHash` prints its answer in capitals and the file holds the same
+characters in lower case; that difference is the display, not the hash.
 
-Each release is also signed with GitHub build provenance, so this also works:
+Each release is also signed with GitHub build provenance, so if you have the
+[GitHub CLI](https://cli.github.com/) this also works:
 
 ```powershell
 gh attestation verify fpx-converter-<version>.exe --repo sremich/fpx-converter
 ```
+
+**It prints nothing when it passes.** Silence there is the good outcome — a
+file that has been altered, or one that did not come from this repository,
+fails with an error instead.
 
 Both prove the same thing: that this is the exact file this repository's
 release workflow built from this source, not one assembled by somebody else
