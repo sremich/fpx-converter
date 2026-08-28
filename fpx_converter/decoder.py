@@ -97,6 +97,17 @@ class DecodedImage:
     transform_matrix: list[float] | None = None
     #: Populated when `transform_status` is not identity/absent/applied.
     transform_note: str = ""
+    #: True when `colour_space` was assumed rather than read. The file either
+    #: carried no `Res*_SubimageColor` descriptor or carried channel ids this
+    #: decoder does not recognise, and NIF RGB was used because 99.7% of this
+    #: corpus is NIF RGB. That assumption is right far more often than it is
+    #: wrong, and when it is wrong it is invisible: two PhotoYCC files shipped
+    #: solidly green with 42% of their pixels clipped to zero, past every
+    #: automated check the project had. So it stays the behaviour and stops
+    #: being silent -- see `colour_space_note`.
+    colour_space_assumed: bool = False
+    #: Why the colour space was assumed, in words a person can act on.
+    colour_space_note: str = ""
 
     def cropped_image(self) -> Image.Image:
         """The image with the crop applied, or the full frame if there is none.
@@ -109,6 +120,51 @@ class DecodedImage:
         if self.crop_applied is None:
             return self.image
         return self.image.crop(self.crop_applied)
+
+
+#: The colour space used when a file does not say which one it is.
+ASSUMED_COLOUR_SPACE = "NIF_RGB"
+
+
+def classify_colour_space(
+    col_blob: object, resolution_index: int = 0
+) -> tuple[str, bool, str]:
+    """Read the colour space out of a `Res*_SubimageColor` blob.
+
+    Returns `(colour_space, assumed, note)`. `assumed` is True where the file
+    did not say -- either the descriptor is missing or its channel ids are not
+    ones this decoder knows -- and the note says which of the two it was.
+
+    The fallback itself is unchanged and deliberate: 99.7% of this corpus is
+    NIF RGB, and refusing an undeclared file would fail conversions that are
+    almost certainly right. What changed is that it no longer happens in
+    silence. This project has already shipped two PhotoYCC files converted as
+    though they were RGB -- solidly green, 42% of their pixels clipped to
+    zero, past every automated check it had -- so a colour decision nobody
+    can see is the one thing this decoder must not make.
+    """
+    if not isinstance(col_blob, dict) or col_blob.get("blob_type") != "SubimageColor":
+        return (
+            ASSUMED_COLOUR_SPACE,
+            True,
+            f"no colour-space descriptor for resolution {resolution_index}; "
+            f"assumed {ASSUMED_COLOUR_SPACE}. Check the colour by eye before "
+            f"trusting this file.",
+        )
+
+    declared = col_blob.get("colour_space")
+    if declared in ("NIF_RGB", "PhotoYCC"):
+        return str(declared), False, ""
+
+    channels = col_blob.get("channel_ids") or []
+    return (
+        ASSUMED_COLOUR_SPACE,
+        True,
+        f"unrecognised colour space for resolution {resolution_index} "
+        f"(channel ids {', '.join(str(c) for c in channels) or 'none'}); "
+        f"assumed {ASSUMED_COLOUR_SPACE}. Check the colour by eye before "
+        f"trusting this file.",
+    )
 
 
 def classify_orientation_matrix(matrix: list[float]) -> tuple[str, str]:
@@ -755,9 +811,7 @@ def _decode_from_ole(
     # 3. Detect colour space from 0x02RR0002
     col_prop_id = 0x02000002 | (resolution_index << 16)
     col_blob = props.get(col_prop_id)
-    colour_space = "NIF_RGB"
-    if isinstance(col_blob, dict) and col_blob.get("colour_space") == "PhotoYCC":
-        colour_space = "PhotoYCC"
+    colour_space, assumed, colour_note = classify_colour_space(col_blob, resolution_index)
 
     # 4. Open Subimage Header and Data streams
     res_storage = f"Data Object Store 000001/Resolution {resolution_index:04d}"
@@ -820,4 +874,6 @@ def _decode_from_ole(
         transform_status=geom.status,
         transform_matrix=geom.matrix,
         transform_note=geom.note,
+        colour_space_assumed=assumed,
+        colour_space_note=colour_note,
     )

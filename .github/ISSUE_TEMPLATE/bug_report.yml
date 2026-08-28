@@ -1,0 +1,90 @@
+name: Bug report
+description: Something converted wrongly, failed, or did not do what it said it would.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this.
+
+        **Please do not attach a photograph, a `.fpx` file, an album name, or
+        a filename somebody typed.** This project treats those as private, and
+        an issue is public. Log lines and error messages are what is needed;
+        if a specific image is the problem, describe it rather than uploading
+        it.
+
+  - type: input
+    id: version
+    attributes:
+      label: FPX Converter version
+      description: >-
+        The executable is named for it — `fpx-converter-<version>.exe`. You can
+        also run `fpx-converter-<version>.exe --run-cli --version`, or open
+        `Help → Licences…` in the desktop app, where the first line names it.
+      placeholder: "1.2.1"
+    validations:
+      required: true
+
+  - type: input
+    id: exiftool
+    attributes:
+      label: ExifTool version
+      description: The output of `exiftool -ver`. Write "not installed" if that command is not found.
+      placeholder: "13.10"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Windows edition and version — `winver` shows it.
+      placeholder: "Windows 11 Pro 24H2 (26100)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: interface
+    attributes:
+      label: How were you running it?
+      options:
+        - Desktop app (the .exe)
+        - Command line
+        - Both / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected instead
+      description: >-
+        Include the exact options you chose (output formats, framing, folder
+        scheme, filename template) if the run was a conversion.
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: The last 20 lines of conversion.log
+      description: >-
+        `conversion.log` is written into the destination folder. On Windows:
+        `Get-Content conversion.log -Tail 20`.
+        Check it before pasting — remove any filename or album name you would
+        rather not publish.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: audit
+    attributes:
+      label: Anything relevant from audit_report.json (optional)
+      description: >-
+        The counts and the failure entries are usually the useful part. Same
+        check applies: no personal filenames.
+      render: json
+    validations:
+      required: false

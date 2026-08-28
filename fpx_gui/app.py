@@ -10,9 +10,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from . import style
-from .window import MainWindow
+from .window import APP_TITLE, MainWindow
 
-APP_NAME = "FlashPix Converter"
+#: One name, taken from the window rather than typed again. The program, the
+#: window and the executable all being called the same thing is the point.
+APP_NAME = APP_TITLE
 
 
 def system_is_dark(app: QApplication) -> bool:

@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,59 @@ from . import name_template as name_template_mod
 
 #: Windows' classic path limit. Long-path support is disabled on the machine
 #: this archive lives on, so 260 is the real ceiling and not a formality.
-_MAX_PATH = 259
+WINDOWS_MAX_PATH = 259
+
+#: No limit at all. macOS and Linux have per-*component* limits (255 bytes)
+#: rather than a whole-path one anywhere near 260, so applying the Windows
+#: ceiling there rejected paths the filesystem would have accepted -- and did
+#: it as a per-file conversion failure.
+NO_PATH_LIMIT = 0
+
+#: ExifTool does not edit a file in place. It writes the new version to
+#: `<path>_exiftool_tmp` in the same directory and renames it over the
+#: original once the write succeeded, so the longest path a conversion
+#: actually hands to the filesystem is the target path plus this suffix.
+EXIFTOOL_TMP_SUFFIX = "_exiftool_tmp"
+
+#: Characters held back from the ceiling for that temporary file.
+#:
+#: Checking the final path alone left a 13-character window -- a destination
+#: of 247 to 259 characters -- that passed the check and then failed inside
+#: ExifTool with `Error creating file`, which names neither the path nor the
+#: length and arrives after the images have already been written. The reserve
+#: is derived from the suffix rather than typed, so it cannot drift from it.
+#:
+#: It tightens the effective ceiling by design. `--max-path` still sets the
+#: ceiling, and `--max-path 0` still turns the whole check off: the reserve is
+#: a fact about ExifTool, not about Windows, and it applies to whatever
+#: ceiling is in force.
+EXIFTOOL_TMP_RESERVE = len(EXIFTOOL_TMP_SUFFIX)
+
+
+def path_budget(limit: int) -> int:
+    """The longest *final* path allowed under a whole-path ceiling of `limit`.
+
+    `NO_PATH_LIMIT` passes straight through: no ceiling means nothing to
+    reserve against.
+    """
+    if limit <= NO_PATH_LIMIT:
+        return NO_PATH_LIMIT
+    return limit - EXIFTOOL_TMP_RESERVE
+
+
+def default_max_path(os_name: str | None = None) -> int:
+    """The whole-path character limit to enforce on this platform.
+
+    `0` means no limit. Windows keeps its 259, because long-path support is
+    off by default there and past the limit the failure is an opaque
+    `FileNotFoundError` from deep inside a save.
+
+    `os_name` is a parameter rather than a read of `os.name` so a test can ask
+    the other platform's answer without reassigning `os.name` itself, which is
+    global and takes `pathlib` with it.
+    """
+    name = os.name if os_name is None else os_name
+    return WINDOWS_MAX_PATH if name == "nt" else NO_PATH_LIMIT
 
 
 class WriterError(RuntimeError):
@@ -93,17 +146,56 @@ def resolve_exiftool_path(explicit_path: str | Path | None = None) -> str | None
     In order: an explicit argument, `FPX_EXIFTOOL` from the environment or
     `.env`, then PATH -- which is what a standard
     `winget install --id OliverBetz.ExifTool` provides.
+
+    An explicit argument that is already an executable on PATH (rather than a
+    path to a file) is taken as given: the caller resolved it once before the
+    batch and there is nothing to look up again.
     """
     if explicit_path:
         candidate = Path(explicit_path)
         if candidate.is_file():
             return str(candidate)
+        found = shutil.which(str(explicit_path))
+        if found:
+            return found
 
     env_path = os.environ.get("FPX_EXIFTOOL") or config.load_env().get("FPX_EXIFTOOL")
     if env_path and Path(env_path).is_file():
         return env_path
 
     return shutil.which("exiftool")
+
+
+#: What to type to get ExifTool, per platform. It is not a Python package and
+#: `pip install` cannot supply it, so a first-time user who is only told it is
+#: "not found" has nothing to act on.
+EXIFTOOL_INSTALL_HINTS: tuple[tuple[str, str], ...] = (
+    ("Windows", "winget install --id OliverBetz.ExifTool"),
+    ("macOS", "brew install exiftool"),
+    ("Linux", "apt install libimage-exiftool-perl"),
+)
+
+
+def exiftool_missing_message() -> str:
+    """One clear refusal, with the line this platform needs typed."""
+    current = {"nt": "Windows", "posix": "macOS" if sys.platform == "darwin" else "Linux"}.get(
+        os.name, ""
+    )
+    lines = [
+        "ExifTool was not found, and every converted image needs it to carry its "
+        "metadata. Nothing has been written.",
+        "",
+        "Install it:",
+    ]
+    for platform_name, command in EXIFTOOL_INSTALL_HINTS:
+        marker = "  ->" if platform_name == current else "    "
+        lines.append(f"{marker} {platform_name}: {command}")
+    lines += [
+        "",
+        "Then re-run. If it is installed somewhere off PATH, point at it with "
+        "--exiftool /path/to/exiftool or FPX_EXIFTOOL in .env.",
+    ]
+    return "\n".join(lines)
 
 
 def format_date_prefix(ts_dict: dict[str, Any]) -> tuple[str, bool]:
@@ -398,12 +490,23 @@ def write_single_entry_dual_output(
     name_template: str | None = None,
     folder_scheme: str = layout.BY_ALBUM,
     folder_template: str | None = None,
+    default_tz: str | None = None,
+    tz_overrides: dict[str, str] | None = None,
+    max_path: int | None = None,
 ) -> OutputItemResult:
     """Convert a single .fpx entry to dual output (TIFF and JPEG) with sidecar and tags.
 
     `stem` comes from `naming.assign_output_stems`; `claimed` is a set the
     caller carries across the batch so a path collision raises instead of
     quietly overwriting a photo that was already converted.
+
+    `exiftool_path` should be the one the caller already resolved once, before
+    the batch: a missing ExifTool is a fact about the machine, not about this
+    file, and discovering it per file wrote 687 images and then reported all
+    687 of them failed.
+
+    `max_path` is the whole-path character ceiling; `None` takes the
+    platform's own answer and `0` disables the check.
     """
     output_root = config.ensure_outside_source(output_root, source_root, "output root")
     store_name = entry["store_name"]
@@ -411,7 +514,11 @@ def write_single_entry_dual_output(
 
     # 1. Extract metadata and decode pixels
     meta = metadata.extract_fpx_metadata(
-        fpx_path, manifest_entry=entry, album_dates=album_dates
+        fpx_path,
+        manifest_entry=entry,
+        default_tz=default_tz,
+        tz_overrides=tz_overrides,
+        album_dates=album_dates,
     )
     decoded = decoder.decode_fpx(fpx_path, apply_transform=True)
     derived = meta.derived
@@ -482,6 +589,15 @@ def write_single_entry_dual_output(
     if decoded.transform_status in (decoder.TRANSFORM_UNSUPPORTED, decoder.TRANSFORM_PARSE_ERROR):
         warnings.append(f"{decoded.transform_status}: {decoded.transform_note}")
 
+    # A colour space nobody declared is a guess, and a guess that is wrong is
+    # invisible in the output: two PhotoYCC files in this corpus were shipped
+    # solidly green with 42% of their pixels clipped to zero, past every
+    # automated check the project had. The fallback stays -- almost every file
+    # really is NIF RGB -- but it now reaches `conversion.log` and the audit
+    # report, so the handful it is wrong about can be found and looked at.
+    if decoded.colour_space_assumed:
+        warnings.append(f"colour-space-assumed: {decoded.colour_space_note}")
+
     # 2b. Refuse to write over a path this run already produced. The stems
     # assigned from the manifest should make this unreachable; it is here
     # because the failure it guards against is silent, and losing a photo to
@@ -500,14 +616,21 @@ def write_single_entry_dual_output(
     # output tree gained a year level plus a most-descriptive album name in
     # 0.5.0. Past the limit the failure is an opaque FileNotFoundError from
     # deep inside a save, recorded as a generic per-file error with nothing
-    # pointing at the cause. `CLAUDE.md` makes short paths a rule; this makes
+    # pointing at the cause. `ARCHITECTURE.md` makes short paths a rule; this makes
     # something enforce it.
+    limit = default_max_path() if max_path is None else max_path
+    budget = path_budget(limit)
     for path, spec in targets:
-        if len(str(path)) > _MAX_PATH:
+        if limit > NO_PATH_LIMIT and len(str(path)) > budget:
             errors.append(
-                f"output path is {len(str(path))} characters, over the {_MAX_PATH} "
-                f"Windows allows without long-path support ({spec.label}). "
-                f"Use a shorter --dest."
+                f"output path is {len(str(path))} characters, over the {budget} "
+                f"available ({spec.label}). The ceiling is {limit}, which Windows "
+                f"allows without long-path support, less {EXIFTOOL_TMP_RESERVE} for "
+                f"the '{EXIFTOOL_TMP_SUFFIX}' file ExifTool writes beside each image "
+                f"before renaming it into place -- that longer path has to fit too, "
+                f"and when it does not ExifTool fails with 'Error creating file' "
+                f"after the images are already written. Use a shorter --dest, or "
+                f"--max-path 0 if long paths work here."
             )
     if errors:
         return OutputItemResult(

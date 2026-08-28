@@ -19,11 +19,13 @@ not a duplicated rule; a second implementation would be.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from fpx_converter import config, layout, outputs
 from fpx_converter import name_template as name_template_mod
+from fpx_converter import timestamps as timestamps_mod
 
 #: The GUI puts the manifest in the destination, never beside the source.
 #: `ensure_outside_source` would refuse the alternative anyway, and this way a
@@ -63,6 +65,87 @@ MODE_CHOICES: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def known_timezones() -> tuple[str, ...]:
+    """The zones the converter can resolve an offset for, asked of it.
+
+    Not a list typed here. The converter resolves offsets from its own table
+    and refuses anything outside it -- loudly, because a wrong `OffsetTime*`
+    is indistinguishable from a right one once written -- so a second list in
+    the front end would eventually offer a zone the converter rejects. The
+    public name is preferred where the converter grows one; the table itself
+    is the fallback.
+    """
+    known = getattr(timestamps_mod, "KNOWN_TIMEZONES", None)
+    if known is None:
+        known = timestamps_mod._TZ_OFFSETS  # noqa: SLF001 -- see the docstring
+    return tuple(sorted({*known, "utc"}))
+
+
+#: Names `time.tzname` can report that the CLDR table has no row for.
+#:
+#: One entry, and it is a spelling rather than a zone: some runtimes report
+#: UTC by its full name. Anything that is genuinely a Windows zone belongs in
+#: the converter's table, not here.
+_EXTRA_ZONE_NAMES: dict[str, str] = {
+    "coordinated universal time": "Etc/UTC",
+}
+
+
+def _build_windows_zone_names() -> dict[str, str]:
+    """Windows zone name -> the IANA name this window would put in the box.
+
+    Windows names its time zones its own way and Python reports that name, so
+    something has to translate. This front end used to carry its own table of
+    eight -- all of them American -- which meant `detect_timezone` returned
+    nothing on a machine in London or Tokyo and the combo opened empty for
+    everyone outside the United States.
+
+    The converter already has the full CLDR map, all ~140 rows of it, and uses
+    it for exactly this. So this is a *view* of that map and not a copy of it:
+    the project's rule is that the desktop app calls the converter rather than
+    restating it, and two tables of Windows zone names would drift the moment
+    one of them was corrected.
+
+    Lower-cased on both sides because `known_timezones` -- which is likewise
+    asked of the converter -- offers lower-case keys, and a detected value the
+    combo does not list is a box pre-filled with something not in its own menu.
+    A row whose zone the converter cannot resolve is dropped rather than
+    offered.
+    """
+    merged = {**timestamps_mod._WINDOWS_TO_IANA, **_EXTRA_ZONE_NAMES}  # noqa: SLF001
+    offered = set(known_timezones())
+    return {
+        windows_name.strip().lower(): iana.lower()
+        for windows_name, iana in merged.items()
+        if iana.lower() in offered
+    }
+
+
+#: Built once at import. See `_build_windows_zone_names` for why it is derived
+#: rather than typed.
+_WINDOWS_ZONE_NAMES: dict[str, str] = _build_windows_zone_names()
+
+
+def detect_timezone(name: str | None = None) -> str:
+    """This machine's zone, where the converter would recognise it. Else `""`.
+
+    An empty answer is a real answer and the window shows it as one: the
+    control is left blank rather than filled with a plausible neighbour. The
+    zone decides the UTC offset recorded beside every timestamp the run
+    writes, and nothing downstream can tell a wrong offset from a right one,
+    so a guess here is worse than a question.
+
+    What counts as recognised is the converter's own CLDR table, so a machine
+    set to London, Tokyo or Kolkata is answered as readily as one set to
+    Chicago. A name in no table still yields `""` -- the lookup is exact, and
+    there is deliberately no nearest-match step.
+
+    `name` is for the tests, which cannot change the machine's clock.
+    """
+    reported = name if name is not None else (time.tzname[0] if time.tzname else "")
+    return _WINDOWS_ZONE_NAMES.get(reported.strip().lower(), "")
+
+
 @dataclass(frozen=True)
 class ConvertOptions:
     """One run, as the window has it configured."""
@@ -92,6 +175,15 @@ class ConvertOptions:
     folder_scheme: str = layout.BY_ALBUM
     #: Read only under `layout.CUSTOM`, and ignored otherwise.
     folder_template: str = layout.DEFAULT_FOLDER_TEMPLATE
+    #: Which zone the photographs were taken in. It selects the `OffsetTime*`
+    #: written beside each timestamp and never shifts the time itself.
+    #:
+    #: Empty means "say nothing", and then no `--timezone` reaches the command
+    #: line and the converter's own answer stands. That is the honest default
+    #: for a machine whose zone this front end could not recognise: the window
+    #: asks rather than filling the box with a neighbouring zone that would be
+    #: an hour wrong and would look exactly like a right one.
+    timezone: str = ""
     #: Always on. It skips what is already finished and costs a re-read at
     #: worst, and the window no longer offers a way to turn it off -- "ignore
     #: what a previous run did" described a mechanism rather than a job, and
@@ -220,6 +312,12 @@ def convert_args(options: ConvertOptions) -> list[str]:
         args.append("--source-copy")
     if options.sidecar:
         args.append("--sidecar")
+    # Passed whenever the window has an answer, default or not. This one is
+    # not omitted for matching the converter's default the way the patterns
+    # below are: the converter's default zone is a property of whoever built
+    # it, and a run that silently inherits it writes an offset nobody chose.
+    if options.timezone.strip():
+        args += ["--timezone", options.timezone.strip()]
     # Only when it is not what the CLI would do anyway: the log pane is the
     # one place a person sees what was run, and a line of flags that all
     # restate the defaults is harder to read, not more informative.
@@ -257,6 +355,63 @@ def ingest_args(options: ConvertOptions) -> list[str]:
         "--manifest", str(options.manifest),
         "--dest", str(options.store),
     ]
+
+
+#: How many files the estimate below will look at before it gives up and says
+#: "at least". A directory walk in the window's own thread has to be bounded;
+#: an archive of a few hundred photographs is instant, and one of a million
+#: files must not freeze the window to produce a number nobody needed.
+ESTIMATE_FILE_LIMIT = 50_000
+
+
+def source_size(source: Path, limit: int = ESTIMATE_FILE_LIMIT) -> tuple[int, bool]:
+    """`(bytes, was_capped)` for the `.fpx` files under `source`.
+
+    Read-only, like everything this front end does to a source folder.
+    """
+    total = 0
+    seen = 0
+    for path in source.rglob("*.fpx"):
+        try:
+            total += path.stat().st_size
+        except OSError:  # pragma: no cover - a file that vanished mid-walk
+            continue
+        seen += 1
+        if seen >= limit:
+            return total, True
+    return total, False
+
+
+def describe_bytes(size: int) -> str:
+    """A size a person reads, not a number of bytes."""
+    for unit, step in (("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)):
+        if size >= step:
+            return f"{size / step:.1f} {unit}"
+    return f"{size} bytes"
+
+
+def review_copy_notice(options: ConvertOptions) -> str:
+    """What the review page is about to copy, said before it copies it.
+
+    The review page needs a flat store of one `.fpx` per distinct photograph
+    and `ingest` builds it, which means pressing this button copies a
+    substantial part of the source archive into the destination. That is a
+    reasonable thing for it to do and an unreasonable thing for it to do
+    quietly -- especially in a project whose stated rule is that the `.fpx`
+    copy is opt-in.
+    """
+    size, capped = source_size(options.source)
+    about = "at least " if capped else "up to about "
+    return (
+        "Building the review page first copies your photos.\n\n"
+        f"One copy of each distinct .fpx goes into:\n    {options.store}\n\n"
+        f"That needs {about}{describe_bytes(size)} of free space — less where "
+        "the same photograph appears more than once, because identical files "
+        "are stored once.\n\n"
+        "Your source folder is only read from and is not changed. The copies "
+        "are yours to delete once you are finished with the review page.\n\n"
+        "Go ahead?"
+    )
 
 
 def gallery_args(options: ConvertOptions) -> list[str]:

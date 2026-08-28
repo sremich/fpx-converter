@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import struct
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -753,3 +754,66 @@ class TestApplyViewingTransform:
         _out, geom = decoder.apply_viewing_transform(self._decoded(), raw, 1152, 864)
         assert geom.status == decoder.TRANSFORM_ABSENT
         assert geom.tiff_size == (1152, 864)
+
+
+class TestAnUndeclaredColourSpaceIsSaidOutLoud:
+    """The fallback is right almost always, and invisible when it is not.
+
+    99.7% of this corpus is NIF RGB, so assuming it is the correct default and
+    refusing an undeclared file would fail conversions that are almost
+    certainly fine. But the other 0.3% is how two PhotoYCC files shipped
+    solidly green with 42% of their pixels clipped to zero, past every
+    automated check the project had -- so the assumption is now reported
+    rather than made in silence.
+    """
+
+    NIF = {
+        "blob_type": "SubimageColor",
+        "colour_space": "NIF_RGB",
+        "channel_ids": ["0x00030000", "0x00030001", "0x00030002"],
+    }
+    YCC = {
+        "blob_type": "SubimageColor",
+        "colour_space": "PhotoYCC",
+        "channel_ids": ["0x00020000", "0x00020001", "0x00020002"],
+    }
+
+    def test_a_declared_space_is_read_and_not_assumed(self) -> None:
+        for blob, expected in ((self.NIF, "NIF_RGB"), (self.YCC, "PhotoYCC")):
+            space, assumed, note = decoder.classify_colour_space(blob)
+            assert space == expected
+            assert assumed is False
+            assert note == ""
+
+    def test_a_missing_descriptor_still_decodes_as_nif_rgb(self) -> None:
+        space, assumed, note = decoder.classify_colour_space(None)
+        assert space == decoder.ASSUMED_COLOUR_SPACE == "NIF_RGB"
+        assert assumed is True
+        assert "no colour-space descriptor" in note
+
+    def test_an_unrecognised_descriptor_names_the_channel_ids(self) -> None:
+        """So an archive with a fourth colour space can be identified later."""
+        blob = {
+            "blob_type": "SubimageColor",
+            "colour_space": "UNKNOWN",
+            "channel_ids": ["0x00090000", "0x00090001", "0x00090002"],
+        }
+        space, assumed, note = decoder.classify_colour_space(blob)
+        assert space == "NIF_RGB"
+        assert assumed is True
+        assert "0x00090000" in note
+
+    def test_the_note_tells_a_person_what_to_do(self) -> None:
+        _space, _assumed, note = decoder.classify_colour_space(None)
+        assert "by eye" in note
+
+    def test_the_resolution_index_appears_in_the_note(self) -> None:
+        _space, _assumed, note = decoder.classify_colour_space(None, 3)
+        assert "resolution 3" in note
+
+    def test_a_decoded_image_carries_the_flag(self) -> None:
+        """`DecodedImage` is what the writer reads to raise the warning."""
+        fixture = Path(__file__).parent / "fixtures" / "Clouds01.fpx"
+        decoded = decoder.decode_fpx(fixture)
+        assert decoded.colour_space_assumed is False
+        assert decoded.colour_space_note == ""

@@ -6,6 +6,11 @@ change under an archival run.
 
 Precedence: real environment variables beat `.env`, so a one-off run can
 override without editing the file.
+
+**Nothing here is required.** `.env` is a convenience for an archive that gets
+converted more than once; every setting it carries has a command-line flag or
+a sensible runtime answer, and a fresh install with no configuration at all
+must be able to run `scan` and `convert`.
 """
 
 from __future__ import annotations
@@ -15,12 +20,22 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+#: Where the package itself lives. Used to find a `.env` shipped beside a
+#: source checkout, and to tell a checkout from a `pip install`. It is
+#: **not** where anything is written -- see `work_root`.
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
-#: Where ingested copies of the source .fpx files land. Gitignored.
-SOURCE_FILES_DIR = REPO_ROOT / "source-files"
-FPX_STORE_DIR = SOURCE_FILES_DIR / "fpx"
-MANIFEST_PATH = SOURCE_FILES_DIR / "manifest.json"
+#: Kept for callers that predate `work_root()`. In a source checkout the two
+#: are the same directory; in an installed copy `PACKAGE_ROOT` is
+#: `site-packages`, which is not a place to put an archive.
+REPO_ROOT = PACKAGE_ROOT
+
+#: A file that only a checkout of this project has beside the package.
+_CHECKOUT_MARKERS = (".git", "VERSION")
+
+#: Set by `--work-dir`, or by `--env-file` for the `.env` search alone.
+_work_dir_override: Path | None = None
+_env_file_override: Path | None = None
 
 
 class ConfigError(RuntimeError):
@@ -29,6 +44,109 @@ class ConfigError(RuntimeError):
 
 class SourceWriteRefused(RuntimeError):
     """Raised when something would write inside the read-only source root."""
+
+
+def is_source_checkout(path: Path) -> bool:
+    """Does this directory look like a checkout of this project?"""
+    return any((path / marker).exists() for marker in _CHECKOUT_MARKERS)
+
+
+def set_work_dir(path: str | Path | None) -> None:
+    """Point every default working path at `path` (from `--work-dir`)."""
+    global _work_dir_override
+    _work_dir_override = Path(path).expanduser() if path else None
+
+
+def set_env_file(path: str | Path | None) -> None:
+    """Read configuration from exactly this `.env` (from `--env-file`)."""
+    global _env_file_override
+    if path is None:
+        _env_file_override = None
+        return
+    resolved = Path(path).expanduser()
+    if not resolved.is_file():
+        raise ConfigError(f"--env-file {resolved} does not exist.")
+    _env_file_override = resolved
+
+
+def work_root() -> Path:
+    """The directory default working paths hang off.
+
+    Three answers, in order:
+
+    1. `--work-dir`, or `FPX_WORK_DIR`.
+    2. the directory holding the package, but **only** when it is a checkout
+       of this project -- that is the developer's `output/` and
+       `source-files/`, and it is where they have always been.
+    3. otherwise the current working directory.
+
+    Step 2's guard is the whole point. `Path(__file__).parent.parent` is the
+    repository in a checkout and `site-packages` in a `pip install`, and the
+    defaults built on it quietly aimed a photo archive, a manifest and two
+    output trees at the inside of somebody's virtual environment.
+    """
+    if _work_dir_override is not None:
+        return _work_dir_override
+    env_dir = os.environ.get("FPX_WORK_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser()
+    if is_source_checkout(PACKAGE_ROOT):
+        return PACKAGE_ROOT
+    return Path.cwd()
+
+
+def source_files_dir() -> Path:
+    """Where ingested copies of the source `.fpx` files land. Gitignored."""
+    return work_root() / "source-files"
+
+
+def fpx_store_dir() -> Path:
+    return source_files_dir() / "fpx"
+
+
+def manifest_path() -> Path:
+    return source_files_dir() / "manifest.json"
+
+
+def output_root_default() -> Path:
+    """Where `convert` and `gallery` write when told nothing.
+
+    `FPX_OUTPUT_ROOT` has been parsed into `Settings` since 0.1.0 and read by
+    nothing, so a person who set it watched their run write somewhere else.
+    """
+    raw = load_env().get("FPX_OUTPUT_ROOT", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return work_root() / "output"
+
+
+def user_config_dir() -> Path:
+    """Where a `.env` that is not tied to one archive belongs."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA", "").strip()
+        if base:
+            return Path(base) / "fpx-converter"
+        return Path.home() / "AppData" / "Roaming" / "fpx-converter"
+    base = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    if base:
+        return Path(base) / "fpx-converter"
+    return Path.home() / ".config" / "fpx-converter"
+
+
+def env_file_candidates() -> list[Path]:
+    """Every `.env` that would be read, in the order the first hit wins.
+
+    The working directory comes first because that is where a person who
+    typed `cd my-archive` expects their settings to live. The package root is
+    last, and in an installed copy it holds nothing at all.
+    """
+    if _env_file_override is not None:
+        return [_env_file_override]
+    return [
+        Path.cwd() / ".env",
+        user_config_dir() / ".env",
+        PACKAGE_ROOT / ".env",
+    ]
 
 
 def ensure_outside_source(target: Path, source_root: Path, what: str) -> Path:
@@ -76,11 +194,19 @@ def parse_env_file(text: str) -> dict[str, str]:
 
 
 def load_env(env_path: Path | None = None) -> dict[str, str]:
-    """Environment overlaid on `.env`; the environment wins."""
-    path = env_path if env_path is not None else REPO_ROOT / ".env"
+    """Environment overlaid on `.env`; the environment wins.
+
+    With no explicit path the search is `env_file_candidates()` and the first
+    file that exists wins -- the working directory, then the user's config
+    directory, then the package root. It used to be the package root alone,
+    which in an installed copy is a directory the user has never seen.
+    """
+    candidates = [env_path] if env_path is not None else env_file_candidates()
     values: dict[str, str] = {}
-    if path.is_file():
-        values.update(parse_env_file(path.read_text(encoding="utf-8")))
+    for candidate in candidates:
+        if candidate is not None and candidate.is_file():
+            values.update(parse_env_file(candidate.read_text(encoding="utf-8")))
+            break
     values.update({k: v for k, v in os.environ.items() if k.startswith("FPX_")})
     return values
 
@@ -178,7 +304,42 @@ def coarse_albums(env_path: Path | None = None) -> frozenset[str]:
     return _env_album_list("FPX_COARSE_ALBUMS", env_path)
 
 
-def timezone_settings(env_path: Path | None = None) -> tuple[str, dict[str, str]]:
+def resolve_default_timezone(
+    explicit: str | None = None, env_path: Path | None = None
+) -> str:
+    """The zone this run records offsets for, in order of who said it.
+
+    `--timezone`, then `FPX_DEFAULT_TZ`, then **this machine's own zone**. The
+    machine comes before any built-in name because the built-in one is a
+    property of whoever wrote the tool: shipping `America/Chicago` as the
+    silent default meant a first run in London stamped every photograph with
+    US Central, and nothing downstream can tell that from a right answer.
+
+    Raises `ConfigError` where the machine cannot be asked -- one clear
+    refusal before the run, rather than a guess repeated 687 times.
+    """
+    from . import timestamps
+
+    if explicit and explicit.strip():
+        return explicit.strip()
+    configured = load_env(env_path).get("FPX_DEFAULT_TZ", "").strip()
+    if configured:
+        return configured
+    detected = timestamps.system_timezone()
+    if detected:
+        return detected
+    raise ConfigError(
+        "This machine's time zone could not be identified, so there is no zone "
+        "to record beside the timestamps. Say which one with --timezone "
+        "(an IANA name such as Europe/London), or set FPX_DEFAULT_TZ in .env. "
+        "Refused rather than guessed: a wrong OffsetTime is written exactly as "
+        "confidently as a right one."
+    )
+
+
+def timezone_settings(
+    env_path: Path | None = None, explicit_tz: str | None = None
+) -> tuple[str, dict[str, str]]:
     """`(default_tz, album_overrides)` from `.env` and the environment.
 
     Separate from `Settings.load` because the timezone configuration is
@@ -189,7 +350,7 @@ def timezone_settings(env_path: Path | None = None) -> tuple[str, dict[str, str]
     """
     env = load_env(env_path)
     return (
-        env.get("FPX_DEFAULT_TZ", "America/Chicago"),
+        resolve_default_timezone(explicit_tz, env_path),
         parse_album_tz_overrides(env.get("FPX_TZ_OVERRIDES", "")),
     )
 
@@ -209,8 +370,10 @@ class Settings:
         raw_source = env.get("FPX_SOURCE_ROOT", "").strip()
         if not raw_source:
             raise ConfigError(
-                "FPX_SOURCE_ROOT is not set. Copy .env.example to .env and point "
-                "it at the read-only backup tree holding the .fpx files."
+                "No source folder given. Say where the .fpx photos are:\n"
+                "    fpx-converter scan /path/to/photos\n"
+                "Setting FPX_SOURCE_ROOT in a .env file does the same thing for "
+                "every run, and is a convenience rather than a requirement."
             )
         source_root = Path(raw_source).expanduser()
         if not source_root.is_dir():
@@ -225,6 +388,6 @@ class Settings:
             source_root=source_root.resolve(),
             output_root=output_root,
             exiftool=env.get("FPX_EXIFTOOL") or None,
-            default_tz=env.get("FPX_DEFAULT_TZ", "America/Chicago"),
+            default_tz=resolve_default_timezone(env_path=env_path),
             album_tz_overrides=parse_album_tz_overrides(env.get("FPX_TZ_OVERRIDES", "")),
         )

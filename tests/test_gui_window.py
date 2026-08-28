@@ -535,7 +535,7 @@ class TestTheNamingAndFolderControls:
 
 
 class TestTheWindowOpensReadable:
-    """Stevie opened 1.2.0 and found the cards squashed into slivers: three
+    """Someone opened 1.2.0 and found the cards squashed into slivers: three
     radio buttons collapsed to underscores, the naming card empty, the
     placeholder text in the folder fields sliced in half. Making the window
     bigger fixed it, which is the tell.
@@ -581,10 +581,16 @@ class TestTheWindowOpensReadable:
         The screen is stated rather than inherited: the offscreen platform
         reports 800x800, which the old hardcoded 760 satisfied, so a test that
         took the display as it found it could not fail here or in CI.
+
+        It is stated *large* on purpose. This content is now taller than an
+        ordinary 1200-pixel display, so a screen of that size no longer has
+        room and the assertion would be measuring the screen rather than the
+        sizing. The small-screen case is
+        `test_on_a_screen_without_room_it_takes_what_there_is`.
         """
         from PySide6.QtCore import QRect
 
-        window._size_to_contents(QRect(0, 0, 1920, 1200))
+        window._size_to_contents(QRect(0, 0, 1920, 1600))
         assert window.height() >= window.content_height_at(window.width()), (
             "the window opened shorter than its own contents on a screen with room"
         )
@@ -606,7 +612,9 @@ class TestTheWindowOpensReadable:
             "the Custom panel adds no height, so this test proves nothing"
         )
 
-        window._size_to_contents(QRect(0, 0, 1920, 1200))
+        # Large enough that the screen is not the constraint -- see the note
+        # in the test above.
+        window._size_to_contents(QRect(0, 0, 1920, 1600))
         assert window.height() >= tallest, (
             "the window opened too short for Custom on a screen with room"
         )
@@ -635,3 +643,185 @@ class TestTheWindowOpensReadable:
         if screen is not None:
             assert window.minimumWidth() <= screen.availableGeometry().width()
         assert window.minimumWidth() >= 520
+
+
+class TestItSaysWhatItIsMadeOf:
+    """A downloaded exe travels alone.
+
+    There is no folder of licence files beside it and nowhere else to look, so
+    the notice has to be inside the binary and reachable from the window. For
+    the Qt libraries, used under LGPLv3, that is section 4 rather than a
+    courtesy.
+    """
+
+    def test_the_help_menu_offers_the_licences(self, window) -> None:  # noqa: ANN001
+        from PySide6.QtWidgets import QMenu
+
+        titles = [menu.title() for menu in window.menuBar().findChildren(QMenu)]
+        assert any("Help" in title for title in titles), titles
+        actions = [action.text() for action in window.menuBar().actions()]
+        assert window.licences_action.text().replace("&", "").startswith("Licences")
+        assert actions, "the menu bar is empty"
+
+    def test_choosing_it_opens_the_dialog(
+        self, window, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        """The menu entry is wired to the dialog, not merely present."""
+        opened: list[object] = []
+        monkeypatch.setattr(
+            "fpx_gui.window.LicenceDialog.exec", lambda self: opened.append(self)
+        )
+        window.licences_action.trigger()
+        assert opened, "Help -> Licences opened nothing"
+
+    def test_the_dialog_shows_the_notice_and_the_full_texts(self, window, qtbot) -> None:  # noqa: ANN001
+        from fpx_gui import notices
+        from fpx_gui.window import LicenceDialog
+
+        dialog = LicenceDialog(window)
+        qtbot.addWidget(dialog)
+
+        assert dialog.tabs.count() == 1 + len(notices.LICENCE_FILES)
+        notice = dialog.pane_text(0)
+        assert "Apache-2.0" in notice
+        assert "PySide6-Essentials" in notice
+        assert "ExifTool" in notice and "NOT BUNDLED" in notice
+        assert notices.ISSUES_URL in notice
+
+        # The texts themselves, not a summary of them: a notice that
+        # paraphrases a licence is not a copy of it.
+        bodies = [dialog.pane_text(i) for i in range(1, dialog.tabs.count())]
+        assert any("GNU LESSER GENERAL PUBLIC LICENSE" in body for body in bodies)
+        assert any("GNU GENERAL PUBLIC LICENSE" in body for body in bodies)
+        assert any("Apache License" in body for body in bodies)
+        assert all(len(body) > 5000 for body in bodies), "a text was truncated"
+
+    def test_every_pane_can_be_scrolled_and_reached_from_the_keyboard(
+        self, window, qtbot
+    ) -> None:  # noqa: ANN001
+        """A notice nobody can page through is not a notice."""
+        from PySide6.QtCore import Qt
+
+        from fpx_gui.window import LicenceDialog
+
+        dialog = LicenceDialog(window)
+        qtbot.addWidget(dialog)
+        for index in range(dialog.tabs.count()):
+            pane = dialog.tabs.widget(index)
+            assert pane.focusPolicy() != Qt.FocusPolicy.NoFocus
+            assert pane.verticalScrollBar() is not None
+
+    def test_opening_it_does_not_need_a_network_or_a_checkout(self, window) -> None:  # noqa: ANN001
+        """It reads package data, the way the stylesheet does. That is what
+        makes it work inside a frozen exe, where there is no repository."""
+        from fpx_gui import notices
+
+        for name in notices.LICENCE_FILES:
+            assert notices.read_licence(name)
+
+
+class TestItDoesNotStateFactsAboutSomebodyElsesPhotographs:
+    def test_the_window_and_the_title_agree_with_the_executable(self, window) -> None:  # noqa: ANN001
+        from fpx_gui import app as app_mod
+
+        assert window.windowTitle() == "FPX Converter"
+        assert window.windowTitle() == app_mod.APP_NAME
+
+    def test_no_control_quotes_a_count_from_a_particular_archive(self, window) -> None:  # noqa: ANN001
+        """A tooltip once said "70 photographs were cropped in the Kodak
+        software" -- a measurement of the author's own corpus, stated to a
+        stranger as a fact about theirs."""
+        import re
+
+        tooltips = [
+            widget.toolTip()
+            for widget in window.findChildren(type(window.custom_framing))
+        ] + [
+            window.custom_framing.toolTip(),
+            window.custom_format.toolTip(),
+            window.source_copy_check.toolTip(),
+            window.sidecar_check.toolTip(),
+            window.review_button.toolTip(),
+            window.timezone_combo.toolTip(),
+        ]
+        for text in tooltips:
+            assert not re.search(r"\b\d{2,}\s+photograph", text), text
+
+
+class TestTheTimezoneControl:
+    def test_it_reaches_the_options_the_run_is_built_from(self, window, folders) -> None:  # noqa: ANN001
+        source, dest = folders
+        _fill(window, source, dest)
+        window.timezone_combo.setCurrentText("america/denver")
+        assert window.current_options().timezone == "america/denver"
+
+    def test_it_offers_the_zones_the_converter_knows(self, window) -> None:  # noqa: ANN001
+        offered = {window.timezone_combo.itemText(i) for i in range(window.timezone_combo.count())}
+        assert offered == set(options_mod.known_timezones())
+
+    def test_it_opens_at_this_machine_s_zone_or_at_nothing_at_all(self, window) -> None:  # noqa: ANN001
+        """Never at a plausible neighbour. A wrong offset is written exactly as
+        confidently as a right one."""
+        current = window.timezone_combo.currentText().strip()
+        assert current in ("", *options_mod.known_timezones())
+        assert current == options_mod.detect_timezone()
+
+    def test_it_is_typed_into_rather_than_fixed(self, window) -> None:  # noqa: ANN001
+        """So a zone the converter grows can be used before this list does,
+        and is refused by the converter itself if it cannot."""
+        assert window.timezone_combo.isEditable()
+
+
+class TestTheReviewPageAsksBeforeItCopies:
+    def test_it_says_what_it_will_copy_and_stops_if_told_to(
+        self, window, folders, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        """`ingest` copies one `.fpx` per distinct photograph into the
+        destination. Elsewhere in this window keeping the originals is an
+        option a person ticks on purpose; a button that does it quietly is a
+        surprise, and the kind that fills a disk."""
+        from PySide6.QtWidgets import QMessageBox
+
+        source, dest = folders
+        dest.mkdir()
+        _write_clean_report(dest, converted=2)
+        (source / "one.fpx").write_bytes(b"x" * 2048)
+        _fill(window, source, dest)
+
+        asked: list[str] = []
+        started: list[object] = []
+        monkeypatch.setattr(
+            "fpx_gui.window.QMessageBox.question",
+            lambda _p, _t, text, *a, **k: (
+                asked.append(text) or QMessageBox.StandardButton.Cancel
+            ),
+        )
+        monkeypatch.setattr(MainWindow, "_run", lambda self, steps: started.append(steps))
+
+        window._start_review()
+
+        assert asked, "it copied without asking"
+        assert str(dest / "source-files") in asked[0]
+        assert not started, "saying no still started the copy"
+
+    def test_saying_yes_runs_it(
+        self, window, folders, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        from PySide6.QtWidgets import QMessageBox
+
+        source, dest = folders
+        dest.mkdir()
+        _write_clean_report(dest, converted=2)
+        _fill(window, source, dest)
+
+        started: list[object] = []
+        monkeypatch.setattr(
+            "fpx_gui.window.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Yes,
+        )
+        monkeypatch.setattr(MainWindow, "_run", lambda self, steps: started.append(steps))
+
+        window._start_review()
+
+        assert started, "saying yes did nothing"
+        assert started[0][0][1][0] == "ingest"

@@ -1,6 +1,6 @@
 """Tier 3: a sample batch over the real corpus, with the checks that gate a merge.
 
-`CLAUDE.md` requires this before merging any branch that touches decode or
+`docs/TESTING.md` requires this before merging any branch that touches decode or
 metadata. It was previously run by hand, which meant the evidence for it was a
 paragraph in a commit message and a directory whose timestamps did not line up
 with the code being released -- both auditors caught that, independently. This
@@ -296,7 +296,7 @@ def main() -> int:
     # A report, not a gate. On this corpus the import stamp misses most dated
     # albums, which is precisely why it is not trusted as a capture date --
     # so a failing verdict here is the expected state, not a regression.
-    print("\nalbum ground-truth date check (report, not a gate -- see CLAUDE.md):")
+    print("\nalbum ground-truth date check (report, not a gate -- see docs/TESTING.md):")
     stamps: dict[str, datetime.datetime] = {}
     for sha in picked:
         derived = metadata.extract_fpx_metadata(

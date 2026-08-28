@@ -268,3 +268,63 @@ class TestSidecarBuildingAndDumping:
         assert sidecar_file.is_file()
         loaded = json.loads(sidecar_file.read_text(encoding="utf-8"))
         assert loaded["sha256"] == "1122334455667788"
+
+
+class TestTheSidecarSaysWhetherColourWasReadOrAssumed:
+    """A file that declared nothing must not look like one that declared RGB.
+
+    The fallback stays -- 99.7% of this corpus really is NIF RGB -- but it
+    used to leave no trace at all, and the sidecar is where an audit goes
+    looking afterwards. This project has already shipped two PhotoYCC files
+    converted as RGB, 42% of their pixels clipped to zero, past every
+    automated check it had.
+    """
+
+    @staticmethod
+    def _psets(colour: dict | None) -> dict:
+        properties: dict = {
+            "HighestResolutionWidth": {"decoded_value": 1152},
+            "HighestResolutionHeight": {"decoded_value": 864},
+        }
+        if colour is not None:
+            properties["Res0_SubimageColor"] = {"decoded_value": colour}
+        return {
+            "Data Object Store 000001/\x05Image Contents": {
+                "sections": [{"properties": properties}]
+            }
+        }
+
+    def test_a_declared_space_is_not_flagged(self) -> None:
+        colour = {
+            "blob_type": "SubimageColor",
+            "colour_space": "PhotoYCC",
+            "uncalibrated": True,
+            "channel_count": 3,
+            "channel_ids": ["0x00020000", "0x00020001", "0x00020002"],
+        }
+        derived = metadata._derive_metadata(self._psets(colour), entry=None)
+        assert derived["colour_space"]["colour_space"] == "PhotoYCC"
+        assert derived["colour_space"]["decoded_as"] == "PhotoYCC"
+        assert derived["colour_space"]["colour_space_assumed"] is False
+        assert derived["colour_space"]["colour_space_note"] == ""
+
+    def test_a_missing_descriptor_is_flagged(self) -> None:
+        derived = metadata._derive_metadata(self._psets(None), entry=None)
+        assert derived["colour_space"]["colour_space_assumed"] is True
+        assert "no colour-space descriptor" in derived["colour_space"]["colour_space_note"]
+
+    def test_an_unrecognised_descriptor_keeps_saying_unknown(self) -> None:
+        """The sidecar still reports what was *read*; `decoded_as` says what
+        the pixels were then treated as. Overwriting the first with the second
+        would delete the evidence that anything was assumed."""
+        colour = {
+            "blob_type": "SubimageColor",
+            "colour_space": "UNKNOWN",
+            "uncalibrated": True,
+            "channel_count": 3,
+            "channel_ids": ["0x00090000", "0x00090001", "0x00090002"],
+        }
+        derived = metadata._derive_metadata(self._psets(colour), entry=None)
+        assert derived["colour_space"]["colour_space"] == "UNKNOWN"
+        assert derived["colour_space"]["decoded_as"] == "NIF_RGB"
+        assert derived["colour_space"]["colour_space_assumed"] is True

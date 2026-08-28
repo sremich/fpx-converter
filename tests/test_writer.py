@@ -280,7 +280,7 @@ def test_an_over_long_output_path_is_a_named_error_not_a_mystery(tmp_path) -> No
     The 0.5.0 tree gained a year level plus a most-descriptive album name, so
     paths got longer. Past the limit the failure is an opaque
     FileNotFoundError from inside a save, recorded as a generic per-file error
-    with nothing pointing at the cause. `CLAUDE.md` makes short paths a rule;
+    with nothing pointing at the cause. `ARCHITECTURE.md` makes short paths a rule;
     this is what enforces it.
     """
     from fpx_converter import writer as writer_mod
@@ -301,6 +301,84 @@ def test_an_over_long_output_path_is_a_named_error_not_a_mystery(tmp_path) -> No
         source_root=fixture.parent.parent,
         stem="x",
         claimed=set(),
+        # Asked for explicitly, because the limit is now Windows' and this
+        # test is about the mechanism rather than about the platform it runs
+        # on. Left implicit it passed on Windows and failed everywhere else.
+        max_path=writer_mod.WINDOWS_MAX_PATH,
     )
     assert not result.validation_ok
     assert any("characters" in e and "--dest" in e for e in result.errors), result.errors
+
+
+class TestThePathLimitIsWindowsOwn:
+    """259 characters is a Windows fact, not a filesystem one.
+
+    macOS and Linux limit each path *component* to 255 bytes and have no
+    whole-path ceiling anywhere near 260, so enforcing Windows' number there
+    refused paths the filesystem would have taken -- and did it as a per-file
+    conversion failure with a message about Windows.
+    """
+
+    def test_windows_keeps_its_limit(self) -> None:
+        assert writer.default_max_path("nt") == writer.WINDOWS_MAX_PATH
+
+    @pytest.mark.parametrize("os_name", ["posix", "java"])
+    def test_everywhere_else_has_none(self, os_name: str) -> None:
+        assert writer.default_max_path(os_name) == writer.NO_PATH_LIMIT
+
+    def test_a_deep_path_is_accepted_where_there_is_no_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The check must not merely be quieter -- it must not run at all."""
+        from fpx_converter import writer as writer_mod
+
+        monkeypatch.setattr(writer_mod, "default_max_path", lambda *_a: writer.NO_PATH_LIMIT)
+        fixture = Path(__file__).parent / "fixtures" / "Clouds01.fpx"
+        deep = tmp_path / ("d" * 120) / ("e" * 120)
+        entry = {
+            "store_name": fixture.name,
+            "preferred_name": fixture.name,
+            "sha256": "0" * 64,
+            "albums": ["Sample"],
+            "preferred_relpath": fixture.name,
+        }
+        result = writer_mod.write_single_entry_dual_output(
+            fpx_path=fixture,
+            entry=entry,
+            output_root=deep,
+            source_root=fixture.parent.parent,
+            stem="x",
+            claimed=set(),
+            dry_run=True,
+        )
+        assert not any("characters" in e for e in result.errors), result.errors
+
+    def test_zero_turns_the_check_off_explicitly(self) -> None:
+        """`--max-path 0`, for a Windows machine with long paths enabled."""
+        assert writer.NO_PATH_LIMIT == 0
+
+
+class TestTheExifToolRefusal:
+    """What a first-time user is told when the one external tool is missing."""
+
+    def test_it_names_a_command_for_every_platform(self) -> None:
+        message = writer.exiftool_missing_message()
+        for _platform, command in writer.EXIFTOOL_INSTALL_HINTS:
+            assert command in message
+
+    def test_it_says_nothing_was_written(self) -> None:
+        assert "Nothing has been written" in writer.exiftool_missing_message()
+
+    def test_it_points_at_the_flag_and_the_setting(self) -> None:
+        message = writer.exiftool_missing_message()
+        assert "--exiftool" in message
+        assert "FPX_EXIFTOOL" in message
+
+    def test_an_already_resolved_path_is_used_as_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The batch resolves it once and hands it down; it is not re-searched."""
+        chosen = tmp_path / "exiftool.exe"
+        chosen.write_text("", encoding="utf-8")
+        monkeypatch.setattr(writer.shutil, "which", lambda _name: "/somewhere/else")
+        assert writer.resolve_exiftool_path(chosen) == str(chosen)

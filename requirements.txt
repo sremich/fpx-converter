@@ -6,7 +6,20 @@
 # ExifTool is NOT a Python package -- see docs/REQUIREMENTS.md section 6 and
 # the README for how it is installed.
 
+# Nothing here may be copyleft: these are the packages PyInstaller bundles
+# into the published Windows executable, and the project ships Apache-2.0.
+# `pyexiv2` used to live here and is now dev-only -- see requirements-dev.txt.
+
 olefile==0.47
 numpy==2.5.2
 pillow==12.3.0
-pyexiv2==2.16.0
+# Pillow's `Image.getxmp()` parses the XMP packet through defusedxml and
+# returns an empty dict without it -- which would turn the validator's XMP
+# checks into checks that cannot fail. It is a hard runtime requirement of
+# the read-back validator, not an optional extra.
+defusedxml==0.7.1
+# Windows ships no IANA time zone database, so `zoneinfo` finds nothing
+# without this pure-Python data-only wheel. Time zones decide the
+# `OffsetTime*` written beside every timestamp, and 1998-2002 dates need the
+# historical DST rules rather than today's.
+tzdata==2026.3

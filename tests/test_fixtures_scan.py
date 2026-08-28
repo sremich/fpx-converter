@@ -1,16 +1,18 @@
 """Tier-2: the scan and ingest path over real `.fpx` files.
 
-Every fixture is an image containing **no people**: the Kodak stock samples
-that shipped with Picture Easy, plus archive photographs confirmed
-person-free by eye and renamed to a neutral stem -- butterflies in a
-conservatory, a cloud time-lapse, modelling clay on a table, an empty station
-platform. Never add a photograph with a person in it.
+No fixture contains an identifiable person: sixteen files of unknown origin
+plus archive photographs screened by eye and renamed to a neutral stem --
+butterflies in a conservatory, a cloud time-lapse, modelling clay on a table,
+a station platform. Never add a photograph with a recognisable person in it.
 
 The pinned hashes are load-bearing twice over: they catch a fixture that got
 corrupted or replaced, and they catch a scanner that silently reads the wrong
-bytes. Regenerate this table only when fixtures are deliberately added --
-never to make a red test go green, which is the one failure it exists to
-report.
+bytes. Regenerate this table only when fixtures are deliberately added or
+deliberately removed -- never to make a red test go green, which is the one
+failure it exists to report. It was last regenerated on 2026-08-27, when
+`feeder01`, `feeder02` and `feeder-crop` were deleted for containing a person
+(see `fixtures/README.md`); every other row was re-read from disk at the same
+time and was unchanged.
 """
 
 from __future__ import annotations
@@ -120,18 +122,6 @@ EXPECTED = {
     "dragonfly02.fpx": (
         "de8d78aa6a249b0abc8be421f02a83ac42bd445dcd0f4d8f5d0d6075c019d85a",
         196608,
-    ),
-    "feeder-crop.fpx": (
-        "be629f0f44e38500dcaf8dd67799b6c697a9576a6f08c7447b0215ed017aa9a2",
-        456192,
-    ),
-    "feeder01.fpx": (
-        "a1165d79b2d5b38e78dbd287061a19eebb93492ea5aff367e3beb3b3aa965476",
-        455168,
-    ),
-    "feeder02.fpx": (
-        "f55c55adb6e321211a8bb80e3aa63cc3d3fbfb511403311aaf58ab33039de89d",
-        455168,
     ),
     "foliage01.fpx": (
         "642218aa3e22d86b20673f3363ea671de7e711683ac6154b8a55e33c3e98b1c4",

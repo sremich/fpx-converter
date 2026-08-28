@@ -155,7 +155,7 @@ def record_from_json(raw: dict[str, Any]) -> FileRecord:
 def pixel_digest(image) -> str:  # noqa: ANN001 -- PIL.Image.Image
     """SHA-256 of the decoded pixels, for spotting expected duplicates.
 
-    Not a dedup key and never used as one -- `CLAUDE.md` is explicit that
+    Not a dedup key and never used as one -- `ARCHITECTURE.md` is explicit that
     dedup is on the whole source file. This exists so the audit can *explain*
     the ~146 identical output pairs instead of reporting them as faults.
     """
@@ -424,7 +424,7 @@ def build_audit_report(
             "count": len(duplicates),
             "files_involved": sum(len(v) for v in duplicates.values()),
             "note": (
-                "Not faults. Dedup keys on the whole source file per CLAUDE.md, "
+                "Not faults. Dedup keys on the whole source file per ARCHITECTURE.md, "
                 "so pixel-identical outputs from byte-different sources are the "
                 "expected consequence."
             ),

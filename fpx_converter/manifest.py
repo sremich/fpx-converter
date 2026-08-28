@@ -1,7 +1,7 @@
 """The manifest: one record per distinct file, keyed on whole-file SHA-256.
 
 Keying on SHA-256 rather than the pixel hash is a decision taken deliberately
-(see DECISIONS.md). It costs roughly 27% more output than the pixel hash
+(see ARCHITECTURE.md). It costs roughly 27% more output than the pixel hash
 would, and it means about 146 output pairs will be pixel-identical, differing
 only by a timestamp buried in a property stream. That is expected. The audit
 must never report it as a fault.

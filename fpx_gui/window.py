@@ -24,11 +24,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -42,6 +44,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTabWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -56,13 +60,70 @@ from fpx_converter import layout as layout_mod
 # where six hundred photographs were going would be worse than none.
 from fpx_converter import writer as writer_mod
 
+from . import notices, progress, runner, summary
 from . import options as options_mod
-from . import progress, runner, summary
 from .worker import PipelineWorker
 
 #: Enough scrollback to review a long run without letting a runaway child
 #: grow the pane until the machine notices.
 MAX_LOG_LINES = 20000
+
+#: What the application calls itself, everywhere. One string: the window
+#: title, the title label and `app.APP_NAME` disagreeing is how a program ends
+#: up with three names, and this one is also the name of the executable.
+APP_TITLE = "FPX Converter"
+
+
+class LicenceDialog(QDialog):
+    """What this program is made of, and the full text of the terms.
+
+    A downloaded executable travels alone. There is no folder of licence files
+    beside it and nowhere else for a person to look, so the notice has to be
+    inside the binary and reachable from the window -- which for LGPLv3
+    section 4 is not a courtesy.
+
+    Scrollable and reachable from the keyboard: the tabs take arrow keys, each
+    pane is a focusable read-only browser that scrolls, and Close is the
+    default button. A notice nobody can page through is not a notice.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_TITLE} — licences")
+        self.resize(760, 560)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(_licence_pane(notices.notice_text()), "This program")
+        for name, label in (
+            (notices.APACHE_2_0, "Apache-2.0"),
+            (notices.LGPL_3_0, "LGPL-3.0"),
+            (notices.GPL_3_0, "GPL-3.0"),
+        ):
+            self.tabs.addTab(_licence_pane(notices.read_licence(name)), label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.tabs)
+        layout.addWidget(buttons)
+
+    def pane_text(self, index: int) -> str:
+        """What one tab is showing. For the tests, which cannot read a screen."""
+        return self.tabs.widget(index).toPlainText()
+
+
+def _licence_pane(text: str) -> QTextBrowser:
+    """One scrollable, selectable, keyboard-reachable pane of plain text."""
+    pane = QTextBrowser()
+    # Plain text, deliberately: these are documents with their own line
+    # breaks, and letting a rich-text engine reflow a licence is how a licence
+    # stops looking like the document it has to be a copy of.
+    pane.setPlainText(text)
+    pane.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
+    pane.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    return pane
 
 
 def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
@@ -98,7 +159,7 @@ def _report_stamp(path: Path) -> int | None:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("FlashPix Converter")
+        self.setWindowTitle(APP_TITLE)
 
         self._worker: PipelineWorker | None = None
         self._tracker = progress.ProgressTracker()
@@ -117,6 +178,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._build_folders_card())
         outer.addWidget(self._build_outputs_card())
         outer.addWidget(self._build_naming_card())
+        outer.addWidget(self._build_timezone_card())
         outer.addLayout(self._build_actions_row())
         outer.addWidget(self._build_progress())
         outer.addLayout(self._build_status())
@@ -135,6 +197,7 @@ class MainWindow(QMainWindow):
         scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setCentralWidget(scroller)
 
+        self._build_menus()
         self._size_to_contents()
         self._sync_enabled()
 
@@ -190,8 +253,8 @@ class MainWindow(QMainWindow):
         Asked of the layout rather than typed. The previous `(920, 760)` was
         right for the window as it stood and silently wrong the moment a card
         was added: it let Qt open the window nearly 300 pixels shorter than its
-        own content needed and squeeze every widget to fit, which is what
-        Stevie saw -- three radio buttons collapsed to underscores and an
+        own content needed and squeeze every widget to fit, which is what the
+        user saw -- three radio buttons collapsed to underscores and an
         empty card.
 
         `available` defaults to the screen's usable area and is passed by the
@@ -220,10 +283,25 @@ class MainWindow(QMainWindow):
 
     # -- construction ----------------------------------------------------
 
+    def _build_menus(self) -> None:
+        """One menu, for the one thing a menu bar is needed for.
+
+        The window is a single screen and wants no menus. It gets one anyway,
+        because a standalone executable carries no licence files beside it and
+        the notice has to be reachable from inside the program.
+        """
+        help_menu = self.menuBar().addMenu("&Help")
+        self.licences_action = QAction("&Licences…", self)
+        self.licences_action.triggered.connect(self._show_licences)
+        help_menu.addAction(self.licences_action)
+
+    def _show_licences(self) -> None:
+        LicenceDialog(self).exec()
+
     def _build_header(self) -> QVBoxLayout:
         box = QVBoxLayout()
         box.setSpacing(4)
-        title = QLabel("FlashPix Converter")
+        title = QLabel(APP_TITLE)
         title.setObjectName("Title")
         subtitle = QLabel(
             "Converts Kodak .fpx photos into archival TIFFs and shareable JPEGs. "
@@ -325,9 +403,9 @@ class MainWindow(QMainWindow):
             )
         self.custom_framing.setCurrentIndex(list(outputs.FRAMINGS).index("full"))
         self.custom_framing.setToolTip(
-            "70 photographs were cropped in the Kodak software. Whole photo "
-            "ignores that and keeps everything the camera captured; cropped "
-            "gives you the picture as it was framed."
+            "Some photos carry a crop somebody framed in the Kodak software. "
+            "Whole photo ignores that and keeps everything the camera "
+            "captured; cropped gives you the picture as it was framed."
         )
 
         row = QHBoxLayout()
@@ -455,6 +533,51 @@ class MainWindow(QMainWindow):
         self._sync_preview()
         return frame
 
+    def _build_timezone_card(self) -> QFrame:
+        """Which zone the photographs were taken in.
+
+        Every other control in this window is zero-config and this one cannot
+        be, because there is no answer a program can work out. The zone decides
+        the UTC offset recorded beside each timestamp, and a wrong offset looks
+        exactly like a right one for ever afterwards -- so where this machine's
+        zone is not one the converter recognises, the box is left empty and the
+        question is asked rather than answered on the user's behalf.
+
+        Editable, not a fixed list: the drop-down offers the zones the
+        converter knows today, and anything else typed in is refused by the
+        converter itself with its own message rather than by a second opinion
+        living here.
+        """
+        frame, layout = _card("Time zone")
+
+        self.timezone_combo = QComboBox()
+        self.timezone_combo.setEditable(True)
+        self.timezone_combo.addItems(options_mod.known_timezones())
+        detected = options_mod.detect_timezone()
+        self.timezone_combo.setCurrentText(detected)
+        edit = self.timezone_combo.lineEdit()
+        if edit is not None:
+            edit.setPlaceholderText("Leave empty to let the converter decide")
+        self.timezone_combo.setToolTip(
+            "The zone these photographs were taken in. It only decides the "
+            "UTC offset written beside each timestamp; it never shifts the "
+            "time itself."
+        )
+        layout.addWidget(self.timezone_combo)
+
+        hint = QLabel(
+            "Left empty because this computer's zone is not one the converter "
+            "knows — a wrong offset is written as confidently as a right one, "
+            "so it asks rather than guesses."
+            if not detected
+            else "Taken from this computer. Change it if these photographs "
+            "were taken somewhere else."
+        )
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        return frame
+
     def _reset_patterns(self) -> None:
         """Both patterns back to what the tool does on its own."""
         self.name_template_edit.setText(name_template.DEFAULT_TEMPLATE)
@@ -540,7 +663,8 @@ class MainWindow(QMainWindow):
         self.review_button = QPushButton("Open review page")
         self.review_button.setToolTip(
             "Builds a page showing every converted photo, and lets you fill in "
-            "the dates only you know."
+            "the dates only you know. It first copies one .fpx per photo into "
+            "the destination, and asks before it does."
         )
         self.review_button.clicked.connect(self._start_review)
 
@@ -605,6 +729,7 @@ class MainWindow(QMainWindow):
             folder_template=self.folder_template_edit.text(),
             custom_format=self.custom_format.currentData(),
             custom_framing=self.custom_framing.currentData(),
+            timezone=self.timezone_combo.currentText().strip(),
         )
 
     def _running(self) -> bool:
@@ -646,6 +771,7 @@ class MainWindow(QMainWindow):
             self.custom_format, self.custom_framing,
             self.name_template_edit,
             self.folder_scheme,
+            self.timezone_combo,
             *self.mode_buttons.values(),
         ):
             widget.setEnabled(idle)
@@ -717,6 +843,21 @@ class MainWindow(QMainWindow):
                 "Nothing to review yet",
                 "There is no finished run in that folder. Convert some photos first.",
             )
+            return
+        # Asked, not assumed. Building the page runs `ingest`, which copies one
+        # `.fpx` per distinct photograph into the destination -- a substantial
+        # amount of disk, and the opposite of what a person is told elsewhere
+        # in this window, where keeping the originals is an option they have to
+        # tick. A button that quietly does the thing the checkbox is for is a
+        # surprise, and this is the kind of surprise that fills a disk.
+        answer = QMessageBox.question(
+            self,
+            "This will copy your photos",
+            options_mod.review_copy_notice(options),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
             return
         self._last_options = options
         self.progress_bar.setRange(0, 0)

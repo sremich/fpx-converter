@@ -26,6 +26,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, for the leakage scan below. The default checkout is
+          # one commit, and a history scan over one commit passes by having
+          # looked at nothing -- the guard refuses a shallow clone rather than
+          # reporting that as clean.
+          fetch-depth: 0
 
       - name: Tag must match VERSION (and be X.Y.Z)
         shell: bash
@@ -48,16 +54,33 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
+      - name: Scan all reachable history for personal content
+        # The same guard ci.yml runs, and here for the same reason the
+        # ExifTool step below gives: a release gate must not be weaker than
+        # the push gate. Publishing is the moment history stops being
+        # recoverable, because a tag cannot be un-downloaded.
+        #
+        # The literal needles come from a repository SECRET, never from a file
+        # in the repository -- a guard whose source contains the strings it
+        # guards is itself the leak -- and a hit is reported as a digest, since
+        # these logs are public.
+        env:
+          FPX_LEAK_NEEDLES: ${{ secrets.FPX_LEAK_NEEDLES }}
+        shell: bash
+        run: python scripts/history_leak_guard.py --repo .
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
       - name: Install ExifTool
-        # Same reason as ci.yml: the tier-2 tests that prove the
-        # ExifTool-writes / pyexiv2-reads-back chain need it, and GitHub's
-        # Windows runners do not ship it. A release gate must not be weaker
-        # than the push gate.
+        # Same reason as ci.yml: the tier-2 tests need it and GitHub's Windows
+        # runners do not ship it. The shipped read-back is Pillow's -- pyexiv2
+        # is GPL-3.0 and cannot be imported from the package -- and the tier-2
+        # tests add exiv2's own parser as a third opinion at test time. Both
+        # halves need something to have written the tags first. A release gate
+        # must not be weaker than the push gate.
         run: choco install exiftool -y --no-progress
 
       - name: Lint
@@ -159,9 +182,13 @@ jobs:
           grep -qF "$(cat VERSION)" <<<"$printed"
 
       - name: The bundle must actually convert
-        # The check that matters. `--version` cannot see a missing pyexiv2
-        # binary or Pillow plugin; a real conversion can. Two fixtures is
-        # enough to exercise decode, both writers and the ExifTool round trip.
+        # The check that matters. `--version` proves the process starts; it
+        # cannot see a missing Pillow plugin, an ExifTool that is not on PATH,
+        # or a data file the spec forgot to collect. A real conversion can.
+        # Two fixtures is enough to exercise decode, both writers and the
+        # ExifTool round trip. (pyexiv2 is deliberately not in the bundle at
+        # all -- it is GPL-3.0 -- which is what the licence step below
+        # verifies independently.)
         env:
           FPX_REQUIRE_EXIFTOOL: "1"
         shell: bash
@@ -192,6 +219,23 @@ jobs:
               echo "a date prefix survived a pattern that never asked for one: $found" >&2
               exit 1;;
           esac
+
+      - name: The published exe must contain no GPL code
+        # Defence in depth over `packaging/licence_guard.py`, which raises
+        # `LicenceLeak` during the build if pyexiv2 or `exiv2.dll` reaches the
+        # bundle. That guard has one weakness and it is the weakness every
+        # spec-level check has: it runs INSIDE the build. Comment out the call,
+        # break the import, or meet a PyInstaller whose `Analysis` no longer
+        # exposes what it reads, and the build succeeds silently with the file
+        # inside it.
+        #
+        # This reads the finished artefact instead -- different input,
+        # different moment, so the two can only fail together if both are
+        # removed on purpose. `--require-toc` because this runner has just run
+        # PyInstaller: an unreadable PyInstaller archive here is a broken
+        # check, not a clean bundle, and it must not be reported as a pass.
+        shell: bash
+        run: python scripts/exe_licence_check.py "$EXE" --require-toc
 
       - name: Hand the executable to the release job
         uses: actions/upload-artifact@v4

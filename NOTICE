@@ -1,0 +1,82 @@
+FPX Converter
+Copyright 2026 Stevie Remich
+
+This product includes software developed for the FPX Converter project
+(https://github.com/sremich/fpx-converter) and is licensed under the Apache
+License, Version 2.0. A copy of the licence is in the file LICENSE.
+
+This NOTICE file is provided under section 4(d) of the Apache License, and
+must be included in redistributions of this work. It names the third-party
+components this project is built from. Each of those keeps its own licence;
+nothing in this file changes them, and nothing here places any part of them
+under the Apache License.
+
+The full, per-component detail -- versions, whether a component ships inside
+the published Windows executable, and the obligations each one carries -- is
+in THIRD-PARTY-NOTICES.md. The complete texts of the copyleft licences named
+below are in the LICENSES/ directory.
+
+--------------------------------------------------------------------------
+Components bundled in the published Windows executable
+--------------------------------------------------------------------------
+
+PySide6-Essentials (Qt for Python)
+Copyright (C) The Qt Company Ltd.
+Licensed under the GNU Lesser General Public License version 3.
+Used UNMODIFIED and linked dynamically. See the LGPL compliance section of
+THIRD-PARTY-NOTICES.md for the corresponding source and the relink
+instructions required by LGPLv3 section 4.
+
+shiboken6
+Copyright (C) The Qt Company Ltd.
+Licensed under the GNU Lesser General Public License version 3.
+The binding layer beneath PySide6. Used UNMODIFIED. Same terms and same
+compliance section as above.
+
+Pillow
+Copyright (c) 2010-2026 by Jeffrey A. Clark and contributors.
+Copyright (c) 1997-2011 by Secret Labs AB.
+Copyright (c) 1995-2011 by Fredrik Lundh and contributors.
+Licensed under the MIT-CMU licence.
+
+NumPy
+Copyright (c) 2005-2026, NumPy Developers.
+Licensed under the BSD 3-Clause licence, with bundled components under
+additional permissive licences; see the NumPy distribution's own LICENSE.txt
+for the full set.
+
+olefile
+Copyright (c) 2005-2023 Philippe Lagadec.
+Licensed under the BSD 2-Clause licence.
+
+defusedxml
+Copyright (c) 2013-2023 by Christian Heimes.
+Licensed under the Python Software Foundation License, version 2.
+
+PyInstaller runtime hooks and bootloader-support modules
+Copyright (c) 2005-2026, PyInstaller Development Team.
+The PyInstaller runtime hooks that are copied into a frozen application are
+licensed under the Apache License, Version 2.0. (PyInstaller itself is a
+build-time tool licensed under GPLv2-or-later with a bootloader exception;
+it is not redistributed by this project.)
+
+--------------------------------------------------------------------------
+Required, and NOT bundled
+--------------------------------------------------------------------------
+
+ExifTool, by Phil Harvey
+Licensed under the Perl Artistic License or the GNU General Public License
+version 1 or later, at the user's option.
+ExifTool is NOT bundled and cannot be bundled: it is a separate program with
+its own licence, installed by the user and invoked as a separate process.
+No part of it is contained in this project's source or in its published
+executable, and none of its terms reach this program.
+https://exiftool.org/
+
+--------------------------------------------------------------------------
+Test fixtures
+--------------------------------------------------------------------------
+
+The .fpx files in tests/fixtures/ are NOT covered by the Apache License that
+covers this software. See tests/fixtures/LICENSE.md for what they are, who
+made them, and the terms each group carries.

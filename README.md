@@ -1,586 +1,244 @@
-# fpx-converter
+# FPX Converter
 
-A 64-bit Python CLI that batch-converts Kodak DC200/DC210 `.fpx`
-(FlashPix) photos from a 2000–2002 family archive into archival TIFFs
-and shareable JPEGs, preserving every recoverable property into standard
-EXIF/XMP/IPTC tags and a complete raw-property JSON sidecar.
+[![CI](https://github.com/sremich/fpx-converter/actions/workflows/ci.yml/badge.svg)](https://github.com/sremich/fpx-converter/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/sremich/fpx-converter)](https://github.com/sremich/fpx-converter/releases/latest)
+[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE)
 
-It exists because nothing modern opens `.fpx`, and every off-the-shelf
-converter either renders black, needs a 32-bit environment, watermarks
-the output, or silently discards the metadata — and the metadata carries
-the family timeline.
+Converts Kodak `.fpx` (FlashPix) photographs — the format the DC200 and DC210
+wrote around 2000 — into archival TIFFs and shareable JPEGs, carrying the
+metadata across instead of throwing it away.
 
-## Status
+![The FPX Converter window](docs/images/main-window.png)
 
-**Version 1.2.1 released.** The milestone plan is complete. 1.0.0 converted the whole
-archive in one unattended pass: 687 source files to archival TIFF and shareable JPEG with
-full metadata, 0 failed, 0 with warnings, `complete: true` and `unexplained_failures: 0`.
-1.1.0 added a graphical interface, shipped as one Windows executable, so somebody who does
-not use a terminal can run a conversion. 1.2.0 and 1.2.1 came out of Stevie running that
-executable: a run now writes only the images you asked for, the filename and the folder
-arrangement are yours to define, and the window opens readable.
+## What it does
 
-**The tier-4 eyeball pass is done.** A person opened the converted photographs in a real
-photo app and checked colour, orientation and date by eye, after 1.2.1. It stopped being a
-release gate at 1.0.0 — a deliberate decision rather than an oversight — and was done
-anyway, which matters here more than the rule did: the two PhotoYCC files in this archive
-once shipped solidly green with 42% of their pixels clipped to zero, past every automated
-check the project had. A 96-pixel thumbnail oracle is evidence, not sight. Every tier this
-project defines has now passed.
+- **Decodes `.fpx` files that nothing modern opens.** Its own decoder, not a
+  wrapper round a broken one.
+- **Writes two useful things:** a lossless TIFF with every pixel the camera
+  captured, and a JPEG that opens anywhere.
+- **Keeps the metadata** as standard EXIF, XMP and IPTC — and is careful about
+  dates, because a wrong date is worse than none.
+- **Never writes to your originals.** The folder you point it at is only ever
+  read from. Nothing under it is written, moved, renamed or deleted, and a
+  destination inside it is refused with an explanation.
+- **Runs unattended over thousands of files,** never stopping the batch for one
+  bad file, and picking up where it left off if it is interrupted.
 
-What exists:
-- **The `fpx_converter` package** with eight commands:
-  - `scan` (walk the source archive read-only and write the manifest)
-  - `ingest` (copy one file per distinct SHA-256 into the local store)
-  - `verify` (re-hash the store against the manifest)
-  - `metadata` (extract and dump raw property sidecars as `.fpx.json`)
-  - `check-dates` (ground-truth date comparison; supports `--strict` flag)
-  - `thumbnail` (extract embedded DIB thumbnails as PNG)
-  - `convert` (batch conversion with resume-by-hash, audit reporting, and
-    independent format/framing control)
-  - `gallery` (build a QA review HTML page with album-date input)
-- **Batch engine:** unattended run over the entire corpus, never aborts on
-  one bad file, resumes by source SHA-256 across sessions, produces `conversion.log`
-  (append-only, flushed per line), `audit_report.json` (describes the output tree),
-  and `run-state.json` (keyed on source hash for resume). Ctrl-C still writes state
-  and report before returning.
-- **QA gallery:** `report/index.html` from any finished run — every photograph as a
-  thumbnail from its embedded DIB, filterable by album and audit status, all in one
-  self-contained file with no server or build step. Where capture dates are missing,
-  the gallery offers a date-entry interface; dates you type come back out as
-  `album-dates.json`, which `convert` reads and writes to EXIF `DateTimeOriginal`.
-- **834 tests:** tier-1 unit tests (no photos or external tools), tier-2 e2e
-  over 40 committed person-free fixtures covering both colour spaces, one
-  viewing-transform crop, and six of seven declared sizes, including mutation
-  tests for the colour oracle.
-- **CI passing on Windows** (python 3.14, `windows-latest`; ExifTool installed).
+## Download and run (Windows)
 
-### First ingestion run (full corpus)
+### 1. Download the app
 
-The measured results from the initial production run over the entire
-source tree:
+Get `fpx-converter-<version>.exe` from
+**[the latest release](https://github.com/sremich/fpx-converter/releases/latest)**.
+One file. Nothing to install, no Python needed.
 
-- **1,265 files scanned** (read-only), **494.9 MB** total
-- **687 distinct SHA-256**, **263.3 MB** of unique data
-- **Zero non-OLE2 or corrupt files**
-- **Dedup structure:** 114 singletons, 568 pairs, 5 triples
-- **Source tree verified** byte-identical after ingest by full
-  re-scan producing an identical manifest
+### 2. Windows will warn you. This is expected
 
-### Usage
+The app is **not code-signed**, so Windows treats it as an unknown program.
+Code-signing certificates cost money every year and this is a free tool, so it
+ships unsigned. You will see up to three warnings, in this order:
 
-Most commands require a `.env` file copied from `.env.example`
-(set `FPX_SOURCE_ROOT`, `FPX_OUTPUT_ROOT`, `FPX_EXIFTOOL`, and time zone).
-Alternatively, `scan` accepts `--source` to override the source location.
+1. **Your browser** says the file "isn't commonly downloaded" or similar.
+   Choose **Keep** — in Chrome and Edge this is behind the **…** menu next to
+   the download, then **Keep anyway**.
+2. **A blue full-screen box:** *"Windows protected your PC"*. The only button
+   you can see is **Don't run**. Click the small **More info** link above it,
+   then the **Run anyway** button that appears.
+3. **Possibly your antivirus.** One-file bundles built with PyInstaller are a
+   well-known false-positive trigger for heuristic scanners. If yours objects,
+   the honest answer is to check the source and build it yourself — see
+   [docs/BUILD.md](docs/BUILD.md).
 
-```powershell
-# Create a venv at a short path (Windows long-path is disabled)
-py -3.14 -m venv C:\venvs\fpx
-C:\venvs\fpx\Scripts\python.exe -m pip install -r requirements-dev.txt
+None of that is a judgement about the file. It is what Windows shows for every
+program that has not paid for a certificate.
 
-# Scan the source archive (read-only) and write the manifest
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan
+### 3. Install ExifTool
 
-# Scan with explicit source path (does not require .env)
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter scan --source "C:\path\to\archive"
+ExifTool writes the metadata. It is a separate program with its own licence, so
+it is not bundled and has to be installed once.
 
-# Copy one file per distinct hash to the local store
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter ingest
-
-# Re-hash the store against the manifest
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter verify
-
-# Extract raw property sidecars as .fpx.json
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter metadata
-
-# Check album folder names against parsed dates
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter check-dates
-
-# Extract embedded thumbnails
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter thumbnail
-
-# Generate archival TIFF and shareable JPEG with metadata (batch run, resumes on restart)
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert
-
-# Convert with independent format and framing control
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --archive-format tiff --archive-framing full --sharing-format jpeg --sharing-framing cropped
-
-# Generate only a full-frame TIFF (largest uncropped image)
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --no-sharing
-
-# Full-frame JPEG in everyday format (for clients who don't open TIFF)
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --no-archive --sharing-format jpeg --sharing-framing full
-
-# Convert with a fresh start (ignore prior run's state)
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert --no-resume
-
-# Build the QA gallery from a completed run (writes <output-root>/report/index.html)
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter gallery
-
-# Open the gallery page, fill in missing dates, save as album-dates.json, re-run convert
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert
-```
-
-## Using the desktop application
-
-If you don't use a terminal, the desktop app `fpx-converter-<version>.exe` handles conversion
-entirely from a window.
-
-### Get the app
-
-Download `fpx-converter-<version>.exe` from the latest GitHub release. One file, nothing to
-install — just run it. No Python installation needed.
-
-### Install ExifTool (one prerequisite)
-
-ExifTool is the only tool not bundled:
+Open a terminal — press <kbd>Win</kbd>, type `powershell`, press
+<kbd>Enter</kbd> — and run:
 
 ```powershell
 winget install --id OliverBetz.ExifTool
 ```
 
-**What happens if you skip this:** The conversion still runs and still writes the images.
-Every file is recorded as failed in the audit report because metadata could not be embedded,
-and the run exits non-zero.
-
-### Pick a source and destination folder
-
-- **Source folder:** holds your `.fpx` photos. It is only ever read from — nothing is
-  written, moved, renamed, or deleted there.
-- **Destination folder:** where the converted photos go. If you pick a folder inside the
-  source folder, you will be refused and shown why.
-
-### Convert
-
-Pick one of three, and only one:
-- **Archive copy — TIFF, whole photo.** The one to keep. Lossless, every pixel the
-  camera captured.
-- **Shareable copy — JPEG, cropped.** The one to send people. Opens anywhere, cropped
-  as it was framed in the original software (if it was cropped).
-- **Custom — you choose.** Any combination of format and framing, plus two extra
-  files per photograph if you want them: a copy of the original `.fpx`, and
-  `.fpx.json` holding every property the file carries. Which folder it writes
-  into follows the framing — `archive/` keeps the full frame, `sharing/` gets
-  the crop — and the window says which under the menus.
-
-All three write exactly one image per photograph. The two named choices ask nothing
-else; the format and framing menus appear only under Custom.
-
-To write both trees in one run — a full-frame TIFF *and* a cropped JPEG — use the
-command line, which keeps the two independent (`--archive-format`, `--sharing-format`
-and their framings).
-
-### Where they go, and what they are called
-
-Below that, two settings that apply whichever of the three you picked.
-
-**Folders.** By default the converted photos keep your own folder names — a folder
-somebody typed outranks any date the tool can work out. You can also file them by year,
-by year and month, all in one folder, or by a pattern of your own such as
-`{year}/{album}`.
-
-**Filenames.** By default each image is named like
-`2002-07-04_143210_Backyard.jpg` — as much of the date as the evidence supports, then
-the name from your archive. You can change the pattern: `{year}` `{month}` `{day}`
-`{date}` `{time}` `{name}` `{album}`, in any arrangement.
-
-`{name}` has to stay. Those filenames are the only thing in this kind of archive that a
-person wrote — there are no captions or titles anywhere else — so a pattern without it
-throws them away for good, and the Convert button stays greyed out until you put it back.
-
-Under both boxes you will see two example filenames, which update as you type. The second
-one matters: most of these photographs have no date recorded anywhere, so most of your
-filenames will be mostly zeros. That is the archive being honest, not the converter
-failing — and it is better to see it before six hundred files than after.
-
-Press **Convert**. You will see:
-- A progress bar (once the total count is known)
-- A running log of what the converter is doing
-- At the end, a summary: how many converted, whether anything failed, and details of any
-  problems
-
-### Cancel is safe
-
-If you press **Cancel**, the converter stops after the photo it is working on and finishes
-writing the audit report. Nothing is lost. Press **Convert** again and it picks up where
-it stopped — resume is on by default.
-
-In rare cases where the converter does not respond to the stop request, it will be killed;
-you will be told so, and nothing was written for this run. The photos already converted are
-still good and untouched.
-
-### Review and supply dates
-
-After conversion, press **Open review page**. A browser opens showing every converted photo
-as a thumbnail. Where capture dates are missing, the page lists albums with a date-entry
-box beside each one. Type the dates you know (YYYY-MM-DD format, for example `2001-07-04`),
-then save the page's JSON data as `album-dates.json` in the destination folder.
-
-Run **Convert** again. It will read the dates you supplied and write them to
-`DateTimeOriginal` for every photo in those albums. Resume is on, so nothing re-converts;
-only the metadata updates.
-
-## Install and test
-
-### Prerequisites
-
-- **Python 3.14** (exactly; the dependency pins target cp314 wheels)
-- **Windows 11** (CI runs on `windows-latest`; development is Windows-only)
-- **ExifTool** (external binary, not a Python package)
-
-### Quick start
-
-1. Clone the repo.
-
-2. Create a venv at a SHORT path (Windows long-path support is
-   disabled on the dev machine):
-
-   ```powershell
-   py -3.14 -m venv C:\venvs\fpx
-   C:\venvs\fpx\Scripts\python.exe -m pip install -r requirements-dev.txt
-   ```
-
-3. Install ExifTool (one-time):
-
-   ```powershell
-   winget install --id OliverBetz.ExifTool
-   ```
-
-4. Copy `.env.example` to `.env` and fill in the placeholders:
-
-   ```powershell
-   copy .env.example .env
-   # Edit .env with your source archive path, output root, time zone
-   ```
-
-### Run the gates
-
-The tier-1 and tier-2 gates:
+Check it worked by closing that window, opening a new one, and running:
 
 ```powershell
-# Lint
-C:\venvs\fpx\Scripts\python.exe -m ruff check .
-
-# Unit and e2e tests (tier 1 + tier 2: 834 tests, no real photos, no source archive)
-# Note: some tier-2 tests require ExifTool for metadata round-trip validation
-C:\venvs\fpx\Scripts\python.exe -m pytest
+exiftool -ver
 ```
 
-These gates run on every push to CI. CI installs ExifTool and sets
-`FPX_REQUIRE_EXIFTOOL` to enforce the "validate with a different tool than the
-one that wrote" rule: ExifTool writes, pyexiv2 reads back.
+A version number means you are done. If `winget` is not recognised (older
+Windows 10), download the Windows package from
+[exiftool.org](https://exiftool.org/) instead, unzip it, and point the app at
+`exiftool.exe` with the `FPX_EXIFTOOL` setting or the `--exiftool` flag.
 
-### Batch conversion artifacts and the gallery workflow
+Without ExifTool, `convert` refuses to start and tells you so. It does not
+write a run's worth of images and then report every one of them failed.
 
-The `convert` command produces three state/audit files alongside the output images:
+### 4. Pick folders and press Convert
 
-- **`conversion.log`**: append-only text log, flushed after every file. Each line
-  records what happened to one source file: status (converted/failed/resumed),
-  any errors, warnings, and the time taken. Survives crashes and interrupts.
-- **`audit_report.json`**: JSON report describing the **output tree**, not the
-  invocation. Covers all files from all sessions that contributed to the tree.
-  Keys are source SHA-256 values; values are the complete record for each file.
-  The 1.0.0 gate reads `unexplained_failures`. Roughly 146 pixel-identical output
-  pairs are expected and listed as `"expected_duplicate"`, not flagged as failures.
-- **`run-state.json`**: internal resume state, keyed on source SHA-256. Persists
-  between sessions; discarded if the output specs (`--archive-format`, etc.),
-  the filename pattern or the folder arrangement change, or if `--no-resume`
-  is passed. A killed run costs only the file in
-  flight, not the batch.
+Choose the folder holding your `.fpx` photos, choose where the converted
+photos should go, pick one of the three output choices, and press **Convert**.
 
-### The QA gallery and album-dates workflow
+**Full walkthrough, in plain language: [docs/GUIDE.md](docs/GUIDE.md).**
 
-After running `convert`, build an HTML review page with `gallery`:
+## What you get
 
-```powershell
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter gallery
-# writes <output-root>/report/index.html (output/report/index.html by default)
+```
+<destination>/
+  archive/2002/Summer 2002/2002-07-04_143210_Backyard.tif
+  sharing/2002/Summer 2002/2002-07-04_143210_Backyard.jpg
+  conversion.log
+  audit_report.json
+  run-state.json
 ```
 
-The gallery shows:
-- Every converted photograph as a thumbnail decoded from its embedded DIB
-  (roughly 96 px on the long edge; the exact size varies per file)
-- Filterable by album and audit status (failed, warnings, no capture date,
-  has a capture date); pixel-identical duplicate pairs are called out in the
-  page header as a count, not as a separate filter
-- Failed files outlined in red so they stand out
-- Albums holding undated photographs with a date-entry box beside each one
+The command line writes both trees by default. **The desktop app writes one
+image per photograph** — whichever of its three choices you picked — and the
+tree it lands in follows the framing, so a whole-frame image goes to `archive/`
+and a cropped one to `sharing/`.
 
-Open `output/report/index.html` in a browser, enter dates you know in YYYY-MM-DD format,
-and save the JSON it generates as `album-dates.json` (placed beside the manifest by default).
-Then re-run `convert`:
+- **`archive/`** keeps the **full frame**, lossless — every pixel the camera
+  captured. **`sharing/`** gets the **crop**, where somebody framed one in the
+  Kodak software at the time.
+- **Folders** keep your own folder names by default, nested under the year; you
+  can also file by year, by year and month, all in one folder, or by a pattern.
+- **Filenames** are `{year}-{month}-{day}_{time}_{name}` by default, with any
+  part the evidence does not support written as zeros. `{name}` is required in
+  any pattern you write: in this kind of archive the filename is the only thing
+  a person actually typed, and a pattern without it discards that for good.
 
-```powershell
-C:\venvs\fpx\Scripts\python.exe -m fpx_converter convert
+## About the dates
+
+**There is no capture date in these files.** The FlashPix capture-date property
+is absent from every one of them; the only timestamp present is an
+import-batch stamp, recording when the photographs reached a computer.
+
+So that stamp goes to `DateTimeDigitized`, never to `DateTimeOriginal`.
+`DateTimeOriginal` is written only where a date is defensible as a **single
+day** — a day-precise folder name, an embedded film-scan date, or a date you
+supply yourself through the review page. A folder naming a year or a season
+gives an ordering key and a filename prefix, not a claim. That is why many of
+your filenames will read `0000-00-00_000000_`: the archive being honest.
+
+**[docs/DATES.md](docs/DATES.md)** explains all of it, including how to supply
+the dates you know.
+
+## Something went wrong
+
+**[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — SmartScreen, missing
+ExifTool, filenames full of zeros, wrong time zones, and the rest.
+
+---
+
+## Run from source
+
+The command line is the whole converter; the window is a front end over it.
+
+```sh
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements-dev.txt   # Windows
+# .venv/bin/python -m pip install -r requirements-dev.txt          # POSIX
+
+python -m ruff check .
+python -m pytest
 ```
 
-The `convert` command reads `album-dates.json` and writes every date you supplied
-to `DateTimeOriginal` with `date_source: owner-supplied`. A date you enter only
-reaches EXIF if it is a single day in YYYY-MM-DD format; anything coarser is
-refused so a date claim is either defensible or not written at all.
+Install `-r requirements-gui.txt` instead if you are working on the desktop
+front end, building the executable, or running its tests — it pulls in
+`requirements-dev.txt` as well as Qt.
 
-## Test fixtures and coverage
+Then, at its shortest, a conversion is two commands:
 
-The test suite runs on 40 committed person-free `.fpx` files (4 Kodak stock
-samples plus 36 adopted from the archive, all confirmed person-free by eye
-and renamed to neutral stems). The fixtures cover:
+```sh
+python -m fpx_converter scan ./photos --manifest ./work/manifest.json
+python -m fpx_converter convert --manifest ./work/manifest.json --dest ./converted
+```
 
-- Both colour spaces (NIF RGB and PhotoYCC)
-- Six of the seven declared image sizes
-- One viewing-transform crop (axis-aligned; the only archive-derived one to be committed)
-- Nine nearly-identical time-lapse frames (dedup key exercise)
-- Fine detail and saturated colours (chroma oracle exercise)
-- Camera-generated filenames (naming collision handling)
+**Every command and flag: [docs/CLI.md](docs/CLI.md).**
+ExifTool is a separate install; see step 3 above.
 
-**Coverage gaps:** Rotation has no fixture — all 22 rotated files in the
-archive contain people and cannot be committed. Tier 3 (the real corpus) is
-the only automated cover for this branch, which matters because rotation was
-the branch that carried the 0.4.0 defect where rotated-and-cropped files
-dropped their crop. See `tests/fixtures/README.md` for the screening rule and
-detailed breakdown.
+## How it works
 
-## What the milestone-0 inventory found
+- A `.fpx` file is an **OLE2 compound document** holding a resolution pyramid
+  of JPEG-compressed tiles, with the JPEG tables stored apart from the tiles.
+- The decoder reads the tile table, splices the tables back onto each tile,
+  stitches, crops to the declared size, and applies the file's own viewing
+  transform — a 90° rotation, a crop, or both.
+- Colour space is read **per file** — NIF RGB or PhotoYCC. A file that declares
+  neither is decoded as RGB and says so, in the log and the audit report.
+- **ExifTool writes** the tags and **Pillow reads them back**, with
+  `defusedxml` for the XMP packet. Validating with the tool that wrote proves
+  much less than it appears to.
+- Pillow's own `FpxImagePlugin` is never used in the conversion path: on the
+  reference corpus it opened 39 of 1,265 files and hard-crashed CPython on two.
 
-The inventory swept all 1,265 files in the source archive before any
-decoder code was written. Every starting hypothesis was checked and
-several refuted. These are now settled facts; see `DECISIONS.md` for
-the full reasoning and evidence.
+**[docs/FORMAT.md](docs/FORMAT.md)** is the full format write-up;
+**[ARCHITECTURE.md](ARCHITECTURE.md)** is why the pipeline is shaped this way.
 
-### Capture dates: none in the corpus
+## Status and limitations
 
-The FlashPix per-picture camera-settings group (`0x25xxxxxx`, including
-the spec's capture-date property `0x25000000`) is **absent from all
-1,265 files**. The authoring application never wrote it. The only
-timestamp present is `PIDSI_CREATE_DTM` — an **import-batch stamp**,
-not a shutter time. The 1,265 files carry only 26 distinct calendar
-dates; single events of ~100 photos share a single sub-hour window.
-
-When checked against dated-folder ground truth, the import stamp fails
-7 of 9 dated albums, with errors ranging from +2 days to +3 months.
-One folder's contents land in the **wrong calendar year**.
-
-**Implication:** Capture dates come from folder names plus an owner
-review pass in the QA gallery, not from the file. The import stamp
-goes to `DateTimeDigitized` / `xmp:CreateDate`. `DateTimeOriginal`
-is written only where a date is independently defensible.
-
-### Timestamps are local wall-clock time
-
-The OLE FILETIMEs in the corpus hold **local wall-clock time**, not
-UTC. Converting them would move ~20% of the files (those stamped
-between 00:00 and 04:59) onto the **previous calendar day**.
-
-**Implication:** Treat stored values as already-local. The home time
-zone is `America/Chicago`, with per-album overrides where a folder name
-implies elsewhere; that map selects the `OffsetTimeOriginal` /
-`OffsetTimeDigitized` values written, and applies no conversion.
-
-### Colour space: mostly NIF RGB, not PhotoYCC
-
-**1,261 of 1,265 subimages are NIF RGB** (channel ids `0x00030000/1/2`).
-Only 4 files in the corpus are PhotoYCC. No ICC profile exists anywhere.
-
-**Implication:** The expensive YCC-to-sRGB colour-science step the
-initial spec anticipated is not needed for the bulk of the corpus. The
-handful of PhotoYCC files still need it; decoding them as RGB yields
-25–28 levels of error. Detect per file; never assume corpus-wide.
-
-### Pillow's FpxImagePlugin is broken
-
-Run over all 1,265 files, Pillow's built-in FlashPix plugin opened
-**39** and raised on **1,224**. Two files **hard-crashed the CPython
-process** (access violation; heap corruption). The plugin's failures
-stem from prepending the external JPEG table *including* its trailing
-EOI marker, and it has no decoder for zero-length single-colour tiles.
-
-**Implication:** The custom decoder is primary, not a fallback. The 39
-successes are useful only as an out-of-process correctness oracle —
-and they match the custom reconstruction exactly (0.0 mean absolute
-difference).
-
-### Viewing transforms: 22 files need 90° rotation; 70 files are cropped
-
-Every file has a Transform stream with a spatial orientation matrix
-(`0x10000003`). By the *shape of the matrix*, the corpus divides 612 identity
-/ 22 rotation / 53 scale-and-translate crop. By what that resolves to — which
-is a different question, because a rotation can carry a crop and a matrix
-inside the classifier's 2% identity tolerance can too — it divides **609
-untouched / 8 rotation only / 14 rotation-plus-crop / 56 crop**, for **70
-files that resolve to a crop**.
-
-**Implication:** A naive tile decoder will emit the rotated images sideways.
-The crop is a composition somebody framed in the Kodak software; the matrix
-is authoritative and present in every file.
-
-### File quality: zero corruption
-
-All 1,265 files are valid OLE2 compound documents with correct magic.
-Zero zero-length, zero truncated, zero unreadable streams. Zero files
-were cloud-storage online-only placeholders.
-
-**Implication:** The conversion target is genuinely 100%. Any decode
-failure is a pipeline bug, not media decay.
-
-### Deduplication: 541 distinct photos in 1,265 files
-
-The 1,265 files reduce to 687 distinct SHA-256, and 541 distinct pixel
-payloads. The two source trees are not independent: by pixel hash one
-is a strict superset of the other. Keying deduplication on whole-file
-SHA-256 (as the approved plan specifies) will convert ~27% more output
-files than strictly necessary, emitting ~146 pixel-identical output
-pairs that differ only by a ~14-byte timestamp in a property stream.
-This is expected and must not be reported as a fault by the audit.
-
-## Milestone plan
-
-The approved plan for building the converter, ticked as milestones ship.
-This survives context loss; conversation memory doesn't. Every milestone has
-shipped; 1.2.0 and 1.2.1 are post-plan work driven by using the result.
-
-- [x] **0.1.0** — Scaffold + ingestion. Read-only source walk, hash
-      cascade, `manifest.json`, copy `.fpx` into `source-files/`.
-      Non-personal FPX fixtures committed.
-- [x] **0.2.0** — Metadata engine. Custom property-set parser for all
-      10 property sets plus 2 extension storages. Full raw sidecar dump.
-      Timestamp resolution per the approved dating strategy. Folder-name
-      ground-truth check as an automated gate.
-- [x] **0.3.0** — Pixel decoder. Tile table at +28, per-tile JPEG
-      splice / raw / single-colour fill, stitch, crop to declared size,
-      per-file colour space, `0x10000003` transform (90° CCW rotation and
-      crops). Thumbnail extractor as correctness and orientation oracle.
-- [x] **0.4.0** — Dual output. Deflate TIFF + q95 4:4:4 JPEG, ExifTool
-      writes, pyexiv2 read-back validation, filesystem mtime, naming
-      scheme. Crop handling for all 70 affected files, photo-identical output
-      deduplication reporting, and 36 new person-free CI fixtures for PhotoYCC
-      and crop coverage.
-- [x] **0.5.0 + 0.6.0** — Built and audited as one unit, shipped as 0.6.0.
-      Batch engine with resume-by-hash, `conversion.log`, `audit_report.json`,
-      `run-state.json`; never aborts on one bad file. Format and framing
-      decoupled for independent control. QA gallery (`report/index.html`),
-      thumbnails from embedded DIBs, filters by album and audit status,
-      per-album date-entry interface yielding `album-dates.json` which `convert`
-      reads and writes to `DateTimeOriginal`.
-- [x] **1.0.0** — Full dataset run: the whole archive in one unattended pass,
-      687 converted, 0 failed, `complete: true`. The tier-4 eyeball half is
-      outstanding and is now a recommendation rather than a gate.
-- [x] **1.1.0** — Desktop app. A GUI wrapping the CLI. Ships as a
-      single Windows executable alongside it. Folded with PyInstaller
-      packaging work.
-- [x] **1.2.0** — Names, folders, and what a run writes. Not in the original
-      plan: it came out of Stevie running the packaged app. ExifTool stopped
-      opening a console window per photograph, the unreadable dropdowns were
-      fixed, the window's six output controls became three exclusive choices,
-      the `.fpx` copy and the sidecar became opt-in, and both the filename and
-      the folder arrangement became user-definable.
-- [x] **1.2.1** — Two more from using it. The window opened too small to read
-      and now sizes itself from its own layout; the built executable carries
-      its version in its filename; and Custom stopped asking a question the two
-      choices above it had already answered.
-
-## Key user-facing behaviours
-
-### Dates: defensible only, with coarse-grained prefixes
-
-There is no capture date in this corpus. The only timestamp is a Kodak
-import-batch stamp, which lands in `DateTimeDigitized` / `xmp:CreateDate` on
-all files. `DateTimeOriginal` is written **only** where a date is independently
-defensible:
-
-- **Day-precise folder names** (e.g. `2001-07-04/`): written as local
-  midnight on that day (`OffsetTimeOriginal` carries the album's time zone;
-  stored/written times are never converted to UTC — see `DECISIONS.md`).
-- **Embedded film-scan dates** (2 files in the corpus): written as recorded.
-- **Owner review pass** (via the QA gallery `album-dates.json` interface):
-  dates you supply for whole albums are written to every photograph in them.
-
-Coarser folder dates (a bare year, a span, a season, a month) don't populate
-`DateTimeOriginal` but are still used as an ordering key. They drive the
-output filename prefix and the filesystem mtime, where unknown components are
-written as zeros: `2001-00-00_000000_` for a year-only folder, or
-`0000-00-00_000000_` for a folder with no dateable content. This allows
-chronological sorting without false precision.
-
-The `FPX_COARSE_ALBUMS` environment variable (a JSON list of album names in
-`.env`, e.g. `["christmas 1994", "summer trip"]`) demotes an album whose
-folder name looks day-precise (e.g. a holiday name that could be mistaken for
-a date) to its bare year only. One-way: it can remove a date claim, never add
-one.
-
-### Output tree layout: source folder names, by default
-
-The default output structure follows the source archive's folder names, not
-timestamps. A descriptive folder name keeps its name as the album, nested under
-the year if the folder name gives one (`2001/<that folder's name>/`), and sitting
-beside the year folders if it does not. Only a folder whose name says nothing —
-tool-generated or placeholder names in the source — is replaced by
-`<year>/<year> <Month>`, and that year-month comes from the import stamp, which
-is not trusted as a capture date.
-
-A file in multiple albums is filed under the most descriptive one, which usually
-gives it the best date evidence.
-
-`--folder-scheme` chooses a different shape: `year`, `year-month`, `flat`, or
-`custom` with a `--folder-template` such as `{year}/{album}`. Where only the year
-is known, `year-month` files directly under the year rather than inventing a
-January.
-
-### Filenames: a date prefix and the name somebody typed
-
-Each converted image is named `<YYYY-MM-DD_HHMMSS>_<original name>` by default,
-with every component the evidence does not support written as zeros —
-`2001-00-00_000000_Backyard.tif` for a photo dated only to its year. The prefix
-is a browsing affordance and may use a coarse folder date; EXIF
-`DateTimeOriginal` is a claim and may not.
-
-`--name-template` changes the pattern. The fields are `{year}` `{month}` `{day}`
-`{date}` `{time}` `{name}` `{album}`, and `{name}` is required: filenames are the
-only human-authored content in this kind of archive, so a pattern that drops
-them loses, for every file it renames, something no amount of re-reading the
-source can recover.
-
-Both patterns are checked once before a run starts, and a change to either
-invalidates a resume — a run that renames or refiles is not the same run.
-
-### Crops: full frame in archive/, cropped JPEG in sharing/
-
-70 files carry a viewing transform that resolves to a crop — 56 axis-aligned
-crops and 14 files that combine a 90° rotation with a crop. The archival TIFF
-(`archive/<folder>/<name>.tif`) preserves the full frame the camera captured.
-The shareable JPEG (`sharing/<folder>/<name>.jpg`) applies the crop.
-
-A conversion writes only the images asked for. `--source-copy` puts a copy of
-the original `.fpx` beside the TIFF and `--sidecar` writes the `.fpx.json`
-raw-property dump; both are off by default, because your source folder is only
-ever read from and is still there, and the sidecar can be rebuilt at any time
-with `metadata`.
-
-The `convert` command names every file affected by a crop in its output, so you
-can review them if needed.
+- **Windows is the tested platform.** CI runs on `windows-latest` with Python
+  3.14. The CLI has no Windows-only dependencies and should run on macOS and
+  Linux, but it is not tested there — treat that as unverified, not supported.
+  The desktop app is Windows-only, shipped as a single `.exe`.
+- **Python 3.14.** `pyproject.toml` declares `>=3.14`; 3.14 is what CI runs and
+  what the exact dependency pins are verified against.
+- **Rotation and rotation-plus-crop have no fixture cover.** Every rotated file
+  in the corpus this was built from contains people and cannot be published, so
+  the only automated cover for that branch is a local run over a real archive —
+  and it is the branch that once carried a defect where rotated-and-cropped
+  files silently lost their crop. See
+  [`tests/fixtures/README.md`](tests/fixtures/README.md) and
+  [docs/TESTING.md](docs/TESTING.md).
+- Colour and orientation need **eyes at least once per variant**. "It decoded"
+  is not "it decoded correctly", and this project has the scars to prove it —
+  see [docs/PROJECT-HISTORY.md](docs/PROJECT-HISTORY.md).
 
 ## Documentation
 
 | Document | Purpose |
 |---|---|
-| [`CLAUDE.md`](CLAUDE.md) | Working notes: commands, testing tiers, milestone plan, binding project rules |
-| [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | Full requirements, with every starting hypothesis marked confirmed, partial, or refuted |
-| [`DECISIONS.md`](DECISIONS.md) | Append-only decisions and hard-won lessons |
-| [`docs/wiki/Home.md`](docs/wiki/Home.md) | In-repo wiki index (repo is private, so GitHub's wiki section is not used) |
-| [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog history |
+| [docs/GUIDE.md](docs/GUIDE.md) | Using the desktop app, start to finish, no jargon |
+| [docs/CLI.md](docs/CLI.md) | Every command, every flag, the run artifacts |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When something goes wrong |
+| [docs/DATES.md](docs/DATES.md) | Why the dates work the way they do |
+| [docs/FORMAT.md](docs/FORMAT.md) | What a `.fpx` file actually is |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | The pipeline, and the rules behind it |
+| [docs/TESTING.md](docs/TESTING.md) | The test tiers and what they cover |
+| [docs/BUILD.md](docs/BUILD.md) | Building the Windows executable |
+| [docs/PROJECT-HISTORY.md](docs/PROJECT-HISTORY.md) | How it got here, and what was refuted on the way |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
 
-## Release model
+## Contributing
 
-- The version lives only in `VERSION` (always X.Y.Z).
-- Push a `vX.Y.Z` tag to trigger CI. CI verifies tag == VERSION, lints,
-  tests, and creates the GitHub release — automatically a pre-release
-  while 0.x.
-- Releases were pre-releases through 0.x. From 1.0.0 they are full releases.
-  The tier-4 eyeball pass is **not** a gate — it was one until 1.0.0, and the
-  rule was removed deliberately rather than left standing while releases
-  stepped over it
-- This project publishes **no container image** and talks to **no
-  external system**.
+Bug reports, questions and pull requests go to
+[the issue tracker](https://github.com/sremich/fpx-converter/issues). Read
+[CONTRIBUTING.md](CONTRIBUTING.md) first — it lists the rules that are not
+negotiable, chief among them that the source archive is read-only and that
+nothing personal goes in the repository. Security reports:
+[SECURITY.md](SECURITY.md).
 
----
+## Licence
 
-For more detail on the inventory findings, testing strategy, and project
-rules, see [`CLAUDE.md`](CLAUDE.md) and [`DECISIONS.md`](DECISIONS.md).
+Apache License 2.0. Copyright Stevie Remich. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE). Third-party components keep their own licences, listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) with the full copyleft texts
+in [LICENSES/](LICENSES); the same notice is inside the application, under
+**Help → Licences**. The test fixtures are **not** covered by the Apache
+licence — see [tests/fixtures/LICENSE.md](tests/fixtures/LICENSE.md).
+
+## Trademarks
+
+Kodak, FlashPix, DC200 and DC210 are trademarks of Eastman Kodak Company; this
+project is independent and unaffiliated.
+
+## Acknowledgements
+
+[ExifTool](https://exiftool.org/) by Phil Harvey writes every tag this tool
+produces. [Qt for Python (PySide6)](https://doc.qt.io/qtforpython/) by The Qt
+Company, used unmodified and linked dynamically, is the window. Pillow, NumPy,
+olefile and defusedxml do the rest of the heavy lifting.
