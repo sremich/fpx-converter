@@ -825,3 +825,224 @@ class TestTheReviewPageAsksBeforeItCopies:
 
         assert started, "saying yes did nothing"
         assert started[0][0][1][0] == "ingest"
+
+
+class TestTheExifToolCard:
+    """The dependency the window used to say nothing about.
+
+    ExifTool is not bundled, so a fresh machine has none. Until this card
+    existed the window let somebody pick two folders, press Convert, and learn
+    from a line in the log pane that they needed to open PowerShell -- after
+    they had committed to a run. The check now happens when the window opens.
+    """
+
+    @staticmethod
+    def _without_exiftool(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Same shape as `test_cli_convert.py`'s helper, for the same reason."""
+        monkeypatch.setattr(writer, "resolve_exiftool_path", lambda *_a, **_k: None)
+
+    def test_the_card_is_invisible_when_exiftool_is_there(self, window) -> None:  # noqa: ANN001
+        """A card that reports "nothing is wrong" on every launch is noise."""
+        if writer.resolve_exiftool_path() is None:
+            pytest.skip("this machine has no ExifTool, so the card is correct to show")
+        assert window.exiftool_card.isHidden()
+
+    def test_the_card_shows_when_exiftool_is_missing(
+        self, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        self._without_exiftool(monkeypatch)
+        win = MainWindow()
+        qtbot.addWidget(win)
+        # `isHidden`, not `isVisible`: the window is never shown in a test.
+        assert not win.exiftool_card.isHidden()
+        assert "ExifTool was not found" in win.exiftool_hint.text()
+
+    def test_the_diagnosis_is_the_command_lines_own(
+        self, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        """Not paraphrased. Two descriptions of one condition drift."""
+        self._without_exiftool(monkeypatch)
+        win = MainWindow()
+        qtbot.addWidget(win)
+        assert writer.EXIFTOOL_MISSING_DIAGNOSIS in win.exiftool_hint.text()
+
+    def test_the_cli_remedy_is_not_shown_in_the_window(
+        self, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        """The diagnosis is shared; the advice is not, and must not be.
+
+        `exiftool_missing_message()` ends "Then re-run. If it is installed
+        somewhere off PATH, point at it with --exiftool" -- three things that
+        are wrong in front of somebody who has an Install button, a file
+        picker, and no run to re-run. Sharing the whole string was the first
+        implementation and it put a command-line flag in a window.
+        """
+        self._without_exiftool(monkeypatch)
+        win = MainWindow()
+        qtbot.addWidget(win)
+        shown = win.exiftool_hint.text()
+        # "Nothing has been written" belongs to a refused *run*. In a window
+        # that has just opened it answers a question nobody asked.
+        for cli_only in (
+            "--exiftool", "Then re-run", "winget install", "Nothing has been written",
+        ):
+            assert cli_only not in shown, (
+                f"{cli_only!r} is command-line advice and has no place in the "
+                "window, which offers a button for the same thing"
+            )
+
+    def test_convert_is_refused_while_it_is_missing(
+        self, qtbot, folders, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        """Before the run, not four hundred files into it."""
+        self._without_exiftool(monkeypatch)
+        win = MainWindow()
+        qtbot.addWidget(win)
+        source, dest = folders
+        _fill(win, source, dest)
+        assert not win.convert_button.isEnabled()
+
+    def test_the_review_page_is_not_gated_on_it(
+        self, qtbot, folders, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        """`ingest` and `gallery` write no tags and need no ExifTool.
+
+        Disabling the review page for a dependency it does not use would take
+        away the one thing somebody without ExifTool can still do.
+        """
+        self._without_exiftool(monkeypatch)
+        win = MainWindow()
+        qtbot.addWidget(win)
+        source, dest = folders
+        _fill(win, source, dest)
+        assert win.review_button.isEnabled()
+
+    def test_locating_a_copy_clears_the_card_and_frees_convert(
+        self, qtbot, folders, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        found = tmp_path / "exiftool.exe"
+        found.write_text("not really, but resolve_exiftool_path is faked", encoding="utf-8")
+
+        # Registered with monkeypatch before the window sets it for real, so
+        # teardown removes it again. `_locate_exiftool` assigns `os.environ`
+        # directly -- which is right, the child has to inherit it -- and a
+        # plain assignment outlives the test: it leaked into `load_env`, which
+        # overlays every `FPX_` name in the environment over the file, and
+        # broke an unrelated `test_config` case that had set the same key.
+        monkeypatch.setenv("FPX_EXIFTOOL", "")
+
+        # Missing until a path is chosen, present afterwards -- which is what
+        # the real lookup does once FPX_EXIFTOOL is set.
+        chosen: list[str] = []
+        monkeypatch.setattr(
+            writer,
+            "resolve_exiftool_path",
+            lambda explicit=None, *_a, **_k: (
+                str(found) if explicit or chosen else None
+            ),
+        )
+        self_written: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            config,
+            "set_env_value",
+            lambda key, value, *a, **k: (
+                self_written.append((key, value)) or (tmp_path / ".env")
+            ),
+        )
+        monkeypatch.setattr(
+            "fpx_gui.window.QFileDialog.getOpenFileName",
+            lambda *a, **k: (str(found), ""),
+        )
+
+        win = MainWindow()
+        qtbot.addWidget(win)
+        source, dest = folders
+        _fill(win, source, dest)
+        assert not win.convert_button.isEnabled()
+
+        chosen.append("now it resolves")
+        win._locate_exiftool()
+
+        assert win.exiftool_card.isHidden()
+        assert win.convert_button.isEnabled()
+        assert self_written == [("FPX_EXIFTOOL", str(found))], (
+            "the located path was not remembered, so it would be asked for again"
+        )
+
+    def test_a_file_that_is_not_exiftool_is_refused_and_nothing_is_remembered(
+        self, qtbot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        self._without_exiftool(monkeypatch)
+        remembered: list[object] = []
+        monkeypatch.setattr(
+            config, "set_env_value", lambda *a, **k: remembered.append(a) or tmp_path
+        )
+        warned: list[str] = []
+        monkeypatch.setattr(
+            "fpx_gui.window.QMessageBox.warning",
+            lambda _p, _t, text, *a, **k: warned.append(text),
+        )
+        monkeypatch.setattr(
+            "fpx_gui.window.QFileDialog.getOpenFileName",
+            lambda *a, **k: (str(tmp_path / "notepad.exe"), ""),
+        )
+
+        win = MainWindow()
+        qtbot.addWidget(win)
+        win._locate_exiftool()
+
+        assert warned, "a file that is not ExifTool was accepted silently"
+        assert not remembered, "a path that does not work was written to .env"
+        assert not win.exiftool_card.isHidden()
+
+    def test_cancelling_the_install_dialog_runs_nothing(
+        self, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        """The command is named before it runs, and No means no.
+
+        Nothing in this suite may actually run a package manager, so the guard
+        is that the worker is never constructed.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        self._without_exiftool(monkeypatch)
+        win = MainWindow()
+        qtbot.addWidget(win)
+        monkeypatch.setattr(
+            "fpx_gui.window.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Cancel,
+        )
+        started: list[object] = []
+        monkeypatch.setattr(
+            "fpx_gui.window.InstallWorker", lambda **k: started.append(k)
+        )
+
+        win._install_exiftool()
+
+        assert not started
+        assert win._installer is None
+
+    def test_the_window_opens_tall_enough_to_show_the_card(
+        self, qtbot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # noqa: ANN001
+        """A hidden widget counts as nothing to a layout.
+
+        Sizing measured without this card would come up short on exactly the
+        machines that have to read it -- whose owners have the least idea what
+        is wrong.
+        """
+        from PySide6.QtCore import QRect
+
+        self._without_exiftool(monkeypatch)
+        win = MainWindow()
+        qtbot.addWidget(win)
+        win._size_to_contents(QRect(0, 0, 1920, 1600))
+        assert win.height() >= win.content_height_at(win.width())
+
+    def test_the_tallest_measurement_accounts_for_the_card_even_when_hidden(
+        self, window
+    ) -> None:  # noqa: ANN001
+        """The guard against the measurement quietly losing the card again."""
+        if not window.exiftool_card.isHidden():
+            pytest.skip("this machine has no ExifTool, so the card is already shown")
+        assert window.tallest_content_height(900) > window.content_height_at(900)

@@ -67,8 +67,10 @@ Required, and NOT bundled
 ExifTool, by Phil Harvey
 Licensed under the Perl Artistic License or the GNU General Public License
 version 1 or later, at the user's option.
-ExifTool is NOT bundled and cannot be bundled: it is a separate program with
-its own licence, installed by the user and invoked as a separate process.
+ExifTool is NOT bundled. Its licence would permit bundling; this project
+chooses not to, to keep the process boundary clean and to avoid taking on
+another project's release cadence. It is a separate program with its own
+licence, installed by the user and invoked as a separate process.
 No part of it is contained in this project's source or in its published
 executable, and none of its terms reach this program.
 https://exiftool.org/

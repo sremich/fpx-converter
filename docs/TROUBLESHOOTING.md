@@ -34,13 +34,24 @@ build you made yourself will not be flagged.
 ### The app says every photo failed
 
 Almost always **ExifTool is missing**. It writes the metadata, it is a separate
-program with its own licence, and it is not bundled.
+program with its own licence, and this project keeps it separate rather than
+bundling it.
+
+**In the desktop app you should not see this at all** — it checks for ExifTool
+when it opens and offers to install it, and it will not let a conversion start
+without it. If you are reading this because the app told you ExifTool was
+missing, press its **Install ExifTool** button; if you already have a copy the
+app cannot find, use **Locate exiftool.exe…** and it will remember where.
+
+From the command line, or if the button did not work:
 
 ```powershell
 winget install --id OliverBetz.ExifTool
 ```
 
 Then **close the terminal, open a new one**, and check with `exiftool -ver`.
+The desktop app needs restarting too — a program already running does not see
+a new `PATH`.
 
 Current versions refuse to start without it: one clear message, nothing
 written, exit code `1`. On an older copy you may instead see every file written

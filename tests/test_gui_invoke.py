@@ -8,7 +8,10 @@ one function that takes the answer as an argument.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from fpx_gui import invoke, runner
 
@@ -35,9 +38,27 @@ class TestCliCommand:
         assert argv[-1] == "scan"
 
 
+#: `creation_flags` returns 0 off Windows, and correctly so: neither
+#: `CREATE_NEW_PROCESS_GROUP` nor `CREATE_NO_WINDOW` exists on POSIX, and
+#: `Popen(creationflags=...)` refuses anything else there. The assertions below
+#: are therefore about Windows specifically, and said nothing about that until
+#: CI grew a Linux leg and three of them went red.
+#:
+#: Skipped rather than rewritten to accept either answer. A test that passes on
+#: both `512` and `0` has stopped checking the thing it was written for -- which
+#: is that the group flag is *never* dropped, because dropping it is what turned
+#: Cancel from "stop and write the report" into "kill". The desktop app is
+#: Windows-only and the `gui` job runs the whole suite there.
+windows_only = pytest.mark.skipif(
+    not sys.platform.startswith("win"),
+    reason="process-creation flags are a Windows concept; creation_flags() is 0 elsewhere",
+)
+
+
 class TestHowTheChildIsCreated:
     """The flags decide whether Cancel can stop a run or only kill it."""
 
+    @windows_only
     def test_a_console_is_inherited_rather_than_replaced(self) -> None:
         """With a console, `CREATE_NO_WINDOW` is wrong and not merely useless.
 
@@ -50,11 +71,13 @@ class TestHowTheChildIsCreated:
         assert flags & runner.CREATE_NEW_PROCESS_GROUP
         assert not flags & runner.CREATE_NO_WINDOW
 
+    @windows_only
     def test_without_a_console_the_child_is_given_a_hidden_one(self) -> None:
         flags = runner.creation_flags(console=False)
         assert flags & runner.CREATE_NEW_PROCESS_GROUP
         assert flags & runner.CREATE_NO_WINDOW
 
+    @windows_only
     def test_the_group_flag_is_never_dropped(self) -> None:
         """It is what makes one child signallable without signalling the rest."""
         for console in (True, False):

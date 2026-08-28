@@ -197,6 +197,13 @@ class CliProcess:
     `on_line` is called from a reader thread, once per line, with the newline
     stripped. It is called for stderr too: the two streams are merged, because
     a person reading a log pane wants what happened in the order it happened.
+
+    **This class runs the converter and only the converter.** `args` are
+    subcommand arguments, never a program name: `cli_command` puts this
+    interpreter or this executable in front of them, so there is no argument
+    that makes it launch something else. Keep it that way. The one other
+    program this front end starts is ExifTool's installer, and it has its own
+    fixed command below rather than a way in through here.
     """
 
     def __init__(
@@ -323,4 +330,91 @@ def run_cli(
     sink = on_line if on_line is not None else (lambda _line: None)
     process = CliProcess(args, on_line=sink, executable=executable, frozen=frozen)
     process.start()
+    return process.wait()
+
+
+# =============================================================================
+# Installing ExifTool
+# =============================================================================
+#
+# The one place this front end runs a program that is not `fpx_converter`.
+#
+# It is deliberately not a parameter on `CliProcess`. That class builds its
+# argv through `cli_command` and cannot be pointed anywhere else, which is
+# worth keeping: a window that can only ever launch the converter is a much
+# smaller thing to reason about than one that launches whatever it is handed.
+# So this is a separate, fixed command that takes no arguments from anyone --
+# not from the user, not from a file, not from the environment.
+
+
+#: The exact argv per platform, written out rather than split from the hint
+#: string in `writer.EXIFTOOL_INSTALL_HINTS`. Splitting a string on spaces to
+#: get an argv is the habit that turns a settings value into a command
+#: injection the first time somebody makes the string configurable; there is
+#: nothing to gain here by starting down it.
+#:
+#: The `--accept-*` flags are not decoration. `stdin` is `DEVNULL` for every
+#: child this module starts, so a winget that stops to ask about a source or a
+#: package agreement never gets an answer and fails having done nothing. The
+#: window names the whole command and says what the flags accept before it
+#: runs this, because accepting somebody else's licence terms on their behalf
+#: is theirs to agree to, not ours to assume.
+EXIFTOOL_INSTALL_ARGV: dict[str, list[str]] = {
+    "win32": [
+        "winget", "install", "--id", "OliverBetz.ExifTool",
+        "--accept-source-agreements", "--accept-package-agreements",
+    ],
+    "darwin": ["brew", "install", "exiftool"],
+    "linux": ["apt-get", "install", "-y", "libimage-exiftool-perl"],
+}
+
+
+def exiftool_install_argv(platform: str | None = None) -> list[str] | None:
+    """The fixed command that installs ExifTool here, or `None` if there is none.
+
+    `None` is a real answer and the caller must handle it: a platform this
+    does not know is one where the offer should not be made at all, rather
+    than one where a guessed command is run and fails.
+    """
+    key = (platform or sys.platform).lower()
+    for prefix, argv in EXIFTOOL_INSTALL_ARGV.items():
+        if key.startswith(prefix):
+            return list(argv)
+    return None
+
+
+def run_exiftool_install(on_line: Callable[[str], None]) -> int:
+    """Install ExifTool, streaming the installer's output line by line.
+
+    Blocking, so it belongs on a worker thread. Returns the installer's exit
+    code, or 1 if there was nothing to run or it could not be started -- the
+    caller re-resolves ExifTool afterwards either way, because an installer
+    that reports success and leaves nothing on PATH is a thing that happens,
+    and the only answer that matters is whether ExifTool is now findable.
+    """
+    argv = exiftool_install_argv()
+    if argv is None:  # pragma: no cover - every supported platform has one
+        on_line("There is no known way to install ExifTool automatically here.")
+        return 1
+    on_line(f"$ {' '.join(argv)}")
+    try:
+        process = subprocess.Popen(  # noqa: S603 - a fixed argv, never a shell string
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            creationflags=creation_flags(),
+        )
+    except OSError as exc:
+        # Almost always "winget is not recognised" on an older Windows 10,
+        # which is the case the manual route in the window exists for.
+        on_line(f"could not start the installer: {exc}")
+        return 1
+    if process.stdout is not None:
+        for raw in process.stdout:
+            on_line(raw.rstrip("\r\n"))
     return process.wait()

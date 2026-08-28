@@ -2,7 +2,10 @@
 # irreplaceable archive, so a silent upstream change in a decoder or a
 # metadata writer is a correctness risk, not a convenience one.
 #
-# Every pin below publishes a cp314 win_amd64 wheel (verified 2026-08-26).
+# Every pin below publishes a cp314 wheel for win_amd64, manylinux x86_64 and
+# macOS arm64 (verified 2026-08-28, when CI grew a three-platform matrix for
+# tiers 1 and 2). Windows is still the only platform the desktop app ships
+# for and the only one tiers 3 and 4 have ever run on.
 # ExifTool is NOT a Python package -- see the README and docs/GUIDE.md for
 # how it is installed.
 

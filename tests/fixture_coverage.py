@@ -20,6 +20,16 @@ removed and the loss was accepted knowingly.
 
 `feeder-crop.fpx` was the only fixture in the repository carrying a
 viewing-transform crop.
+
+**Partly restored, 2026-08-28, without committing a photograph.** Every fixture
+already carries a `Transform` stream whose matrix and aspect are fixed-width
+float32 fields, so `tests/transform_fixture.py` can hand a *copy* of a
+person-free fixture any transform wanted and `tests/test_fixtures_transform.py`
+runs the real path over it. That covers the geometry, which is where both crop
+defects lived. It does not cover what the deleted fixture also gave for free --
+a crop the file's own embedded thumbnail agrees with -- because a thumbnail
+written to the original framing says nothing about a crop we invented. So the
+guard and the two skips below stay exactly as they are.
 """
 
 from __future__ import annotations
@@ -32,9 +42,15 @@ NO_CROPPED_FIXTURE_REASON = (
     "No committed fixture carries a viewing-transform crop. The only one that "
     "did, feeder-crop.fpx, was removed on 2026-08-27: a full-resolution review "
     "found a person in its background, and the no-people rule outranks the "
-    "coverage. The crop branch -- the branch that carried the 0.4.0 defect "
-    "where rotated files shipped with their crop silently dropped -- now has "
-    "tier-3-only cover, against the real corpus, which never runs in CI. "
-    "If a person-free cropped fixture is ever committed, delete this skip "
+    "coverage. What this test needs is a cropped photograph whose own embedded "
+    "thumbnail witnesses the crop, and that is still tier-3-only, against the "
+    "real corpus, which never runs in CI. "
+    "The crop *geometry* is no longer uncovered: tests/test_fixtures_transform.py "
+    "grafts a transform onto a copy of a person-free fixture at test time and "
+    "runs the whole path over it -- see tests/transform_fixture.py. That covers "
+    "the branch the 0.4.0 defect lived in, and deliberately asserts nothing "
+    "about colour, because a thumbnail written to the uncropped framing is no "
+    "witness to a crop somebody invented. "
+    "If a person-free cropped photograph is ever committed, delete this skip "
     "rather than editing it, and update tests/fixtures/README.md."
 )

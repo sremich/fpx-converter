@@ -15,8 +15,10 @@ must be able to run `scan` and `convert`.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -209,6 +211,88 @@ def load_env(env_path: Path | None = None) -> dict[str, str]:
             break
     values.update({k: v for k, v in os.environ.items() if k.startswith("FPX_")})
     return values
+
+
+def set_env_value(key: str, value: str, env_path: Path | None = None) -> Path:
+    """Write one `FPX_*` setting into a `.env` file, leaving everything else alone.
+
+    Exists for the GUI's "locate exiftool.exe" picker: a located path is only
+    useful the once unless something writes it down, and the only place this
+    codebase reads it back from afterward is `.env` via `load_env()`. Refuses
+    any key not prefixed `FPX_` -- `load_env()` only overlays names with that
+    prefix, so writing anything else would produce a setting that is silently
+    read by nothing.
+
+    The default target is `user_config_dir() / ".env"`, never the working
+    directory. A GUI can be launched from a desktop shortcut, a pinned icon,
+    or a double-clicked file, so "the working directory" is not a place the
+    user chose -- writing there would put the setting somewhere the next
+    launch has no particular reason to look, or drop a dotfile into a folder
+    the user never asked to have one in.
+
+    Every other line survives untouched -- other keys, comments, blank lines,
+    and their order -- because this is also the file a person hand-edits to
+    add `FPX_SOURCE_ROOT`, `FPX_TZ_OVERRIDES` or their own notes, and a
+    rewrite that only serialized the keys it understood would silently
+    discard the rest. If `key` already appears, its **last** occurrence is
+    replaced in place and any earlier occurrences of the same key are
+    dropped; that matches `parse_env_file`, which assigns each key as it
+    reads and so lets a later line quietly win -- leaving the earlier ones in
+    place would keep dead lines that look load-bearing but are not. An absent
+    key is appended.
+
+    Values are written unquoted. `parse_env_file` only strips a *matching*
+    leading/trailing quote pair and never interprets backslashes, so a
+    Windows path like `C:\\Program Files\\ExifTool\\exiftool.exe` already
+    reads back exactly as written -- quoting it would be solving a problem
+    that does not exist here.
+
+    The write is atomic: the new content lands in a temp file beside the
+    target and `os.replace` swaps it in, so a process killed mid-write cannot
+    leave the user's `.env` truncated.
+    """
+    if not key.startswith("FPX_"):
+        raise ConfigError(
+            f"refusing to write {key!r} to .env: load_env() only overlays names "
+            "prefixed FPX_, so anything else would be a setting nothing ever reads."
+        )
+
+    target = env_path if env_path is not None else user_config_dir() / ".env"
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = target.read_text(encoding="utf-8").splitlines() if target.is_file() else []
+
+    def _is_match(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            return False
+        existing_key, sep, _ = stripped.partition("=")
+        return bool(sep) and existing_key.strip() == key
+
+    match_indices = [i for i, line in enumerate(lines) if _is_match(line)]
+    new_line = f"{key}={value}"
+
+    if match_indices:
+        last = match_indices[-1]
+        lines[last] = new_line
+        for i in reversed(match_indices[:-1]):
+            del lines[i]
+    else:
+        lines.append(new_line)
+
+    text = "\n".join(lines) + "\n"
+
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".env.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(tmp_name, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_name)
+        raise
+
+    return target
 
 
 def parse_album_tz_overrides(raw: str) -> dict[str, str]:

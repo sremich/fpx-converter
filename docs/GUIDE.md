@@ -53,8 +53,11 @@ anyone's word for it, read the source and build your own copy —
 
 **ExifTool** is a separate free program that writes the descriptive
 information — dates, camera name, dimensions — into the converted photographs.
-It has its own licence and cannot be bundled inside this app, so it is
-installed separately, once.
+It is not bundled inside this app — it is somebody else's program, kept
+separate on purpose — so it is installed once, on its own.
+
+**The app will tell you if it is missing**, and offers to install it for you.
+If that works, skip the rest of this section.
 
 Press <kbd>Win</kbd>, type `powershell`, press <kbd>Enter</kbd>. In the window
 that opens, type this and press <kbd>Enter</kbd>:
@@ -68,7 +71,9 @@ When it finishes, **close that window and open a new one**, then type
 not recognised, see
 ["Every photo failed"](TROUBLESHOOTING.md#the-app-says-every-photo-failed). If
 `winget` itself is not recognised — that happens on older Windows 10 — get the
-Windows package from [exiftool.org](https://exiftool.org/) instead.
+Windows package from [exiftool.org](https://exiftool.org/) instead, unzip it,
+and use the app's **Locate exiftool.exe…** button to point at the
+`exiftool.exe` inside. It remembers where, so this is asked once.
 
 The converter checks for ExifTool **once, before it starts**. If it is missing
 you get one clear message and nothing is written, rather than a folder full of

@@ -176,14 +176,31 @@ EXIFTOOL_INSTALL_HINTS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: What is wrong, with no advice about what to do. Shared with the desktop
+#: front end, which shows this and offers buttons; the sentences below it are
+#: the *command line's* remedy -- type this, then re-run -- and are wrong in a
+#: window that has an Install button, a file picker, and no run to re-run.
+#:
+#: The split is the point. A diagnosis stated two ways drifts and one of them
+#: goes stale; a remedy stated two ways is just two interfaces describing
+#: themselves, which is correct.
+#: "Nothing has been written" is deliberately *not* in here. It is true and
+#: important when the command line refuses a run that was asked for, and it is
+#: a non-sequitur in a window that has just opened and has not been asked for
+#: anything yet. The CLI adds it below.
+EXIFTOOL_MISSING_DIAGNOSIS = (
+    "ExifTool was not found, and every converted image needs it to carry its "
+    "metadata."
+)
+
+
 def exiftool_missing_message() -> str:
     """One clear refusal, with the line this platform needs typed."""
     current = {"nt": "Windows", "posix": "macOS" if sys.platform == "darwin" else "Linux"}.get(
         os.name, ""
     )
     lines = [
-        "ExifTool was not found, and every converted image needs it to carry its "
-        "metadata. Nothing has been written.",
+        f"{EXIFTOOL_MISSING_DIAGNOSIS} Nothing has been written.",
         "",
         "Install it:",
     ]
@@ -447,10 +464,15 @@ def save_dual_images(
     its numbers mean.
 
     A separate function so this can be tested without a cropped `.fpx` to
-    hand. All four committed fixtures are identity, and the corpus that has
-    the cropped files is personal and cannot be committed, so writing the
-    crop inline made "the JPEG is actually cropped" untestable at tier 1 --
+    hand. Every committed fixture has an identity transform, and the corpus
+    that has the cropped files is personal and cannot be committed, so writing
+    the crop inline made "the JPEG is actually cropped" untestable at tier 1 --
     which is where it was.
+
+    Tier 2 now reaches it as well, through a fixture given a transform at test
+    time (`tests/transform_fixture.py`). That does not make the split
+    pointless: the tier-1 test still exercises this against a `DecodedImage`
+    built by hand, with no file and no decode in the way.
     """
     paths = (tif_path, jpg_path)
     save_output_images(decoded, list(zip(paths, outputs.DEFAULT_SPECS, strict=True)))

@@ -20,6 +20,12 @@ on:
 
 permissions:
   contents: write
+  # Needed for actions/attest-build-provenance below: it mints a Sigstore
+  # signature (id-token) and records it against the repo (attestations), so
+  # the exe someone downloads can be tied back to this exact workflow run
+  # rather than trusted on the strength of a filename alone.
+  id-token: write
+  attestations: write
 
 jobs:
   verify:
@@ -118,7 +124,8 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             $PRERELEASE \
-            dist/fpx-converter-*.exe
+            dist/fpx-converter-*.exe \
+            dist/fpx-converter-*.exe.sha256
           echo "Release created. REMINDER: tick the /release skill's checklist."
 
   # The exe is the whole point of 1.1.0: somebody who does not use a terminal
@@ -237,10 +244,31 @@ jobs:
         shell: bash
         run: python scripts/exe_licence_check.py "$EXE" --require-toc
 
+      - name: Write a SHA-256 sidecar for the exe
+        # In the checksum, not the path: `sha256sum -c` fails outright if the
+        # recorded name does not sit next to it, and whoever downloads this
+        # only gets the two files, never the `dist/` folder they came from.
+        shell: bash
+        run: |
+          cd dist && sha256sum "$(basename "$EXE")" > "$(basename "$EXE").sha256"
+
+      - name: Attest build provenance for the exe
+        # Ties the published exe back to this exact workflow run (source
+        # commit, workflow file, inputs) via a Sigstore-signed attestation,
+        # so "I downloaded this from the GitHub release" becomes something a
+        # user can verify instead of something they have to take on faith.
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.EXE }}
+
       - name: Hand the executable to the release job
         uses: actions/upload-artifact@v4
         with:
           name: fpx-converter-exe
-          path: ${{ env.EXE }}
+          # Both files: the sidecar has to travel with the exe it checksums,
+          # or the release job would have an exe with nothing to verify it.
+          path: |
+            ${{ env.EXE }}
+            ${{ env.EXE }}.sha256
           if-no-files-found: error
           retention-days: 1

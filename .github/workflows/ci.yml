@@ -14,11 +14,18 @@ on:
 
 jobs:
   test:
-    # windows-latest, not ubuntu: this project ships no container and its
-    # only runtime is a Windows CLI. Testing on Linux would test a platform
-    # nothing ever runs on -- path handling and the ExifTool integration are
-    # exactly where a cross-platform difference would hide.
-    runs-on: windows-latest
+    # A matrix, not windows-latest alone: the CLI is claimed to run on
+    # macOS and Linux too, and until this matrix existed that claim was
+    # untested -- nothing ever ran it there. Path handling and the ExifTool
+    # integration are exactly where a difference between platforms would
+    # hide, so those are exactly what this earns its keep by exercising.
+    # `fail-fast: false` so one OS's failure does not hide what the other
+    # two would have said.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,18 +43,59 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
-      - name: Install ExifTool
-        # The tier-2 tests that prove the write/read-back chain need it, and
-        # GitHub's Windows runners do not ship it. Without this step those
-        # tests skip and the suite still reports green -- which is how the
-        # project's "validate with a different tool than the one that wrote"
-        # rule ended up advertised as tested while running nowhere.
-        #
-        # Deliberately unpinned, unlike everything in requirements.txt. The
-        # pinned ExifTool is the one on the conversion machine; this copy
-        # only has to prove the round-trip still works, so tracking upstream
-        # makes it an early warning rather than a correctness risk.
+      # The tier-2 tests that prove the write/read-back chain need ExifTool,
+      # and none of these runner images ship it. Without an install step
+      # those tests skip and the suite still reports green -- which is how
+      # the project's "validate with a different tool than the one that
+      # wrote" rule ended up advertised as tested while running nowhere.
+      # Split per-OS because there is no one install command that works on
+      # all three; each `if:` picks the one leg it applies to, so a runner
+      # never falls through and silently skips the install.
+      #
+      # Deliberately unpinned, unlike everything in requirements.txt. The
+      # pinned ExifTool is the one on the conversion machine; this copy
+      # only has to prove the round-trip still works, so tracking upstream
+      # makes it an early warning rather than a correctness risk.
+      - name: Install ExifTool (Windows)
+        if: runner.os == 'Windows'
         run: choco install exiftool -y --no-progress
+
+      - name: Install ExifTool (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libimage-exiftool-perl
+
+      - name: Install ExifTool (macOS)
+        if: runner.os == 'macOS'
+        run: brew install exiftool
+
+      - name: Install inih, which pyexiv2's macOS wheel needs and does not carry
+        if: runner.os == 'macOS'
+        # `pyexiv2` is the *third* parser -- ExifTool writes, Pillow reads
+        # back, exiv2 re-reads with its own -- and it is what makes the
+        # "validate with a different tool than the one that wrote" rule real
+        # rather than advertised. Its macOS wheel bundles `libexiv2.dylib`
+        # but leaves that dylib dynamically linked against Homebrew's inih
+        # (`libINIReader.0.dylib`), which no runner image ships. The result
+        # is an `OSError` at *import*, so `test_fixtures_output.py` fails to
+        # collect and the entire tier-2 tag round trip does not run.
+        #
+        # Installed rather than worked around. Skipping `pyexiv2` on macOS
+        # would turn this leg green having dropped the coverage the step
+        # above exists to protect -- the same failure mode one dependency
+        # over, and the one this project has already shipped once.
+        #
+        # The version check is the point of the second line. `0` is an ABI
+        # soname, not the formula version, so a future inih could ship
+        # `libINIReader.1.dylib` and leave us back at a dlopen failure
+        # thirty lines into a pytest traceback. This says so here instead.
+        run: |
+          brew install inih
+          lib="$(brew --prefix inih)/lib/libINIReader.0.dylib"
+          if [ ! -f "$lib" ]; then
+            echo "::error::inih no longer provides libINIReader.0.dylib, which is what pyexiv2's bundled libexiv2 links against. Contents of $(brew --prefix inih)/lib below; update this step to the new soname."
+            ls -la "$(brew --prefix inih)/lib" || true
+            exit 1
+          fi
 
       - name: Lint
         run: python -m ruff check .

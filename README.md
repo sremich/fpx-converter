@@ -35,8 +35,10 @@ One file. Nothing to install, no Python needed.
 ### 2. Windows will warn you. This is expected
 
 The app is **not code-signed**, so Windows treats it as an unknown program.
-Code-signing certificates cost money every year and this is a free tool, so it
-ships unsigned. You will see up to three warnings, in this order:
+Signing is not currently in place — a paid certificate is part of the reason,
+but free signing for open-source projects (SignPath) and cheaper commercial
+options both exist and have not been ruled out. You will see up to three
+warnings, in this order:
 
 1. **Your browser** says the file "isn't commonly downloaded" or similar.
    Choose **Keep** — in Chrome and Edge this is behind the **…** menu next to
@@ -52,10 +54,37 @@ ships unsigned. You will see up to three warnings, in this order:
 None of that is a judgement about the file. It is what Windows shows for every
 program that has not paid for a certificate.
 
+**You do not have to take any of that on trust.** Each release publishes a
+`.sha256` file next to the `.exe`. On Windows, in PowerShell:
+
+```powershell
+Get-FileHash fpx-converter-<version>.exe
+```
+
+and compare the result against the contents of the published `.sha256` file.
+
+Each release is also signed with GitHub build provenance, so this also works:
+
+```powershell
+gh attestation verify fpx-converter-<version>.exe --repo sremich/fpx-converter
+```
+
+Both prove the same thing: that this is the exact file this repository's
+release workflow built from this source, not one assembled by somebody else
+and given the same name. Neither stops the SmartScreen warning above — that
+is about the certificate, not the contents.
+
 ### 3. Install ExifTool
 
-ExifTool writes the metadata. It is a separate program with its own licence, so
-it is not bundled and has to be installed once.
+ExifTool writes the metadata. It has its own licence, and this project keeps
+it separate rather than bundling it, so it has to be installed once.
+
+The app checks for ExifTool when it opens. If it is not there, it says so and
+offers to install it — one button, and you are done. The steps below are for
+anyone who would rather run it themselves, or whose machine has no `winget`.
+If ExifTool is already installed somewhere the app cannot find on its own,
+its **Locate exiftool.exe…** option lets you point at it directly, and
+remembers the choice for next time.
 
 Open a terminal — press <kbd>Win</kbd>, type `powershell`, press
 <kbd>Enter</kbd> — and run:
@@ -181,17 +210,25 @@ ExifTool is a separate install; see step 3 above.
 
 ## Status and limitations
 
-- **Windows is the tested platform.** CI runs on `windows-latest` with Python
-  3.14. The CLI has no Windows-only dependencies and should run on macOS and
-  Linux, but it is not tested there — treat that as unverified, not supported.
-  The desktop app is Windows-only, shipped as a single `.exe`.
+- **Tested on all three platforms at tiers 1 and 2.** CI runs on
+  `windows-latest`, `ubuntu-latest` and `macos-latest` with Python 3.14, and
+  the CLI has no Windows-only dependencies. Tiers 3 and 4 — the real-archive
+  and eyeball tiers — have only ever run on Windows, because that is where
+  the source archive lives. The desktop app is Windows-only, shipped as a
+  single `.exe`.
 - **Python 3.14.** `pyproject.toml` declares `>=3.14`; 3.14 is what CI runs and
   what the exact dependency pins are verified against.
-- **Rotation and rotation-plus-crop have no fixture cover.** Every rotated file
-  in the corpus this was built from contains people and cannot be published, so
-  the only automated cover for that branch is a local run over a real archive —
-  and it is the branch that once carried a defect where rotated-and-cropped
-  files silently lost their crop. See
+- **Rotation and rotation-plus-crop geometry has tier-2 cover, but only
+  synthetically.** Every rotated file in the source archive contains a
+  person and cannot be published, so a copy of a person-free fixture is
+  given a viewing transform at test time instead — the transform lives in
+  fixed-width float32 fields, which can be rewritten without changing the
+  stream length. Rotation, rotation-plus-crop and axis-aligned crop are all
+  covered this way, including the defect where a rotation carrying a crop
+  once resolved to no crop. What that cannot cover is a photograph whose own
+  embedded thumbnail witnesses its crop, so colour and orientation on a
+  genuinely transformed file remain tier-3 and tier-4 work: a local run, a
+  real archive, human eyes. See
   [`tests/fixtures/README.md`](tests/fixtures/README.md) and
   [docs/TESTING.md](docs/TESTING.md).
 - Colour and orientation need **eyes at least once per variant**. "It decoded"
