@@ -6,6 +6,71 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [1.4.0] — 2026-08-28
+
+Acting on an outside review of the project. Four of its findings held up, four
+were this repository's own documentation quoted back, one was wrong, and two
+asked for things the architecture deliberately refuses. What follows is the
+four, plus the corrections the review's mistakes made obvious.
+
+### Added
+- **The window now knows whether ExifTool is installed.** It checks when it
+  opens, and where ExifTool is missing it says so in a card with two buttons:
+  one that installs it, and one that points at a copy you already have. The
+  located path is remembered in `FPX_EXIFTOOL`, which the command line reads
+  too, so it is answered once rather than once per tool. Until now the window
+  knew nothing about the dependency: you chose two folders, pressed Convert,
+  and read in the log pane that you needed to open PowerShell — after
+  committing to a run. The wording is `writer.exiftool_missing_message()`, the
+  same text the CLI prints, because two descriptions of one condition drift.
+- **The review page is deliberately *not* gated on ExifTool.** `ingest` and
+  `gallery` write no tags, and disabling them would take away the one thing
+  somebody without ExifTool can still do with their photographs.
+- **Releases publish a `.sha256` sidecar and a signed build-provenance
+  attestation.** The README spends a section asking people to click through
+  three security warnings and, until now, gave them no way to check what they
+  had downloaded. `gh attestation verify` ties the exe to the workflow run
+  that built it. Neither stops SmartScreen, which is about the certificate.
+- **Rotation and crop have tier-2 cover again, synthetically.** A `.fpx` keeps
+  its viewing transform in fixed-width float32 fields, and `olefile` will
+  replace a stream with data of the same size — so `tests/transform_fixture.py`
+  gives a *copy* of a person-free fixture any transform wanted, and
+  `tests/test_fixtures_transform.py` runs decode, crop and write over it. That
+  covers the branch the 0.4.0 defect lived in, which has had no cover in CI
+  since `feeder-crop.fpx` was deleted on 2026-08-27 for containing a person.
+  Every assertion there is geometric: a thumbnail written to the original
+  framing is no witness to a crop we invented, and neither oracle may be
+  pointed at these files.
+- `ParsedProperty.byte_offset`, without which the above cannot find what to
+  rewrite — `SpatialOrientationMatrix` and `ColorTwistMatrix` are both an
+  identity 4x4 of float32, so searching the stream for the bytes is ambiguous.
+- `config.set_env_value`, a read-modify-write that preserves every other key
+  and comment in a `.env`. The desktop app had persisted nothing at all.
+- CI runs tiers 1 and 2 on `ubuntu-latest` and `macos-latest` as well as
+  `windows-latest`. The claim that the CLI "should run" on those was in the
+  README untested; now it is tested. Tiers 3 and 4 remain Windows-only,
+  because that is where the archive is.
+
+### Fixed
+- **A window that had to show the ExifTool card measured it and then hid it.**
+  `tallest_content_height` saved and restored `isVisible`, which is false for
+  every child of a window that has not been shown yet — and it runs from
+  `__init__`. `custom_box` survived it because `_sync_enabled` sets its
+  visibility again a line later; a new card with nothing to put it back did
+  not. It saves `isHidden` now, which is the question actually being asked.
+
+### Changed
+- **"ExifTool cannot be bundled" was not true, and is no longer claimed.**
+  ExifTool is Artistic-or-GPL-1.0-or-later at the recipient's option;
+  redistributing it beside an Apache-2.0 executable is mere aggregation and is
+  permitted. It is not bundled *by choice* — to keep the process boundary
+  clean, to avoid taking on another project's release cadence, and to keep the
+  exe small. Corrected in `NOTICE`, `THIRD-PARTY-NOTICES.md`, `docs/GUIDE.md`,
+  `README.md` and the in-app licence dialog, which had four copies of one
+  wrong sentence between them.
+- The README no longer implies code signing was priced and rejected. It is not
+  in place; free-for-open-source signing exists and has not been ruled out.
+
 ## [1.3.0] — 2026-08-28
 
 The release that makes this repository publishable. Everything here was found

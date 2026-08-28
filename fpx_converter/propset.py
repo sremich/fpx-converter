@@ -329,6 +329,22 @@ class ParsedProperty:
     raw_value: Any
     decoded_value: Any
 
+    #: Where this property's value bytes begin, counted from the start of the
+    #: whole stream rather than of its section. Points just past the 4-byte
+    #: `dwType` prefix, at the first byte `_parse_typed_value` reads -- so for a
+    #: VT_VECTOR the element data begins four bytes later still, after the
+    #: count.
+    #:
+    #: Recorded because a caller that wants to *rewrite* a value in place has
+    #: no other way to find it: several properties in one stream can hold
+    #: byte-identical values (`SpatialOrientationMatrix` and `ColorTwistMatrix`
+    #: are both an identity 4x4 of float32 on an untransformed file), so
+    #: searching the stream for the bytes is ambiguous. The parser already
+    #: walks the offset table to get here; anything else re-deriving it would
+    #: be a second copy of the section layout, which is the duplication
+    #: `tests/propset_builder.py` warns about in its own docstring.
+    byte_offset: int = -1
+
 
 @dataclass
 class ParsedSection:
@@ -754,6 +770,7 @@ def parse_propset(
                     type_name=type_lbl,
                     raw_value=raw_v,
                     decoded_value=dec_v,
+                    byte_offset=sec_off + prop_off + 4,
                 )
 
 

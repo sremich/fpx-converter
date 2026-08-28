@@ -113,6 +113,35 @@ def test_the_release_workflow_looks_for_the_file_the_spec_builds() -> None:
     )
 
 
+def test_the_release_publishes_something_a_downloader_can_verify() -> None:
+    """The README tells people to click through three security warnings.
+
+    What makes that a reasonable thing to ask is that the same release gives
+    them a way to check what they got: a SHA-256 beside the exe, and a
+    provenance attestation tying it to this workflow run. Both are steps in a
+    file nobody reads on the way past, and losing either would leave the
+    README promising a verification that no longer happens -- which is worse
+    than never having offered one.
+    """
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "sha256sum" in workflow, (
+        "no SHA-256 sidecar is produced, but README.md tells people to check one"
+    )
+    assert ".sha256" in workflow, "the sidecar is built but never published"
+    assert "actions/attest-build-provenance" in workflow, (
+        "no build provenance is attested, but README.md tells people to run "
+        "`gh attestation verify`"
+    )
+    # Sigstore needs both, and the failure without them is at the end of a
+    # release run that has already published the release.
+    for permission in ("id-token: write", "attestations: write"):
+        assert permission in workflow, (
+            f"attestation needs `{permission}` and the workflow does not grant it"
+        )
+
+
 def test_runtime_dependencies_import() -> None:
     """The packages a conversion actually needs, all importable.
 
@@ -319,19 +348,37 @@ def test_ci_requires_exiftool_and_installs_it() -> None:
 
     Those tests are the only place this project actually exercises its
     "validate with a different tool than the one that wrote" rule: ExifTool
-    writes, pyexiv2 reads back. GitHub's Windows runners ship no ExifTool,
-    so without an install step they skip -- and a green suite then claims
+    writes, pyexiv2 reads back. None of the runner images ship it, so
+    without an install step they skip -- and a green suite then claims
     coverage that ran nowhere.
 
-    Guarding the workflow file rather than trusting it: dropping either line
+    Guarding the workflow file rather than trusting it: dropping any line
     below would restore the silent skip, and nothing else would notice.
     """
     workflows = REPO_ROOT / ".github" / "workflows"
-    # Both gates, not just the push one: a release must never be cut on a
-    # suite weaker than the one that guards an ordinary push.
-    for name in ("ci.yml", "release.yml"):
-        workflow = (workflows / name).read_text(encoding="utf-8")
-        assert "choco install exiftool" in workflow, f"{name} no longer installs ExifTool"
+    release = (workflows / "release.yml").read_text(encoding="utf-8")
+    ci = (workflows / "ci.yml").read_text(encoding="utf-8")
+
+    # release.yml stays Windows-only by design (PyInstaller does not
+    # cross-compile), so it only ever needs the one installer.
+    assert "choco install exiftool" in release, "release.yml no longer installs ExifTool"
+
+    # ci.yml's `test` job is a three-OS matrix: a leg that silently installs
+    # nothing would still go green having skipped the tier-2 tag round trip
+    # on that platform, which is exactly the failure mode this guard exists
+    # to catch. So every runner's installer must be present by name, not
+    # just one of them.
+    assert "choco install exiftool" in ci, "ci.yml no longer installs ExifTool on Windows"
+    assert "apt-get install -y libimage-exiftool-perl" in ci, (
+        "ci.yml no longer installs ExifTool on Linux -- that leg would go green "
+        "having skipped the tier-2 tag round trip"
+    )
+    assert "brew install exiftool" in ci, (
+        "ci.yml no longer installs ExifTool on macOS -- that leg would go green "
+        "having skipped the tier-2 tag round trip"
+    )
+
+    for name, workflow in (("ci.yml", ci), ("release.yml", release)):
         assert "FPX_REQUIRE_EXIFTOOL" in workflow, (
             f"{name} no longer sets FPX_REQUIRE_EXIFTOOL, so a missing ExifTool "
             f"would skip the tier-2 metadata tests instead of failing the run"

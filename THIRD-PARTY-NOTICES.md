@@ -34,7 +34,7 @@ The table records both. Full texts of the copyleft licences are in
 | [pytest](https://pypi.org/project/pytest/9.1.1/) | 9.1.1 | MIT | No — dev only | Test runner | Dev only |
 | [pytest-qt](https://pypi.org/project/pytest-qt/4.5.0/) | 4.5.0 | MIT | No — dev only | Widget-test plumbing | Dev only |
 | [ruff](https://pypi.org/project/ruff/0.16.4/) | 0.16.4 | MIT | No — dev only | Linter | Dev only |
-| [ExifTool](https://exiftool.org/), by Phil Harvey | user-installed | Perl Artistic **or** GPL-1.0-or-later, at your option | **No — cannot be** | Writes the EXIF/XMP/IPTC tags onto the converted images | None on this project; see [ExifTool](#exiftool) |
+| [ExifTool](https://exiftool.org/), by Phil Harvey | user-installed | Perl Artistic **or** GPL-1.0-or-later, at your option | **No — by choice** | Writes the EXIF/XMP/IPTC tags onto the converted images | None on this project; see [ExifTool](#exiftool) |
 
 Versions come from the pin files: `requirements.txt` (runtime),
 `requirements-dev.txt` (dev and test), `requirements-gui.txt` (the desktop
@@ -57,13 +57,23 @@ effect.
 
 ### ExifTool
 
-ExifTool is **not bundled and cannot be bundled**. It is a separate program
-with its own licence, installed by the user (`winget install --id
-OliverBetz.ExifTool`) and invoked by this project as a separate process with
-command-line arguments. No part of it is contained in this project's source
-or in its published executable, no part of it is linked into anything here,
-and none of its terms reach this program. If you redistribute ExifTool
-yourself, its terms are between you and its author.
+ExifTool is **not bundled**. Its licence would permit it — redistributing the
+ExifTool Windows package alongside an Apache-2.0 executable is mere
+aggregation, not a derivative work, provided its licence text and a source
+pointer travel with it — but this project chooses not to, for reasons that
+have nothing to do with what the licence allows:
+
+- it keeps the process boundary clean — ExifTool is invoked as a separate
+  process with command-line arguments, and nothing links against it;
+- this project does not want to become a redistributor of another project's
+  release cadence and security updates;
+- it keeps the published executable small.
+
+It is installed by the user (`winget install --id OliverBetz.ExifTool`, or
+through the desktop app, which offers to run that for them). No part of it is
+contained in this project's source or in its published executable, no part of
+it is linked into anything here, and none of its terms reach this program. If
+you redistribute ExifTool yourself, its terms are between you and its author.
 
 ## LGPL compliance
 

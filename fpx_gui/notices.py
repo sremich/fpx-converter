@@ -142,9 +142,13 @@ COMPONENTS: tuple[Component, ...] = (
         pypi=None,
         pinned_in=None,
         note=(
-            "NOT BUNDLED. It is a separate program with its own licence, "
-            "installed by you and run as a separate process. Nothing of it is "
-            "inside this executable and none of its terms reach this program."
+            "NOT BUNDLED — its licence would permit bundling, but this "
+            "project chooses not to: it keeps the process boundary clean, "
+            "avoids taking on another project's release cadence and "
+            "security updates, and keeps the executable small. It is a "
+            "separate program with its own licence, installed by you and "
+            "run as a separate process. Nothing of it is inside this "
+            "executable and none of its terms reach this program."
         ),
         source="https://exiftool.org/",
     ),

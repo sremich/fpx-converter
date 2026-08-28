@@ -66,6 +66,23 @@ carries — so an adopted fixture is renamed before it is committed.
 **Never add a photograph with a person in it, and never keep an original
 filename.**
 
+## Transforms are grafted on, not photographed
+
+Every file here has an identity viewing transform, and none of them can be
+replaced by one that does not: rotated and cropped files in the archive contain
+people without exception. So the transform cover is built rather than adopted.
+
+`../transform_fixture.py` copies one of these files and rewrites the
+`SpatialOrientationMatrix` and `ResultAspectRatio` in the copy's `Transform`
+stream. Both are fixed-width float32 fields, so the stream length never changes,
+which is the one thing `olefile` requires to write it back. The originals here
+are never touched — they are the only irreplaceable thing in this repository,
+and the set only ever shrinks.
+
+That covers the geometry. It cannot cover colour or framing *judged against the
+file's own thumbnail*, because the thumbnail was written to the framing the file
+really has. Do not point either oracle at a grafted fixture.
+
 ## What is here, and what it covers
 
 | Group | Files | Why it is here |

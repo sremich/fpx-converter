@@ -151,3 +151,38 @@ class PipelineWorker(QObject):
                 # stop, which says out loud that there may be no audit report.
                 status = runner.HARD_STOPPED
         self.done.emit(code, status)
+
+
+class InstallWorker(QObject):
+    """ExifTool's installer, run off the GUI thread.
+
+    A second, much smaller worker rather than a step in `PipelineWorker`,
+    because it is not a pipeline step: it runs a different program, it is not
+    cancellable, and it has no audit report to protect. Sharing the class
+    would have meant giving that one a way to run something other than the
+    converter, which is the property `runner.CliProcess` exists to keep.
+    """
+
+    #: One line of installer output, already stripped of its newline.
+    line = Signal(str)
+    #: The installer is done, with its exit code. Whether ExifTool is *now*
+    #: findable is a separate question the window asks afterwards, because an
+    #: installer that exits 0 and leaves nothing on PATH is a thing that
+    #: happens.
+    done = Signal(int)
+
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(parent)
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            code = runner.run_exiftool_install(self.line.emit)
+        except Exception as exc:  # noqa: BLE001 - a failed install must not kill the window
+            self.line.emit(f"the installer could not be run: {exc}")
+            code = 1
+        self.done.emit(code)

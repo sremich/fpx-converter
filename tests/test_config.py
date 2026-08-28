@@ -12,6 +12,7 @@ from fpx_converter.config import (
     Settings,
     parse_album_tz_overrides,
     parse_env_file,
+    set_env_value,
     timezone_settings,
 )
 
@@ -398,3 +399,113 @@ class TestAlbumListSettings:
         )
         assert config.coarse_albums(env) == frozenset({"winterfest 1994"})
         assert config.extra_non_descriptive_albums(env) == frozenset({"dump folder"})
+
+
+class TestSetEnvValue:
+    """Persisting one `FPX_*` setting -- the GUI's "locate exiftool.exe" needs
+    this to survive a restart, and it must not clobber the rest of `.env`.
+    """
+
+    def test_appends_a_new_key_and_preserves_everything_else(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        original = (
+            "# a hand-written note\n"
+            "FPX_SOURCE_ROOT=C:\\photos\n"
+            "\n"
+            "FPX_DEFAULT_TZ=Europe/Paris\n"
+        )
+        env_file.write_text(original, encoding="utf-8")
+
+        set_env_value("FPX_EXIFTOOL", "C:\\tools\\exiftool.exe", env_file)
+
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+        assert lines[:4] == original.splitlines()
+        assert lines[4] == "FPX_EXIFTOOL=C:\\tools\\exiftool.exe"
+
+    def test_replaces_an_existing_key_in_place(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "FPX_SOURCE_ROOT=C:\\photos\n"
+            "FPX_EXIFTOOL=C:\\old\\exiftool.exe\n"
+            "FPX_DEFAULT_TZ=Europe/Paris\n",
+            encoding="utf-8",
+        )
+
+        set_env_value("FPX_EXIFTOOL", "C:\\new\\exiftool.exe", env_file)
+
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+        assert lines == [
+            "FPX_SOURCE_ROOT=C:\\photos",
+            "FPX_EXIFTOOL=C:\\new\\exiftool.exe",
+            "FPX_DEFAULT_TZ=Europe/Paris",
+        ]
+
+    def test_duplicate_keys_the_last_occurrence_wins_and_earlier_ones_are_dropped(
+        self, tmp_path: Path
+    ) -> None:
+        """Matches `parse_env_file`, which assigns per line and so lets the
+        last occurrence of a repeated key win.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "FPX_EXIFTOOL=C:\\first\\exiftool.exe\n"
+            "FPX_DEFAULT_TZ=Europe/Paris\n"
+            "FPX_EXIFTOOL=C:\\second\\exiftool.exe\n",
+            encoding="utf-8",
+        )
+
+        set_env_value("FPX_EXIFTOOL", "C:\\new\\exiftool.exe", env_file)
+
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+        assert lines == [
+            "FPX_DEFAULT_TZ=Europe/Paris",
+            "FPX_EXIFTOOL=C:\\new\\exiftool.exe",
+        ]
+
+    def test_windows_path_with_spaces_and_backslashes_round_trips(
+        self, tmp_path: Path
+    ) -> None:
+        env_file = tmp_path / ".env"
+        value = r"C:\Program Files\ExifTool\exiftool.exe"
+
+        set_env_value("FPX_EXIFTOOL", value, env_file)
+
+        assert config.load_env(env_file)["FPX_EXIFTOOL"] == value
+
+    def test_a_non_fpx_key_is_refused(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        with pytest.raises(ConfigError, match="FPX_"):
+            set_env_value("EXIFTOOL_PATH", "somewhere", env_file)
+        assert not env_file.exists()
+
+    def test_writing_to_a_nonexistent_file_creates_it(self, tmp_path: Path) -> None:
+        env_file = tmp_path / "nested" / ".env"
+        assert not env_file.parent.exists()
+
+        returned = set_env_value("FPX_EXIFTOOL", "C:\\exiftool.exe", env_file)
+
+        assert returned == env_file
+        assert env_file.read_text(encoding="utf-8") == "FPX_EXIFTOOL=C:\\exiftool.exe\n"
+
+    def test_result_is_utf8_and_ends_with_a_newline(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        set_env_value("FPX_EXIFTOOL", "C:\\exiftool.exe", env_file)
+
+        raw = env_file.read_bytes()
+        text = raw.decode("utf-8")
+        assert text.endswith("\n")
+
+    def test_defaults_to_the_user_config_directory_not_the_working_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        user_dir = tmp_path / "config"
+        monkeypatch.setattr(config, "user_config_dir", lambda: user_dir)
+
+        returned = set_env_value("FPX_EXIFTOOL", "C:\\exiftool.exe")
+
+        assert returned == user_dir / ".env"
+        assert not (cwd / ".env").exists()
+        assert returned.read_text(encoding="utf-8") == "FPX_EXIFTOOL=C:\\exiftool.exe\n"

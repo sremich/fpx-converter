@@ -21,6 +21,7 @@ The two things this file is careful about:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QUrl
@@ -62,7 +63,7 @@ from fpx_converter import writer as writer_mod
 
 from . import notices, progress, runner, summary
 from . import options as options_mod
-from .worker import PipelineWorker
+from .worker import InstallWorker, PipelineWorker
 
 #: Enough scrollback to review a long run without letting a runaway child
 #: grow the pane until the machine notices.
@@ -167,6 +168,11 @@ class MainWindow(QMainWindow):
         #: `st_mtime_ns` of the audit report as the run started, or None.
         self._report_stamp: int | None = None
         self._reviewing = False
+        #: Where ExifTool is, or None if it could not be found. Resolved here
+        #: and after an install or a locate, never from `_sync_enabled` --
+        #: that runs on every keystroke, and this is a disk search.
+        self._exiftool: str | None = None
+        self._installer: InstallWorker | None = None
 
         root = QWidget()
         root.setObjectName("Root")
@@ -176,6 +182,12 @@ class MainWindow(QMainWindow):
 
         outer.addLayout(self._build_header())
         outer.addWidget(self._build_folders_card())
+        # Before the options, because it is the thing that stops the run, and
+        # after the folders, because picking those is what a person came here
+        # to do. Hidden outright when ExifTool is present, which is almost
+        # always: a card that says "nothing is wrong" on every launch trains
+        # people to stop reading the cards.
+        outer.addWidget(self._build_exiftool_card())
         outer.addWidget(self._build_outputs_card())
         outer.addWidget(self._build_naming_card())
         outer.addWidget(self._build_timezone_card())
@@ -198,6 +210,9 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(scroller)
 
         self._build_menus()
+        # Before the sizing pass, so a window that has to show the ExifTool
+        # card opens tall enough for it.
+        self._refresh_exiftool()
         self._size_to_contents()
         self._sync_enabled()
 
@@ -239,13 +254,30 @@ class MainWindow(QMainWindow):
         picking Custom afterwards puts a scrollbar on a window with a screen's
         worth of room around it -- a smaller version of exactly the complaint
         this sizing work exists to answer.
+
+        The ExifTool card is measured the same way and for the same reason.
+        It is hidden on almost every machine, so a window sized without it
+        would be too short on exactly the machines that have to read it --
+        which are the ones whose owner has the least idea what is wrong.
+
+        What is saved and restored is `isHidden`, not `isVisible`. They are
+        different questions: `isVisible` is false for every child of a window
+        that has not been shown yet, which is precisely the state this runs in
+        -- it is called from `__init__`. Restoring from it therefore hid
+        whatever it had just been asked to measure. `custom_box` survived that
+        because `_sync_enabled` sets its visibility again a line later; the
+        ExifTool card had nothing to put it back, so a machine with no
+        ExifTool got a window that had measured the card and then hidden it.
         """
-        was_visible = self.custom_box.isVisible()
-        self.custom_box.setVisible(True)
+        conditional = (self.custom_box, self.exiftool_card)
+        was_hidden = [widget.isHidden() for widget in conditional]
+        for widget in conditional:
+            widget.setVisible(True)
         try:
             return self.content_height_at(width)
         finally:
-            self.custom_box.setVisible(was_visible)
+            for widget, hidden in zip(conditional, was_hidden, strict=True):
+                widget.setVisible(not hidden)
 
     def _size_to_contents(self, available: QRect | None = None) -> None:
         """Open at the size the layout says it needs, within the screen there is.
@@ -342,6 +374,195 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(grid)
         return frame
+
+    def _build_exiftool_card(self) -> QFrame:
+        """The one dependency this app cannot install for itself at build time.
+
+        ExifTool writes every tag this tool produces and is a separate program
+        with its own licence, so it is not bundled. Until now the window knew
+        nothing about that: a person pressed Convert, the child process
+        refused, and the reason arrived in the log pane as a line telling them
+        to open PowerShell and type a command. That is a fair thing to ask of
+        someone who already uses a terminal and a wall for everybody else --
+        and it arrived *after* they had chosen their folders and committed to
+        a run, which is the worst moment to discover a missing dependency.
+
+        So the check happens when the window opens, and the two ways out are
+        buttons.
+
+        The *diagnosis* is `writer.EXIFTOOL_MISSING_DIAGNOSIS`, shared with the
+        command line, because two descriptions of one condition drift. The
+        *remedy* is not shared: the CLI's full message ends "Then re-run. If it
+        is installed somewhere off PATH, point at it with --exiftool" -- advice
+        that is simply wrong in front of somebody who has an Install button, a
+        file picker, and no run to re-run.
+        """
+        frame, layout = _card("ExifTool is needed, and is not installed")
+        self.exiftool_card = frame
+
+        self.exiftool_hint = QLabel()
+        self.exiftool_hint.setObjectName("Hint")
+        self.exiftool_hint.setWordWrap(True)
+        layout.addWidget(self.exiftool_hint)
+
+        row = QHBoxLayout()
+        self.exiftool_install_button = QPushButton("Install ExifTool")
+        self.exiftool_install_button.setObjectName("Primary")
+        self.exiftool_install_button.setToolTip(
+            "Installs ExifTool using the package manager this platform ships "
+            "with. The exact command is shown before anything runs."
+        )
+        self.exiftool_install_button.clicked.connect(self._install_exiftool)
+
+        self.exiftool_locate_button = QPushButton("Locate exiftool.exe…")
+        self.exiftool_locate_button.setObjectName("Secondary")
+        self.exiftool_locate_button.setToolTip(
+            "Point at a copy you already have. Remembered, so this is asked "
+            "once."
+        )
+        self.exiftool_locate_button.clicked.connect(self._locate_exiftool)
+
+        row.addWidget(self.exiftool_install_button)
+        row.addWidget(self.exiftool_locate_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return frame
+
+    def _refresh_exiftool(self) -> str | None:
+        """Look for ExifTool, update the card, and return what was found.
+
+        The lookup is `writer.resolve_exiftool_path`, which is the same
+        function the conversion itself uses -- explicit path, then
+        `FPX_EXIFTOOL` from the environment or `.env`, then PATH. A second
+        copy of that order living in the window would be a second thing to get
+        wrong, and the failure it would cause is a window that says ExifTool
+        is missing while the converter finds it, or worse the other way round.
+        """
+        self._exiftool = writer_mod.resolve_exiftool_path()
+        if hasattr(self, "exiftool_card"):
+            missing = self._exiftool is None
+            self.exiftool_card.setVisible(missing)
+            if missing:
+                self.exiftool_hint.setText(
+                    f"{writer_mod.EXIFTOOL_MISSING_DIAGNOSIS} It is free, it is "
+                    "quick to install, and it is the last thing standing between "
+                    "you and a conversion."
+                )
+                self.exiftool_hint.setProperty("severity", "bad")
+                self.exiftool_hint.style().polish(self.exiftool_hint)
+            # No install button where there is no known way to install: an
+            # offer that cannot be honoured is worse than not offering.
+            self.exiftool_install_button.setVisible(
+                runner.exiftool_install_argv() is not None
+            )
+        return self._exiftool
+
+    def _install_exiftool(self) -> None:
+        """Run the platform's installer, having said exactly what it will do.
+
+        Asked, not assumed -- the same rule the review page's copy notice
+        follows. The command accepts a package agreement on the user's behalf,
+        because a winget that stops to ask gets no answer from a child with no
+        stdin; agreeing to somebody else's licence terms is theirs to do, so
+        the terms it accepts are named before the button that accepts them.
+        """
+        argv = runner.exiftool_install_argv()
+        if argv is None:  # pragma: no cover - the button is hidden in this case
+            return
+        answer = QMessageBox.question(
+            self,
+            "Install ExifTool",
+            "This runs the command below, which downloads and installs "
+            "ExifTool from its publisher.\n\n"
+            f"    {' '.join(argv)}\n\n"
+            "It accepts the package source's terms and ExifTool's own licence "
+            "on your behalf — ExifTool is free software, under the Perl "
+            "Artistic Licence or the GPL, at your option.\n\n"
+            "Nothing else on this computer is changed, and your photographs "
+            "are not touched.\n\n"
+            "Go ahead?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._say("Installing ExifTool…", "")
+        self.exiftool_install_button.setEnabled(False)
+        self.exiftool_locate_button.setEnabled(False)
+        worker = InstallWorker(parent=self)
+        # `_append`, not `_on_line`: the installer's output goes in the log
+        # pane, but it is not conversion output and must not be fed to the
+        # progress tracker, whose job is counting photographs.
+        worker.line.connect(self._append)
+        worker.done.connect(self._on_install_done)
+        self._installer = worker
+        worker.start()
+
+    def _on_install_done(self, code: int) -> None:
+        """Report on what is true now, not on what the installer claimed.
+
+        An installer that exits 0 having put ExifTool somewhere that is not on
+        this process's PATH is a real outcome -- a new PATH entry does not
+        reach an already-running program -- and it is indistinguishable from
+        success unless the question asked afterwards is "can it be found?"
+        rather than "did that work?".
+        """
+        self._installer = None
+        self.exiftool_install_button.setEnabled(True)
+        self.exiftool_locate_button.setEnabled(True)
+        if self._refresh_exiftool() is not None:
+            self._say("ExifTool is installed. Ready to convert.", summary.OK)
+        elif code == 0:
+            self._say(
+                "The installer finished, but ExifTool still cannot be found.",
+                summary.WARN,
+                "It may need this app restarted so it picks up the new PATH, "
+                "or you can point at it with Locate.",
+            )
+        else:
+            self._say(
+                "That did not install ExifTool.",
+                summary.ERROR,
+                "The log below has what the installer said. You can install "
+                "it yourself and then use Locate.",
+            )
+        self._sync_enabled()
+
+    def _locate_exiftool(self) -> None:
+        """Point at an existing copy, and remember it.
+
+        Remembered by writing `FPX_EXIFTOOL` to the user's `.env`, which is a
+        file `config.load_env` already reads and `resolve_exiftool_path`
+        already consults -- so the command line picks up the same answer, and
+        a person who runs both does not have to tell each of them separately.
+        """
+        pattern = "ExifTool (exiftool.exe)" if os.name == "nt" else "ExifTool (exiftool)"
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Where is ExifTool?", "", f"{pattern};;All files (*)"
+        )
+        if not chosen:
+            return
+        resolved = writer_mod.resolve_exiftool_path(chosen)
+        if resolved is None:
+            QMessageBox.warning(
+                self,
+                "That is not ExifTool",
+                f"{chosen}\n\nThat file could not be used as ExifTool. Look "
+                "for exiftool.exe inside the folder you unzipped.",
+            )
+            return
+        try:
+            written = config.set_env_value("FPX_EXIFTOOL", resolved)
+        except config.ConfigError as exc:
+            # Finding it still counts for this session even if remembering it
+            # failed, so this reports rather than refuses.
+            QMessageBox.warning(self, "That could not be remembered", str(exc))
+        else:
+            self._append(f"Remembered ExifTool in {written}")
+        os.environ["FPX_EXIFTOOL"] = resolved
+        self._refresh_exiftool()
+        self._say("ExifTool found. Ready to convert.", summary.OK)
+        self._sync_enabled()
 
     def _build_outputs_card(self) -> QFrame:
         """Three choices, one at a time, each writing one image per photograph.
@@ -762,8 +983,15 @@ class MainWindow(QMainWindow):
         )
         self.folder_template_edit.setEnabled(idle)
         name_ok = not self._sync_preview()
-        self.convert_button.setEnabled(idle and has_folders and name_ok)
+        # Cached, not re-resolved: this method runs on every keystroke in both
+        # folder boxes, and resolving means searching PATH.
+        exiftool_ok = self._exiftool is not None
+        self.convert_button.setEnabled(idle and has_folders and name_ok and exiftool_ok)
         self.cancel_button.setEnabled(not idle)
+        # **Not** gated on ExifTool. The review page runs `ingest` and
+        # `gallery`, and neither writes a tag -- disabling it for a dependency
+        # it does not use would take away the one thing somebody without
+        # ExifTool can still do with their photographs.
         self.review_button.setEnabled(idle and has_folders)
         for widget in (
             self.source_edit, self.dest_edit,

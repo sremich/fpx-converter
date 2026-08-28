@@ -118,8 +118,25 @@ a pull request can be entirely green while changing both.
   the reference archive contains a person. This is the branch that carried the
   defect where rotated files shipped with their crop silently dropped.
 - **Crop** had exactly one fixture, and lost it in the 2026-08-27 removal
-  described above. Nothing replaces it — crops are rare in the archive and the
-  person-free candidates do not carry one.
+  described above. Crops are rare in the archive and the person-free candidates
+  do not carry one.
+
+**The geometry of both is covered anyway, synthetically.** A `.fpx` keeps its
+viewing transform in a `Transform 000001` property set whose orientation matrix
+and result aspect are fixed-width float32 fields, and `olefile` will replace a
+stream with data of the same size — so `tests/transform_fixture.py` gives a
+*copy* of a person-free fixture any transform wanted, and
+`tests/test_fixtures_transform.py` runs scan-free decode, crop and write over it.
+Rotation, rotation-plus-crop and the axis-aligned crop all have tier-2 cover
+again, including the exact 0.4.0 case where a rotation carrying a crop must not
+resolve to no crop.
+
+**What that does not buy, and must not be claimed to:** the embedded thumbnail in
+those files was written to the framing the file originally had. Against a
+transform we invented it witnesses nothing, so every assertion there is
+geometric and neither oracle may be pointed at them. Colour and orientation on a
+genuinely transformed photograph remain tier-3 and tier-4 work — which is the
+same sentence this document opens with, and the reason the eyeball tier exists.
 
 The three tests that ran against the cropped fixture were recorded rather than
 deleted: one is inverted and now asserts that no cropped fixture exists, going
