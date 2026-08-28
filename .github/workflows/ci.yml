@@ -68,6 +68,35 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install exiftool
 
+      - name: Install inih, which pyexiv2's macOS wheel needs and does not carry
+        if: runner.os == 'macOS'
+        # `pyexiv2` is the *third* parser -- ExifTool writes, Pillow reads
+        # back, exiv2 re-reads with its own -- and it is what makes the
+        # "validate with a different tool than the one that wrote" rule real
+        # rather than advertised. Its macOS wheel bundles `libexiv2.dylib`
+        # but leaves that dylib dynamically linked against Homebrew's inih
+        # (`libINIReader.0.dylib`), which no runner image ships. The result
+        # is an `OSError` at *import*, so `test_fixtures_output.py` fails to
+        # collect and the entire tier-2 tag round trip does not run.
+        #
+        # Installed rather than worked around. Skipping `pyexiv2` on macOS
+        # would turn this leg green having dropped the coverage the step
+        # above exists to protect -- the same failure mode one dependency
+        # over, and the one this project has already shipped once.
+        #
+        # The version check is the point of the second line. `0` is an ABI
+        # soname, not the formula version, so a future inih could ship
+        # `libINIReader.1.dylib` and leave us back at a dlopen failure
+        # thirty lines into a pytest traceback. This says so here instead.
+        run: |
+          brew install inih
+          lib="$(brew --prefix inih)/lib/libINIReader.0.dylib"
+          if [ ! -f "$lib" ]; then
+            echo "::error::inih no longer provides libINIReader.0.dylib, which is what pyexiv2's bundled libexiv2 links against. Contents of $(brew --prefix inih)/lib below; update this step to the new soname."
+            ls -la "$(brew --prefix inih)/lib" || true
+            exit 1
+          fi
+
       - name: Lint
         run: python -m ruff check .
 
