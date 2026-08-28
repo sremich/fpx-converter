@@ -6,6 +6,82 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [1.3.0] — 2026-08-28
+
+The release that makes this repository publishable. Everything here was found
+by auditing it as an outsider would read it.
+
+### Fixed
+- **Every photograph failed for anyone outside the United States.** The
+  timezone table held seven US zones and raised for anything else, and the
+  batch engine catches that exception per file — so a run in London or Tokyo
+  wrote all its images and then reported a 100% failure rate, permanently,
+  because nothing was ever marked done. Offsets now resolve through
+  `zoneinfo` against a pinned `tzdata`, covering every IANA zone with
+  historically correct DST: a 2001 Chicago photograph gets `-06:00`, which
+  today's rules would get wrong. The zone is `--timezone`, then
+  `FPX_DEFAULT_TZ`, then the system zone, and an unresolvable one is still
+  refused rather than guessed. The desktop window gained a control for it,
+  which it had never had.
+- **A missing ExifTool failed all 687 files instead of stopping once.** It is
+  now resolved before the run, with a platform-appropriate install line and a
+  non-zero exit. Nothing is written.
+- **Default paths wrote into the installation directory.** For a
+  `pip install`ed copy that is `site-packages`. The work root is resolved at
+  runtime and `--work-dir` overrides it.
+- **An unrecognised colour space was assumed to be NIF RGB in silence.** It
+  now raises a per-file warning into `conversion.log` and `audit_report.json`.
+  This project shipped two PhotoYCC files 42% clipped past every check it had;
+  a silent colour fallback is the wrong default here specifically.
+- **`--max-path` did not account for ExifTool's temporary file**, which is 13
+  characters longer than the final path, so a destination in a narrow band
+  passed the check and then failed opaquely inside ExifTool.
+
+### Changed
+- **`pyexiv2` no longer ships in the executable.** It is GPL-3.0 and bundles
+  GPL-2.0-or-later Exiv2, so every published `.exe` was conveying GPL code
+  from a repository that offered no licence at all. Pillow and `defusedxml`
+  read the metadata back instead — all ten tags, on both TIFF and JPEG,
+  verified by round trip rather than inference. `pyexiv2` remains a test-only
+  third parser, and `packaging/licence_guard.py` fails the build if anything
+  named `exiv2` reaches the bundle again.
+- **`PySide6-Essentials` replaces the `PySide6` metapackage**, removing the
+  GPLv3-only Qt Addons modules by construction rather than by a denylist that
+  fails open.
+- The CLI runs with no `.env` at all: `scan` takes a positional source path,
+  `.env` is searched from the working directory outward, and `--env-file`,
+  `--exiftool` and `--work-dir` are available. `FPX_OUTPUT_ROOT` is finally
+  honoured; `FPX_LOG_LEVEL` and `FPX_WORKERS` are gone, having never been read
+  by any code.
+- The 259-character path limit is Windows-only. The library and CLI are now
+  portable in principle; only Windows is tested.
+- The window is titled **FPX Converter**, matching the executable.
+
+### Added
+- **Apache-2.0.** With `NOTICE`, `THIRD-PARTY-NOTICES.md`, the LGPL and GPL
+  texts Qt obliges us to carry, and a Help → Licences dialog so a bare `.exe`
+  travels with its notices.
+- `ARCHITECTURE.md` and `docs/` — the format, the dates, the testing tiers,
+  a guide for people who have never opened a terminal, and the SmartScreen
+  warning every downloader hits and which this repository had never mentioned.
+- A CI job that scans **git history** for personal content. The two existing
+  leakage guards only ever read the working tree, which is how a child's name
+  sat in five commits across five releases.
+
+### Removed
+- **Three test fixtures containing a person.** Found by viewing all forty at
+  full resolution rather than trusting the notes, which had recorded the
+  problem as "a hand at the frame edge" and were wrong about both the body
+  part and the location. One of them was the only fixture covering the
+  viewing-transform crop; those tests are stood down with a stated reason
+  rather than deleted, and a guard fails if a cropped fixture returns without
+  the documentation being updated. The rule outranks the coverage.
+- The claim that four fixtures were Kodak stock samples, which was wrong in
+  three places. The split is 16 of unestablished origin and 21 the owner's
+  own, and no authorship is asserted over the 16.
+- `CLAUDE.md`, `DECISIONS.md` and `.claude/` — build scaffolding. Their
+  engineering content survives in `ARCHITECTURE.md` and `docs/`.
+
 ## [1.2.1] — 2026-08-27
 
 ### Fixed
